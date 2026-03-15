@@ -3,7 +3,7 @@
 > **Status:** Draft v1
 > **Author:** Founder
 > **Created:** March 15, 2026
-> **Hackathon deadline:** TBD (6 weeks from start)
+> **Hackathon deadline:** April 26, 2026
 > **Time budget:** 60–90 hours total (10–15 hrs/week × 6 weeks)
 
 ---

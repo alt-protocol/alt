@@ -1,9 +1,19 @@
 # Week-by-Week Roadmap — 6-Week Hackathon Sprint
 
 > **Time budget:** 10–15 hrs/week (~75 hrs total)
-> **Start date:** TBD
-> **Hackathon deadline:** TBD
+> **Start date:** March 15, 2026
+> **Hackathon deadline:** April 26, 2026
 > **Solo founder — no delegation available**
+
+| Week | Dates | Focus |
+|---|---|---|
+| 0 (Pre) | Mar 15 | Setup — repo, local dev, DB seeded |
+| 1 | Mar 16–22 | Data pipeline — live yield data, API |
+| 2 | Mar 23–29 | Frontend + Dashboard deployed |
+| 3 | Mar 30 – Apr 5 | Kamino + Drift deposit/withdraw |
+| 4 | Apr 6–12 | Exponent + Portfolio view |
+| 5 | Apr 13–19 | Polish + Landing page |
+| 6 | Apr 20–26 | Demo prep + submission |
 
 ---
 
