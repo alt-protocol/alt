@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Date, ARRAY, Text, TIMESTAMP
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.models.base import Base
 
@@ -15,6 +16,8 @@ class Protocol(Base):
     audit_status = Column(String(50))
     auditors = Column(ARRAY(Text))
     launched_at = Column(Date)
-    integration = Column(String(20), default="data_only")
+    integration = Column(String(20), default="data_only", server_default="data_only")
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    opportunities = relationship("YieldOpportunity", back_populates="protocol")
