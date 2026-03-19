@@ -32,6 +32,7 @@ class YieldOpportunityOut(BaseModel):
     lock_period_days: int
     risk_tier: Optional[str]
     is_active: bool
+    extra_data: Optional[dict] = None
     updated_at: Optional[datetime]
 
     model_config = {"from_attributes": True}

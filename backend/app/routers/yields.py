@@ -27,12 +27,16 @@ def get_yields(
     category: Optional[str] = Query(None),
     sort: SortOrder = Query(SortOrder.APY_DESC),
     tokens: Optional[str] = Query(None),
+    vault_tag: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
     q = db.query(YieldOpportunity).filter(YieldOpportunity.is_active == True)  # noqa: E712
 
     if category:
         q = q.filter(YieldOpportunity.category == category)
+
+    if vault_tag:
+        q = q.filter(YieldOpportunity.extra_data["vault_tag"].astext == vault_tag)
 
     if tokens:
         token_list = [t.strip() for t in tokens.split(",")]

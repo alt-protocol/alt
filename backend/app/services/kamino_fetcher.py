@@ -26,6 +26,47 @@ logger = logging.getLogger(__name__)
 KAMINO_API = "https://api.kamino.finance"
 MIN_TVL_USD = 100_000  # skip entries with < $100k TVL
 
+# ---------------------------------------------------------------------------
+# Token classification
+# ---------------------------------------------------------------------------
+
+YIELD_BEARING_STABLES = {
+    "PRIME", "syrupUSDC", "ONyc", "USCC", "PST", "eUSX",
+}
+REGULAR_STABLES = {
+    "USDC", "PYUSD", "USDG", "USDS", "CASH", "USD1", "USDT", "USX", "FDUSD",
+}
+LST_SYMBOLS = {
+    "JITOSOL", "MSOL", "BSOL", "JUPSOL", "HSOL", "VSOL", "INF", "DSOL",
+    "BONKSOL", "COMPASSSOL", "LAINESOL", "PATHSOL", "PICOSOL", "HUBSOL",
+}
+
+
+def _classify_token(symbol: str) -> str:
+    """Classify a token symbol into a category."""
+    upper = symbol.upper()
+    if symbol in YIELD_BEARING_STABLES:
+        return "yield_bearing_stable"
+    if upper in {s.upper() for s in REGULAR_STABLES}:
+        return "stable"
+    if upper in LST_SYMBOLS:
+        return "lst"
+    return "volatile"
+
+
+def _classify_multiply_pair(coll_symbol: str, debt_symbol: str) -> str:
+    """Classify a multiply pair into a vault tag."""
+    coll_type = _classify_token(coll_symbol)
+    debt_type = _classify_token(debt_symbol)
+
+    if coll_type == "yield_bearing_stable" and debt_type in ("stable", "yield_bearing_stable"):
+        return "rwa_loop"
+    if coll_type == "stable" and debt_type == "stable":
+        return "stable_loop"
+    if coll_type == "lst" and debt_type in ("lst", "volatile"):
+        return "sol_loop"
+    return "directional_leverage"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -335,34 +376,46 @@ def _fetch_reserve_history(
     return []
 
 
-def _identify_collateral_and_debt(
+def _enumerate_collateral_debt_pairs(
     reserves: list[dict],
-) -> Optional[tuple[dict, dict]]:
-    """Identify main collateral (highest supply with LTV > 0) and debt
-    (highest borrow) reserves in a multiply market."""
+    is_primary: bool = False,
+) -> list[tuple[dict, dict]]:
+    """Enumerate valid collateral/debt pairs in a market.
+
+    Collateral: reserves with maxLtv > 0.
+    Debt: all other reserves with non-zero borrow activity or supply.
+    For primary markets: only emit pairs where BOTH tokens are stables or
+    yield-bearing stables (to avoid pair explosion).
+    """
     collateral_candidates = [
         r for r in reserves if (_float(r.get("maxLtv", "0")) or 0) > 0
     ]
     if not collateral_candidates:
-        return None
+        return []
 
-    collateral = max(
-        collateral_candidates,
-        key=lambda r: _float(r.get("totalSupplyUsd", "0")) or 0,
-    )
+    pairs = []
+    for coll in collateral_candidates:
+        coll_symbol = coll.get("liquidityToken", "")
+        for debt in reserves:
+            if debt["reserve"] == coll["reserve"]:
+                continue
+            # Debt must have some activity
+            debt_borrow = _float(debt.get("totalBorrowUsd", "0")) or 0
+            debt_supply = _float(debt.get("totalSupplyUsd", "0")) or 0
+            if debt_borrow <= 0 and debt_supply <= 0:
+                continue
 
-    debt_candidates = [
-        r for r in reserves if r["reserve"] != collateral["reserve"]
-    ]
-    if not debt_candidates:
-        return None
+            debt_symbol = debt.get("liquidityToken", "")
 
-    debt = max(
-        debt_candidates,
-        key=lambda r: _float(r.get("totalBorrowUsd", "0")) or 0,
-    )
+            if is_primary:
+                # Only stable-stable and rwa loops for primary markets
+                tag = _classify_multiply_pair(coll_symbol, debt_symbol)
+                if tag not in ("stable_loop", "rwa_loop"):
+                    continue
 
-    return collateral, debt
+            pairs.append((coll, debt))
+
+    return pairs
 
 
 def _avg_from_history(history: list[dict], field: str, last_n: int) -> Optional[float]:
@@ -438,6 +491,40 @@ def _derive_collateral_yield(
     return (slope * 8760) / avg_ratio
 
 
+def _get_collateral_yield(
+    coll_symbol: str,
+    coll_history: list[dict],
+    debt_history: list[dict],
+    coll_reserve: dict,
+    last_n: int,
+) -> tuple[Optional[float], str]:
+    """Dispatch collateral yield calculation by token type.
+
+    Returns (yield_as_decimal_or_None, apy_source_string).
+    """
+    token_type = _classify_token(coll_symbol)
+
+    if token_type == "yield_bearing_stable":
+        # Price ratio linreg IS their yield (price appreciation vs debt stablecoin)
+        result = _derive_collateral_yield(coll_history, debt_history, last_n)
+        return result, "price_ratio"
+
+    if token_type == "stable":
+        # Use supplyApy from reserve metrics
+        supply_apy = _float(coll_reserve.get("supplyApy"))
+        return supply_apy, "supply_apy"
+
+    if token_type == "lst":
+        # Try staking APY from history, fall back to price ratio linreg
+        result = _derive_collateral_yield(coll_history, debt_history, last_n)
+        if result is not None:
+            return result, "staking_apy"
+        return None, "unavailable"
+
+    # volatile — price movement ≠ yield
+    return None, "unavailable"
+
+
 def _compute_net_apy(
     collateral_yield: Optional[float],
     borrow_apy: Optional[float],
@@ -454,26 +541,30 @@ def fetch_multiply_markets(
     protocol: Protocol,
     db: Session,
     now: datetime,
-) -> int:
+) -> tuple[int, set[str]]:
+    """Fetch multiply markets. Returns (count, set_of_external_ids)."""
     markets_raw = _get("/v2/kamino-market", client)
     if not isinstance(markets_raw, list):
         logger.error("Unexpected /v2/kamino-market response")
-        return 0
+        return 0, set()
 
-    multiply_markets = [
-        m for m in markets_raw if not m.get("isPrimary") and m.get("name")
-    ]
-    logger.info("Kamino multiply: %d markets", len(multiply_markets))
+    # Include ALL markets (primary + non-primary); primary markets will be
+    # filtered to stable-only pairs by _enumerate_collateral_debt_pairs.
+    multiply_markets = [m for m in markets_raw if m.get("name")]
+    logger.info("Kamino multiply: %d markets (incl primary)", len(multiply_markets))
 
     # Date range strings for history queries
     end_str = now.strftime("%Y-%m-%d")
     start_30d = (now - timedelta(days=30)).strftime("%Y-%m-%d")
 
     count = 0
+    upserted_ids: set[str] = set()
+
     for market in multiply_markets:
         market_pubkey = market["lendingMarket"]
         market_name = market.get("name", market_pubkey[:8])
         market_description = market.get("description", "")
+        is_primary = bool(market.get("isPrimary"))
 
         reserves = _get(f"/kamino-market/{market_pubkey}/reserves/metrics", client)
         if not isinstance(reserves, list):
@@ -484,219 +575,223 @@ def fetch_multiply_markets(
         if market_tvl < MIN_TVL_USD:
             continue
 
-        # Identify collateral and debt
-        pair = _identify_collateral_and_debt(reserves)
-        if not pair:
-            logger.debug("Skipping %s — could not identify collateral/debt pair", market_name)
+        # Enumerate all valid collateral/debt pairs
+        pairs = _enumerate_collateral_debt_pairs(reserves, is_primary=is_primary)
+        if not pairs:
+            logger.debug("Skipping %s — no valid pairs", market_name)
             continue
 
-        coll_reserve, debt_reserve = pair
-        coll_symbol = coll_reserve.get("liquidityToken", "")
-        debt_symbol = debt_reserve.get("liquidityToken", "")
+        # Cache reserve history per market (fetch each unique reserve once)
+        reserve_histories: dict[str, list[dict]] = {}
 
-        # Max leverage: use description (e.g. "10x") for eMode markets,
-        # fallback to raw LTV: max_leverage = 1/(1-LTV) — matches Kamino UI exactly
-        coll_ltv_val = _float(coll_reserve.get("maxLtv"))
+        def _get_history(reserve_pk: str) -> list[dict]:
+            if reserve_pk not in reserve_histories:
+                reserve_histories[reserve_pk] = _fetch_reserve_history(
+                    market_pubkey, reserve_pk, start_30d, end_str, client,
+                )
+            return reserve_histories[reserve_pk]
+
+        # Max leverage from description (applies to single-pair eMode markets)
         max_leverage_from_desc = _parse_max_leverage(market_description)
-        if max_leverage_from_desc:
-            max_leverage = max_leverage_from_desc
-        else:
-            max_leverage = _max_leverage_from_ltv(coll_ltv_val)
 
-        # Current borrow APY (cost of leverage)
-        borrow_apy_current = _float(debt_reserve.get("borrowApy"))
+        for coll_reserve, debt_reserve in pairs:
+            coll_symbol = coll_reserve.get("liquidityToken", "")
+            debt_symbol = debt_reserve.get("liquidityToken", "")
+            coll_pk = coll_reserve["reserve"]
+            debt_pk = debt_reserve["reserve"]
 
-        # Fetch 30d history for collateral and debt (covers both 7d and 30d)
-        coll_pk = coll_reserve["reserve"]
-        debt_pk = debt_reserve["reserve"]
+            # Pair-specific leverage from LTV
+            coll_ltv_val = _float(coll_reserve.get("maxLtv"))
+            # For single-pair markets, description leverage is accurate.
+            # For multi-pair markets, use per-reserve LTV.
+            if max_leverage_from_desc and len(pairs) == 1:
+                max_leverage = max_leverage_from_desc
+            else:
+                max_leverage = _max_leverage_from_ltv(coll_ltv_val)
 
-        coll_history = _fetch_reserve_history(market_pubkey, coll_pk, start_30d, end_str, client)
-        debt_history = _fetch_reserve_history(market_pubkey, debt_pk, start_30d, end_str, client)
+            # Current borrow APY (cost of leverage)
+            borrow_apy_current = _float(debt_reserve.get("borrowApy"))
 
-        # Average borrow APY from history
-        borrow_avg_7d = _avg_from_history(debt_history, "borrowInterestAPY", 168)
-        borrow_avg_30d = _avg_from_history(debt_history, "borrowInterestAPY", 720)
+            # Fetch history (cached per reserve)
+            coll_history = _get_history(coll_pk)
+            debt_history = _get_history(debt_pk)
 
-        # Derive collateral yield from price ratio change
-        coll_yield_7d = _derive_collateral_yield(coll_history, debt_history, 168)
-        coll_yield_30d = _derive_collateral_yield(coll_history, debt_history, 720)
+            # Average borrow APY from history
+            borrow_avg_7d = _avg_from_history(debt_history, "borrowInterestAPY", 168)
+            borrow_avg_30d = _avg_from_history(debt_history, "borrowInterestAPY", 720)
 
-        # Net APY at max leverage
-        # Use 30d collateral yield (stable linreg) with varying borrow rates:
-        #   current: 30d yield + current borrow (what you'd earn right now)
-        #   7d: 30d yield + 7d avg borrow
-        #   30d: 30d yield + 30d avg borrow
-        effective_leverage = max_leverage or 3  # fallback to 3x if can't parse
-        net_apy_current = _compute_net_apy(coll_yield_30d, borrow_apy_current, effective_leverage)
-        net_apy_7d = _compute_net_apy(coll_yield_30d, borrow_avg_7d, effective_leverage)
-        net_apy_30d = _compute_net_apy(coll_yield_30d, borrow_avg_30d, effective_leverage)
+            # Collateral yield — dispatched by token type
+            coll_yield_7d, apy_source = _get_collateral_yield(
+                coll_symbol, coll_history, debt_history, coll_reserve, 168,
+            )
+            coll_yield_30d, _ = _get_collateral_yield(
+                coll_symbol, coll_history, debt_history, coll_reserve, 720,
+            )
 
-        # Convert to percentage
-        def to_pct(v: Optional[float]) -> Optional[float]:
-            return v * 100 if v is not None else None
+            # Net APY at max leverage
+            effective_leverage = max_leverage or 3
+            net_apy_current = _compute_net_apy(coll_yield_30d, borrow_apy_current, effective_leverage)
+            net_apy_7d = _compute_net_apy(coll_yield_30d, borrow_avg_7d, effective_leverage)
+            net_apy_30d = _compute_net_apy(coll_yield_30d, borrow_avg_30d, effective_leverage)
 
-        net_apy_current_pct = to_pct(net_apy_current)
-        net_apy_7d_pct = to_pct(net_apy_7d)
-        net_apy_30d_pct = to_pct(net_apy_30d)
+            def to_pct(v: Optional[float]) -> Optional[float]:
+                return v * 100 if v is not None else None
 
-        # Build leverage APY table (at different leverage levels)
-        # Uses 30d linreg collateral yield + current borrow for primary APY,
-        # plus 7d/30d avg borrow variants
-        leverage_table = {}
-        # Standard leverage steps + the actual max leverage
-        lev_steps = [2, 3, 5, 8, 10]
-        if effective_leverage not in lev_steps:
-            lev_steps.append(effective_leverage)
-            lev_steps.sort()
-        for lev in lev_steps:
-            if max_leverage and lev > max_leverage + 0.1:
-                continue
-            apy_current_lev = _compute_net_apy(coll_yield_30d, borrow_apy_current, lev)
-            apy_7d_lev = _compute_net_apy(coll_yield_30d, borrow_avg_7d, lev)
-            apy_30d_lev = _compute_net_apy(coll_yield_30d, borrow_avg_30d, lev)
-            leverage_table[f"{lev}x"] = {
-                "net_apy_current_pct": to_pct(apy_current_lev),
-                "net_apy_7d_pct": to_pct(apy_7d_lev),
-                "net_apy_30d_pct": to_pct(apy_30d_lev),
+            net_apy_current_pct = to_pct(net_apy_current)
+            net_apy_7d_pct = to_pct(net_apy_7d)
+            net_apy_30d_pct = to_pct(net_apy_30d)
+
+            # Build leverage APY table
+            leverage_table = {}
+            lev_steps = [2, 3, 5, 8, 10]
+            if effective_leverage not in lev_steps:
+                lev_steps.append(effective_leverage)
+                lev_steps.sort()
+            for lev in lev_steps:
+                if max_leverage and lev > max_leverage + 0.1:
+                    continue
+                apy_current_lev = _compute_net_apy(coll_yield_30d, borrow_apy_current, lev)
+                apy_7d_lev = _compute_net_apy(coll_yield_30d, borrow_avg_7d, lev)
+                apy_30d_lev = _compute_net_apy(coll_yield_30d, borrow_avg_30d, lev)
+                leverage_table[f"{lev}x"] = {
+                    "net_apy_current_pct": to_pct(apy_current_lev),
+                    "net_apy_7d_pct": to_pct(apy_7d_lev),
+                    "net_apy_30d_pct": to_pct(apy_30d_lev),
+                }
+
+            # Extract richer data from reserve history
+            latest_coll_metrics = coll_history[-1].get("metrics", {}) if coll_history else {}
+            latest_debt_metrics = debt_history[-1].get("metrics", {}) if debt_history else {}
+
+            coll_total_supply_tokens = _float(latest_coll_metrics.get("totalSupply"))
+            coll_price = _float(latest_coll_metrics.get("assetPriceUSD"))
+            if coll_total_supply_tokens is not None and coll_price is not None:
+                collateral_supplied_usd = coll_total_supply_tokens * coll_price
+            else:
+                collateral_supplied_usd = _float(coll_reserve.get("totalSupplyUsd")) or 0
+
+            debt_total_supply = _float(latest_debt_metrics.get("totalSupply")) or _float(debt_reserve.get("totalSupply")) or 0
+            debt_total_borrow = _float(latest_debt_metrics.get("totalBorrows")) or _float(debt_reserve.get("totalBorrow")) or 0
+            debt_decimals = int(latest_debt_metrics.get("decimals", 6))
+            debt_borrow_limit_raw = _float(latest_debt_metrics.get("reserveBorrowLimit")) or 0
+            debt_borrow_limit = debt_borrow_limit_raw / (10 ** debt_decimals) if debt_borrow_limit_raw > 0 else float("inf")
+            debt_price = _float(latest_debt_metrics.get("assetPriceUSD")) or 1.0
+
+            supply_available = debt_total_supply - debt_total_borrow
+            borrow_limit_remaining = debt_borrow_limit - debt_total_borrow
+            liq_available_tokens = max(0, min(supply_available, borrow_limit_remaining))
+            liq_available_usd = liq_available_tokens * debt_price
+
+            coll_deposit_limit_raw = _float(latest_coll_metrics.get("reserveDepositLimit")) or 0
+            coll_decimals = int(latest_coll_metrics.get("decimals", 6))
+            coll_deposit_limit = coll_deposit_limit_raw / (10 ** coll_decimals) if coll_deposit_limit_raw > 0 else None
+
+            utilization = (debt_total_borrow / debt_total_supply * 100) if debt_total_supply > 0 else 0
+
+            coll_ltv_history = latest_coll_metrics.get("loanToValue") or coll_ltv_val
+            coll_liq_threshold = latest_coll_metrics.get("liquidationThreshold")
+            borrow_curve = latest_debt_metrics.get("borrowCurve")
+
+            vault_tag = _classify_multiply_pair(coll_symbol, debt_symbol)
+            external_id = f"kmul-{market_pubkey[:8]}-{coll_pk[:6]}-{debt_pk[:6]}"
+            name = f"Kamino Multiply — {coll_symbol}/{debt_symbol} ({market_name})"
+
+            extra = {
+                # Market info
+                "market": market_pubkey,
+                "market_name": market_name,
+                "market_description": market_description,
+                "market_lookup_table": market.get("lookupTable", ""),
+                "market_is_curated": market.get("isCurated", False),
+                "max_leverage": max_leverage,
+                # Classification & source
+                "vault_tag": vault_tag,
+                "apy_source": apy_source,
+                # Collateral reserve
+                "collateral_symbol": coll_symbol,
+                "collateral_mint": coll_reserve.get("liquidityTokenMint", ""),
+                "collateral_reserve": coll_pk,
+                "collateral_reserve_supply_usd": collateral_supplied_usd,
+                "collateral_supply_tokens": coll_total_supply_tokens,
+                "collateral_price_usd": coll_price,
+                "collateral_deposit_limit": coll_deposit_limit,
+                "debt_available_usd": liq_available_usd,
+                "debt_available_tokens": liq_available_tokens,
+                "debt_borrow_limit": debt_borrow_limit if debt_borrow_limit != float("inf") else None,
+                "debt_borrow_limit_remaining": borrow_limit_remaining if debt_borrow_limit != float("inf") else None,
+                "debt_price_usd": debt_price,
+                "collateral_ltv": coll_ltv_history,
+                "collateral_liquidation_threshold": coll_liq_threshold,
+                # Collateral yield
+                "collateral_yield_7d_pct": to_pct(coll_yield_7d),
+                "collateral_yield_30d_pct": to_pct(coll_yield_30d),
+                # Debt reserve
+                "debt_symbol": debt_symbol,
+                "debt_mint": debt_reserve.get("liquidityTokenMint", ""),
+                "debt_reserve": debt_pk,
+                "debt_supply_usd": debt_total_supply * debt_price,
+                "debt_borrow_usd": debt_total_borrow * debt_price,
+                # Borrow cost
+                "borrow_apy_current_pct": to_pct(borrow_apy_current),
+                "borrow_apy_7d_pct": to_pct(borrow_avg_7d),
+                "borrow_apy_30d_pct": to_pct(borrow_avg_30d),
+                # Utilization & rate curve
+                "utilization_pct": round(utilization, 2),
+                "borrow_curve": borrow_curve,
+                # Net APY at max leverage
+                "net_apy_current_pct": net_apy_current_pct,
+                "net_apy_7d_pct": net_apy_7d_pct,
+                "net_apy_30d_pct": net_apy_30d_pct,
+                "leverage_used": effective_leverage,
+                # APY at each leverage level
+                "leverage_table": leverage_table,
+                # All reserves summary
+                "all_reserves": [
+                    {
+                        "symbol": r.get("liquidityToken"),
+                        "mint": r.get("liquidityTokenMint"),
+                        "reserve": r.get("reserve"),
+                        "max_ltv": r.get("maxLtv"),
+                        "supply_apy": r.get("supplyApy"),
+                        "borrow_apy": r.get("borrowApy"),
+                        "total_supply_usd": r.get("totalSupplyUsd"),
+                        "total_borrow_usd": r.get("totalBorrowUsd"),
+                    }
+                    for r in reserves
+                ],
+                "source": "kamino_api",
+                "type": "multiply",
             }
 
-        # Extract richer data from reserve history (has borrow limits, deposit limits, etc.)
-        latest_coll_metrics = coll_history[-1].get("metrics", {}) if coll_history else {}
-        latest_debt_metrics = debt_history[-1].get("metrics", {}) if debt_history else {}
+            _upsert_opportunity(
+                db=db,
+                protocol=protocol,
+                external_id=external_id,
+                name=name,
+                category="multiply",
+                tokens=[coll_symbol, debt_symbol],
+                apy_current=net_apy_current_pct,
+                apy_7d_avg=net_apy_7d_pct,
+                apy_30d_avg=net_apy_30d_pct,
+                tvl_usd=market_tvl,
+                deposit_address=coll_pk,
+                risk_tier="high" if (max_leverage or 0) >= 8 else "medium",
+                extra=extra,
+                now=now,
+            )
+            upserted_ids.add(external_id)
+            count += 1
+            logger.info(
+                "Multiply %s: %.1fx, src=%s, borrow=%.2f%%, coll_yield_7d=%s, net_7d=%s",
+                name,
+                effective_leverage,
+                apy_source,
+                (borrow_apy_current or 0) * 100,
+                f"{coll_yield_7d * 100:.2f}%" if coll_yield_7d else "N/A",
+                f"{net_apy_7d_pct:.2f}%" if net_apy_7d_pct else "N/A",
+            )
 
-        # Collateral supplied: use history's totalSupply (token count) * price
-        coll_total_supply_tokens = _float(latest_coll_metrics.get("totalSupply"))
-        coll_price = _float(latest_coll_metrics.get("assetPriceUSD"))
-        if coll_total_supply_tokens is not None and coll_price is not None:
-            collateral_supplied_usd = coll_total_supply_tokens * coll_price
-        else:
-            collateral_supplied_usd = _float(coll_reserve.get("totalSupplyUsd")) or 0
-
-        # Liq Available: min(supply - borrow, borrowLimit - totalBorrow) for debt reserve
-        # The reserveBorrowLimit is in raw token units (with decimals)
-        debt_total_supply = _float(latest_debt_metrics.get("totalSupply")) or _float(debt_reserve.get("totalSupply")) or 0
-        debt_total_borrow = _float(latest_debt_metrics.get("totalBorrows")) or _float(debt_reserve.get("totalBorrow")) or 0
-        debt_decimals = int(latest_debt_metrics.get("decimals", 6))
-        debt_borrow_limit_raw = _float(latest_debt_metrics.get("reserveBorrowLimit")) or 0
-        debt_borrow_limit = debt_borrow_limit_raw / (10 ** debt_decimals) if debt_borrow_limit_raw > 0 else float("inf")
-        debt_price = _float(latest_debt_metrics.get("assetPriceUSD")) or 1.0
-
-        supply_available = debt_total_supply - debt_total_borrow
-        borrow_limit_remaining = debt_borrow_limit - debt_total_borrow
-        liq_available_tokens = max(0, min(supply_available, borrow_limit_remaining))
-        liq_available_usd = liq_available_tokens * debt_price
-
-        # Deposit limit for collateral
-        coll_deposit_limit_raw = _float(latest_coll_metrics.get("reserveDepositLimit")) or 0
-        coll_decimals = int(latest_coll_metrics.get("decimals", 6))
-        coll_deposit_limit = coll_deposit_limit_raw / (10 ** coll_decimals) if coll_deposit_limit_raw > 0 else None
-
-        # Utilization of debt reserve
-        utilization = (debt_total_borrow / debt_total_supply * 100) if debt_total_supply > 0 else 0
-
-        # LTV and liquidation data from history (more complete than /metrics)
-        coll_ltv_history = latest_coll_metrics.get("loanToValue") or coll_ltv_val
-        coll_liq_threshold = latest_coll_metrics.get("liquidationThreshold")
-
-        # Borrow curve from history
-        borrow_curve = latest_debt_metrics.get("borrowCurve")
-
-        external_id = f"kmul-{market_pubkey[:12]}"
-        name = f"Kamino Multiply — {coll_symbol}/{debt_symbol} ({market_name})"
-
-        extra = {
-            # Market info
-            "market": market_pubkey,
-            "market_name": market_name,
-            "market_description": market_description,
-            "market_lookup_table": market.get("lookupTable", ""),
-            "market_is_curated": market.get("isCurated", False),
-            "max_leverage": max_leverage,
-            # Collateral reserve
-            "collateral_symbol": coll_symbol,
-            "collateral_mint": coll_reserve.get("liquidityTokenMint", ""),
-            "collateral_reserve": coll_pk,
-            # Note: these are total reserve metrics, not multiply-position-specific.
-            # Kamino's UI shows multiply-specific values computed from on-chain obligations.
-            "collateral_reserve_supply_usd": collateral_supplied_usd,
-            "collateral_supply_tokens": coll_total_supply_tokens,
-            "collateral_price_usd": coll_price,
-            "collateral_deposit_limit": coll_deposit_limit,
-            "debt_available_usd": liq_available_usd,
-            "debt_available_tokens": liq_available_tokens,
-            "debt_borrow_limit": debt_borrow_limit if debt_borrow_limit != float("inf") else None,
-            "debt_borrow_limit_remaining": borrow_limit_remaining if debt_borrow_limit != float("inf") else None,
-            "debt_price_usd": debt_price,
-            "collateral_ltv": coll_ltv_history,
-            "collateral_liquidation_threshold": coll_liq_threshold,
-            # Collateral yield (derived from price ratio)
-            "collateral_yield_7d_pct": to_pct(coll_yield_7d),
-            "collateral_yield_30d_pct": to_pct(coll_yield_30d),
-            # Debt reserve
-            "debt_symbol": debt_symbol,
-            "debt_mint": debt_reserve.get("liquidityTokenMint", ""),
-            "debt_reserve": debt_pk,
-            "debt_supply_usd": debt_total_supply * debt_price,
-            "debt_borrow_usd": debt_total_borrow * debt_price,
-            # Borrow cost
-            "borrow_apy_current_pct": to_pct(borrow_apy_current),
-            "borrow_apy_7d_pct": to_pct(borrow_avg_7d),
-            "borrow_apy_30d_pct": to_pct(borrow_avg_30d),
-            # Utilization & rate curve
-            "utilization_pct": round(utilization, 2),
-            "borrow_curve": borrow_curve,
-            # Net APY at max leverage
-            "net_apy_current_pct": net_apy_current_pct,
-            "net_apy_7d_pct": net_apy_7d_pct,
-            "net_apy_30d_pct": net_apy_30d_pct,
-            "leverage_used": effective_leverage,
-            # APY at each leverage level
-            "leverage_table": leverage_table,
-            # All reserves summary
-            "all_reserves": [
-                {
-                    "symbol": r.get("liquidityToken"),
-                    "mint": r.get("liquidityTokenMint"),
-                    "reserve": r.get("reserve"),
-                    "max_ltv": r.get("maxLtv"),
-                    "supply_apy": r.get("supplyApy"),
-                    "borrow_apy": r.get("borrowApy"),
-                    "total_supply_usd": r.get("totalSupplyUsd"),
-                    "total_borrow_usd": r.get("totalBorrowUsd"),
-                }
-                for r in reserves
-            ],
-            "source": "kamino_api",
-            "type": "multiply",
-        }
-
-        _upsert_opportunity(
-            db=db,
-            protocol=protocol,
-            external_id=external_id,
-            name=name,
-            category="multiply",
-            tokens=[coll_symbol, debt_symbol],
-            apy_current=net_apy_current_pct,
-            apy_7d_avg=net_apy_7d_pct,
-            apy_30d_avg=net_apy_30d_pct,
-            tvl_usd=market_tvl,
-            deposit_address=coll_pk,
-            risk_tier="high" if (max_leverage or 0) >= 8 else "medium",
-            extra=extra,
-            now=now,
-        )
-        count += 1
-        logger.info(
-            "Multiply %s: %dx, borrow=%.2f%%, coll_yield_7d=%s, net_7d=%s",
-            name,
-            effective_leverage,
-            (borrow_apy_current or 0) * 100,
-            f"{coll_yield_7d * 100:.2f}%" if coll_yield_7d else "N/A",
-            f"{net_apy_7d_pct:.2f}%" if net_apy_7d_pct else "N/A",
-        )
-
-    return count
+    return count, upserted_ids
 
 
 # ---------------------------------------------------------------------------
@@ -724,21 +819,24 @@ def fetch_kamino_yields() -> int:
 
             earn_count = fetch_earn_vaults(client, mint_map, protocol, db, now)
             lend_count = fetch_lending_reserves(client, mint_map, protocol, db, now)
-            mul_count = fetch_multiply_markets(client, protocol, db, now)
+            mul_count, mul_ids = fetch_multiply_markets(client, protocol, db, now)
 
-        # Deactivate old per-reserve multiply rows (kmul-{8char}-{8char} pattern)
-        old_rows = (
+        # Deactivate stale multiply entries not in current run
+        stale_rows = (
             db.query(YieldOpportunity)
             .filter(
-                YieldOpportunity.external_id.like("kmul-________-________"),
+                YieldOpportunity.external_id.like("kmul-%"),
                 YieldOpportunity.is_active.is_(True),
             )
             .all()
         )
-        for row in old_rows:
-            row.is_active = False
-        if old_rows:
-            logger.info("Deactivated %d old per-reserve multiply rows", len(old_rows))
+        deactivated = 0
+        for row in stale_rows:
+            if row.external_id not in mul_ids:
+                row.is_active = False
+                deactivated += 1
+        if deactivated:
+            logger.info("Deactivated %d stale multiply entries", deactivated)
 
         db.commit()
         total = earn_count + lend_count + mul_count

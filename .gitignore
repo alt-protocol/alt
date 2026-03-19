@@ -10,6 +10,7 @@ backend/.env
 frontend/node_modules/
 frontend/.next/
 frontend/.env.local
+frontend/.git/
 
 # General
 .DS_Store
