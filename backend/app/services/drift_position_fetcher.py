@@ -478,7 +478,7 @@ def fetch_wallet_events(wallet_address: str) -> list[dict]:
 # Background job: snapshot all tracked wallets
 # ---------------------------------------------------------------------------
 
-def snapshot_all_wallets_drift(db: Session) -> int:
+def snapshot_all_wallets_drift(db: Session, snapshot_at: datetime | None = None) -> int:
     """Iterate all active TrackedWallets, fetch Drift positions, store snapshots."""
     wallets = (
         db.query(TrackedWallet)
@@ -490,7 +490,7 @@ def snapshot_all_wallets_drift(db: Session) -> int:
         return 0
 
     logger.info("Snapshotting Drift positions for %d wallets", len(wallets))
-    now = datetime.now(timezone.utc)
+    now = snapshot_at or datetime.now(timezone.utc)
     total_snapshots = 0
 
     with httpx.Client() as client:

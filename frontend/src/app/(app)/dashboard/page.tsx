@@ -140,13 +140,13 @@ export default function Dashboard() {
   const inputClass = "w-full bg-surface text-foreground rounded-sm px-3 py-2 text-[0.8rem] font-sans outline-none focus:bg-surface-high transition-colors placeholder:text-foreground-muted";
 
   return (
-    <main className="max-w-[1200px] mx-auto px-[3.5rem] py-[2.25rem]">
+    <main className="max-w-[1200px] mx-auto px-4 sm:px-8 lg:px-[3.5rem] py-[2.25rem]">
       {/* Hero */}
       <div className="mb-[2.25rem]">
         <p className="inline-block bg-neon text-on-neon text-[0.65rem] uppercase tracking-[0.08em] font-semibold rounded-sm px-2.5 py-1 mb-4">
           Solana Yield Aggregator
         </p>
-        <h1 className="font-brand text-[3.5rem] leading-[1.05] tracking-[-0.02em]">
+        <h1 className="font-brand text-[2rem] sm:text-[2.75rem] lg:text-[3.5rem] leading-[1.05] tracking-[-0.02em]">
           DISCOVER<br />
           <span className="text-neon">YIELD</span>
         </h1>
@@ -157,7 +157,7 @@ export default function Dashboard() {
       </div>
 
       {/* Stats Bar */}
-      <div className="grid grid-cols-4 gap-[1px] bg-outline-ghost rounded-sm overflow-hidden mb-[2.25rem]">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-[1px] bg-outline-ghost rounded-sm overflow-hidden mb-[2.25rem]">
         {[
           { label: "Protocols", value: `${sources.length || "\u2014"}`, sub: "integrated" },
           { label: "Categories", value: `${new Set(allYields.map(y => y.category)).size || "\u2014"}`, sub: "types" },
@@ -243,7 +243,7 @@ export default function Dashboard() {
 
             {/* Filter panel */}
             {filterOpen && (
-              <div className="absolute right-0 top-full mt-2 w-[380px] bg-surface-low rounded-sm z-50" style={{ boxShadow: "0 10px 40px rgba(0,0,0,0.4)" }}>
+              <div className="absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-[380px] bg-surface-low rounded-sm z-50" style={{ boxShadow: "0 10px 40px rgba(0,0,0,0.4)" }}>
                 {/* Header */}
                 <div className="px-5 pt-5 pb-3 flex items-center justify-between">
                   <h3 className="font-display text-base tracking-[-0.01em]">Filters</h3>
@@ -397,82 +397,132 @@ export default function Dashboard() {
 
         {yields.length > 0 && (
           <>
-            <table className="w-full text-[0.8rem] font-sans">
-              <thead>
-                <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
-                  <th className="text-left px-5 py-2.5 font-medium">Name</th>
-                  <th className="text-left px-5 py-2.5 font-medium">Protocol</th>
-                  <th className="text-left px-5 py-2.5 font-medium">Category</th>
-                  <th
-                    className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
-                    onClick={() => toggleSort("tvl")}
-                  >
-                    TVL<SortArrow field="tvl" />
-                  </th>
-                  <th
-                    className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
-                    onClick={() => toggleSort("apy")}
-                  >
-                    APR<SortArrow field="apy" />
-                  </th>
-                  <th
-                    className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
-                    onClick={() => toggleSort("apy30d")}
-                  >
-                    30D APR<SortArrow field="apy30d" />
-                  </th>
-                  <th className="text-right px-5 py-2.5 font-medium"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {yields.map((y) => (
-                  <tr
+            {/* Mobile cards */}
+            <div className="lg:hidden space-y-2 px-3 py-4">
+              {yields.map((y) => {
+                const displayName = y.name
+                  .replace(new RegExp(`^${y.protocol_name}\\s*`, "i"), "")
+                  .replace(new RegExp(`\\b${fmtCategory(y.category)}\\b\\s*[-—]?\\s*`, "i"), "")
+                  .replace(/^(Lend|Earn|Borrow|Stake)\s*[-—]\s*/i, "")
+                  .replace(/^[-—]\s*/, "")
+                  .trim() || y.name;
+                return (
+                  <div
                     key={y.id}
-                    className="hover:bg-surface-high transition-colors cursor-pointer"
+                    className="bg-surface rounded-sm p-4 space-y-3 cursor-pointer active:bg-surface-high transition-colors"
                     onClick={() => router.push(`/yields/${y.id}`)}
                   >
-                    <td className="px-5 py-3">
-                      <div>
-                        <span className="font-medium text-foreground">
-                          {y.name
-                            .replace(new RegExp(`^${y.protocol_name}\\s*`, "i"), "")
-                            .replace(new RegExp(`\\b${fmtCategory(y.category)}\\b\\s*[-—]?\\s*`, "i"), "")
-                            .replace(/^[-—]\s*/, "")
-                            .trim() || y.name}
-                        </span>
-                        <span className="ml-2 text-[0.65rem] text-foreground-muted">{y.tokens.join(", ")}</span>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3">
-                      <span className="inline-block bg-secondary text-secondary-text rounded-sm px-2.5 py-0.5 text-[0.65rem] tracking-[0.03em] font-medium">
+                    <div>
+                      <span className="font-display text-sm tracking-[-0.02em]">{displayName}</span>
+                      <span className="ml-2 text-[0.65rem] text-foreground-muted font-sans">{y.tokens.join(", ")}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="inline-block bg-secondary text-secondary-text rounded-sm px-2.5 py-0.5 text-[0.6rem] tracking-[0.03em] font-medium">
                         {y.protocol_name ?? "\u2014"}
                       </span>
-                    </td>
-                    <td className="px-5 py-3 text-foreground-muted">
-                      {fmtCategory(y.category)}
-                    </td>
-                    <td className="px-5 py-3 text-right text-foreground-muted tabular-nums">{fmtTvl(y.tvl_usd)}</td>
-                    <td className="px-5 py-3 text-right font-semibold text-neon tabular-nums">
-                      {fmt(y.apy_current)}%
-                    </td>
-                    <td className="px-5 py-3 text-right text-foreground-muted tabular-nums">
-                      {y.apy_30d_avg != null ? `${fmt(y.apy_30d_avg)}%` : "\u2014"}
-                    </td>
-                    <td className="px-5 py-3 text-right">
-                      <a
-                        href={y.protocol_url ?? "#"}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors font-sans inline-block"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        Deposit
-                      </a>
-                    </td>
+                      <span className="text-[0.65rem] text-foreground-muted font-sans">{fmtCategory(y.category)}</span>
+                    </div>
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-baseline">
+                        <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">TVL</span>
+                        <span className="text-[0.8rem] font-sans tabular-nums text-foreground-muted">{fmtTvl(y.tvl_usd)}</span>
+                      </div>
+                      <div className="flex justify-between items-baseline">
+                        <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">APR</span>
+                        <span className="text-[0.8rem] font-sans tabular-nums text-neon font-semibold">{fmt(y.apy_current)}%</span>
+                      </div>
+                      <div className="flex justify-between items-baseline">
+                        <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">30D APR</span>
+                        <span className="text-[0.8rem] font-sans tabular-nums text-foreground-muted">{y.apy_30d_avg != null ? `${fmt(y.apy_30d_avg)}%` : "\u2014"}</span>
+                      </div>
+                    </div>
+                    <button
+                      className="w-full border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-2 hover:bg-secondary hover:text-foreground transition-colors font-sans"
+                      onClick={(e) => { e.stopPropagation(); router.push(`/yields/${y.id}`); }}
+                    >
+                      Deposit
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            {/* Desktop table */}
+            <div className="hidden lg:block">
+              <table className="w-full text-[0.8rem] font-sans">
+                <thead>
+                  <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
+                    <th className="text-left px-5 py-2.5 font-medium">Name</th>
+                    <th className="text-left px-5 py-2.5 font-medium">Protocol</th>
+                    <th className="text-left px-5 py-2.5 font-medium">Category</th>
+                    <th
+                      className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
+                      onClick={() => toggleSort("tvl")}
+                    >
+                      TVL<SortArrow field="tvl" />
+                    </th>
+                    <th
+                      className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
+                      onClick={() => toggleSort("apy")}
+                    >
+                      APR<SortArrow field="apy" />
+                    </th>
+                    <th
+                      className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
+                      onClick={() => toggleSort("apy30d")}
+                    >
+                      30D APR<SortArrow field="apy30d" />
+                    </th>
+                    <th className="text-right px-5 py-2.5 font-medium"></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {yields.map((y) => (
+                    <tr
+                      key={y.id}
+                      className="hover:bg-surface-high transition-colors cursor-pointer"
+                      onClick={() => router.push(`/yields/${y.id}`)}
+                    >
+                      <td className="px-5 py-3">
+                        <div>
+                          <span className="font-medium text-foreground">
+                            {y.name
+                              .replace(new RegExp(`^${y.protocol_name}\\s*`, "i"), "")
+                              .replace(new RegExp(`\\b${fmtCategory(y.category)}\\b\\s*[-—]?\\s*`, "i"), "")
+                              .replace(/^(Lend|Earn|Borrow|Stake)\s*[-—]\s*/i, "")
+                              .replace(/^[-—]\s*/, "")
+                              .trim() || y.name}
+                          </span>
+                          <span className="ml-2 text-[0.65rem] text-foreground-muted">{y.tokens.join(", ")}</span>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3">
+                        <span className="inline-block bg-secondary text-secondary-text rounded-sm px-2.5 py-0.5 text-[0.65rem] tracking-[0.03em] font-medium">
+                          {y.protocol_name ?? "\u2014"}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3 text-foreground-muted">
+                        {fmtCategory(y.category)}
+                      </td>
+                      <td className="px-5 py-3 text-right text-foreground-muted tabular-nums">{fmtTvl(y.tvl_usd)}</td>
+                      <td className="px-5 py-3 text-right font-semibold text-neon tabular-nums">
+                        {fmt(y.apy_current)}%
+                      </td>
+                      <td className="px-5 py-3 text-right text-foreground-muted tabular-nums">
+                        {y.apy_30d_avg != null ? `${fmt(y.apy_30d_avg)}%` : "\u2014"}
+                      </td>
+                      <td className="px-5 py-3 text-right">
+                        <button
+                          className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors font-sans inline-block"
+                          onClick={(e) => { e.stopPropagation(); router.push(`/yields/${y.id}`); }}
+                        >
+                          Deposit
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <div className="px-5 py-3 text-center">
               <p className="text-foreground-muted text-[0.7rem] font-sans">
                 {yields.length} opportunities &middot; {data?.meta?.last_updated

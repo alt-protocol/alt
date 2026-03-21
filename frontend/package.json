@@ -9,9 +9,13 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@kamino-finance/klend-sdk": "^7.3.21",
+    "@solana-program/address-lookup-table": "^0.11.0",
+    "@solana-program/compute-budget": "^0.15.0",
     "@solana/kit": "^6.5.0",
     "@solana/react": "^6.5.0",
     "@tanstack/react-query": "^5.90.21",
+    "decimal.js": "^10.6.0",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",

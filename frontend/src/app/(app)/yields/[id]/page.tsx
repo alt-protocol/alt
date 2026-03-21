@@ -14,6 +14,8 @@ import {
 } from "recharts";
 import { api } from "@/lib/api";
 import { ProtocolChip } from "@/components/ProtocolChip";
+import { hasAdapter } from "@/lib/protocols";
+import DepositWithdrawPanel from "@/components/DepositWithdrawPanel";
 
 function fmtApy(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -203,25 +205,29 @@ export default function YieldDetailPage() {
             </div>
 
             {/* Action card */}
-            <div className="flex-[1] bg-surface-low px-6 py-5 flex flex-col justify-between">
-              <div>
-                <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-2">Current APY</p>
-                <p className="font-display text-3xl tracking-[-0.02em] text-neon">{fmtApy(y.apy_current)}</p>
+            {y.protocol?.slug && hasAdapter(y.protocol.slug) && y.deposit_address ? (
+              <DepositWithdrawPanel yield_={y} protocolSlug={y.protocol.slug} />
+            ) : (
+              <div className="flex-[1] bg-surface-low px-6 py-5 flex flex-col justify-between">
+                <div>
+                  <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-2">Current APY</p>
+                  <p className="font-display text-3xl tracking-[-0.02em] text-neon">{fmtApy(y.apy_current)}</p>
+                </div>
+                <div>
+                  <a
+                    href={y.protocol_url ?? y.protocol?.website_url ?? "#"}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="bg-neon text-on-neon rounded-sm px-6 py-3 text-sm font-semibold font-sans w-full block text-center mt-4 hover:opacity-90 transition-opacity"
+                  >
+                    Open in {y.protocol_name ?? "Protocol"} ↗
+                  </a>
+                  <p className="text-foreground-muted text-[0.65rem] font-sans mt-2 text-center">
+                    Non-custodial. Your keys, your funds.
+                  </p>
+                </div>
               </div>
-              <div>
-                <a
-                  href={y.protocol_url ?? y.protocol?.website_url ?? "#"}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="bg-neon text-on-neon rounded-sm px-6 py-3 text-sm font-semibold font-sans w-full block text-center mt-4 hover:opacity-90 transition-opacity"
-                >
-                  Open in {y.protocol_name ?? "Protocol"} ↗
-                </a>
-                <p className="text-foreground-muted text-[0.65rem] font-sans mt-2 text-center">
-                  Non-custodial. Your keys, your funds.
-                </p>
-              </div>
-            </div>
+            )}
           </div>
 
           {/* APY History Chart */}

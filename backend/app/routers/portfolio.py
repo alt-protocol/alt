@@ -9,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from solders.pubkey import Pubkey
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db
@@ -179,7 +179,6 @@ def _background_fetch_and_store(wallet_address: str):
 
         now = datetime.now(timezone.utc)
         all_positions: list[dict] = []
-        any_failed = False
 
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = [
@@ -189,13 +188,11 @@ def _background_fetch_and_store(wallet_address: str):
             ]
             for future in as_completed(futures):
                 result = future.result()
-                if result is None:
-                    any_failed = True
-                else:
+                if result is not None:
                     all_positions.extend(result)
 
-        if any_failed:
-            logger.warning("Partial fetch for %s — keeping old snapshot", wallet_address[:8])
+        if not all_positions:
+            logger.warning("All fetches failed for %s — keeping old snapshot", wallet_address[:8])
             tracked.fetch_status = "ready"
             db.commit()
             return
@@ -250,19 +247,29 @@ def track_wallet(
     db.flush()
 
     # Check if we already have positions from a prior snapshot
-    latest_snapshot = (
-        db.query(UserPosition.snapshot_at)
+    has_positions = (
+        db.query(UserPosition.id)
         .filter(UserPosition.wallet_address == wallet_address)
-        .order_by(desc(UserPosition.snapshot_at))
         .first()
     )
-    if latest_snapshot:
-        # Return cached positions immediately, refresh in background
+    if has_positions:
+        # Return cached positions (latest per protocol), refresh in background
+        latest_per_protocol = (
+            db.query(
+                UserPosition.protocol_slug,
+                func.max(UserPosition.snapshot_at).label("latest_at"),
+            )
+            .filter(UserPosition.wallet_address == wallet_address)
+            .group_by(UserPosition.protocol_slug)
+            .subquery()
+        )
         positions = (
             db.query(UserPosition)
-            .filter(
-                UserPosition.wallet_address == wallet_address,
-                UserPosition.snapshot_at == latest_snapshot.snapshot_at,
+            .join(
+                latest_per_protocol,
+                (UserPosition.protocol_slug == latest_per_protocol.c.protocol_slug)
+                & (UserPosition.snapshot_at == latest_per_protocol.c.latest_at)
+                & (UserPosition.wallet_address == wallet_address),
             )
             .all()
         )
@@ -348,19 +355,25 @@ def get_positions(
     """Return the latest snapshot of positions from DB."""
     _validate_wallet(wallet_address)
 
-    # Find the most recent snapshot_at for this wallet
-    latest_snapshot = (
-        db.query(UserPosition.snapshot_at)
+    # Get the latest snapshot_at for each protocol
+    latest_per_protocol = (
+        db.query(
+            UserPosition.protocol_slug,
+            func.max(UserPosition.snapshot_at).label("latest_at"),
+        )
         .filter(UserPosition.wallet_address == wallet_address)
-        .order_by(desc(UserPosition.snapshot_at))
-        .first()
+        .group_by(UserPosition.protocol_slug)
+        .subquery()
     )
-    if not latest_snapshot:
-        return []
 
-    query = db.query(UserPosition).filter(
-        UserPosition.wallet_address == wallet_address,
-        UserPosition.snapshot_at == latest_snapshot.snapshot_at,
+    query = (
+        db.query(UserPosition)
+        .join(
+            latest_per_protocol,
+            (UserPosition.protocol_slug == latest_per_protocol.c.protocol_slug)
+            & (UserPosition.snapshot_at == latest_per_protocol.c.latest_at)
+            & (UserPosition.wallet_address == wallet_address),
+        )
     )
     if protocol:
         query = query.filter(UserPosition.protocol_slug == protocol)
@@ -406,8 +419,10 @@ def get_position_history(
             for r in rows
         ]
 
-    # Aggregate: group by snapshot_at, sum values
+    # Aggregate all positions sharing the same snapshot_at timestamp.
+    # All protocols now write with the same timestamp per snapshot cycle.
     from collections import defaultdict
+
     snapshots: dict[datetime, dict] = defaultdict(lambda: {
         "deposit_amount_usd": 0.0, "pnl_usd": 0.0,
     })

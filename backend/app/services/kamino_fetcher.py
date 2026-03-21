@@ -18,6 +18,7 @@ import httpx
 from sqlalchemy.orm import Session
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
+from app.config.kamino_markets import BROKEN_MULTIPLY_MARKETS
 from app.models.base import SessionLocal
 from app.models.protocol import Protocol
 from app.models.yield_opportunity import YieldOpportunity, YieldSnapshot
@@ -25,6 +26,7 @@ from app.models.yield_opportunity import YieldOpportunity, YieldSnapshot
 logger = logging.getLogger(__name__)
 
 KAMINO_API = "https://api.kamino.finance"
+KAMINO_APP = "https://app.kamino.finance"
 MIN_TVL_USD = 100_000  # skip entries with < $100k TVL
 
 # ---------------------------------------------------------------------------
@@ -274,6 +276,7 @@ def fetch_earn_vaults(
             extra={
                 "token_mint": token_mint,
                 "shares_mint": vault.get("state", {}).get("sharesMint"),
+                "protocol_url": f"{KAMINO_APP}/lending/earn/{pubkey}",
                 "source": "kamino_api",
                 "type": "earn_vault",
             },
@@ -347,6 +350,7 @@ def fetch_lending_reserves(
                 extra={
                     "token_mint": token_mint,
                     "reserve": reserve_pubkey,
+                    "protocol_url": f"{KAMINO_APP}/lending/reserve/{reserve_pubkey}/{market_pubkey}",
                     "supply_apy_raw": reserve.get("supplyApy"),
                     "borrow_apy_raw": reserve.get("borrowApy"),
                     "borrow_apy_pct": borrow_apy,
@@ -710,6 +714,12 @@ def fetch_multiply_markets(
             name = f"Kamino Multiply — {coll_symbol}/{debt_symbol} ({market_name})"
 
             extra = {
+                # Deep link
+                "protocol_url": (
+                    f"{KAMINO_APP}/lending/borrow?search={coll_symbol}"
+                    if market_pubkey in BROKEN_MULTIPLY_MARKETS
+                    else f"{KAMINO_APP}/lending/multiply/{coll_reserve.get('liquidityTokenMint', '')}/{debt_reserve.get('liquidityTokenMint', '')}/{market_pubkey}"
+                ),
                 # Market info
                 "market": market_pubkey,
                 "market_name": market_name,

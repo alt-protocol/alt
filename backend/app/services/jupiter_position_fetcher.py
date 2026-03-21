@@ -301,7 +301,7 @@ def fetch_wallet_positions(wallet_address: str, db: Session) -> dict:
 # Background job: snapshot all tracked wallets
 # ---------------------------------------------------------------------------
 
-def snapshot_all_wallets(db: Session) -> int:
+def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> int:
     """Iterate all active TrackedWallets, fetch Jupiter positions, store snapshots."""
     wallets = (
         db.query(TrackedWallet)
@@ -312,7 +312,7 @@ def snapshot_all_wallets(db: Session) -> int:
         return 0
 
     logger.info("Jupiter position snapshot: %d wallets", len(wallets))
-    now = datetime.now(timezone.utc)
+    now = snapshot_at or datetime.now(timezone.utc)
     total_snapshots = 0
     headers = _build_headers()
 

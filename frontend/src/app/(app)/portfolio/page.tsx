@@ -70,13 +70,97 @@ function ApyCell({ position }: { position: UserPositionOut }) {
   );
 }
 
+interface PositionCardField {
+  label: string;
+  value: string;
+  colorClass?: string;
+}
+
+function PositionCard({ position, showProtocol, fields }: { position: UserPositionOut; showProtocol: boolean; fields: PositionCardField[] }) {
+  return (
+    <div className="bg-surface-low rounded-sm p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="font-display text-sm tracking-[-0.02em]">{position.token_symbol ?? "—"}</span>
+        {showProtocol && <ProtocolChip slug={position.protocol_slug} />}
+      </div>
+      {showProtocol && (
+        <span className="inline-block bg-surface-high text-foreground-muted rounded-sm px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.05em]">
+          {fmtProductType(position.product_type)}
+        </span>
+      )}
+      <div className="space-y-1.5">
+        {fields.map((f) => (
+          <div key={f.label} className="flex justify-between items-baseline">
+            <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">{f.label}</span>
+            <span className={`text-[0.8rem] font-sans tabular-nums ${f.colorClass ?? "text-foreground"}`}>{f.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function getPositionFields(position: UserPositionOut, type: string): PositionCardField[] {
+  const forwardApy = (position.extra_data as Record<string, unknown> | null)?.forward_apy as number | null | undefined;
+  const apyStr = forwardApy != null && position.apy !== forwardApy
+    ? `${fmtApy(position.apy)} (${fmtApy(forwardApy)} mkt)`
+    : fmtApy(position.apy);
+
+  switch (type) {
+    case "lending":
+      return [
+        { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
+        { label: "Supply APY", value: apyStr, colorClass: "text-neon" },
+        { label: "Interest Earned", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
+        { label: "Days Held", value: fmtDays(position.held_days) },
+      ];
+    case "multiply":
+      return [
+        { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
+        { label: "Net APY", value: apyStr, colorClass: "text-neon" },
+        { label: "PnL ($)", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
+        { label: "PnL (%)", value: fmtPct(position.pnl_pct), colorClass: pnlColor(position.pnl_pct) },
+        { label: "Days Held", value: fmtDays(position.held_days) },
+      ];
+    case "earn_vault":
+      return [
+        { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
+        { label: "APY", value: apyStr, colorClass: "text-neon" },
+        { label: "Interest Earned", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
+        { label: "Days Held", value: fmtDays(position.held_days) },
+      ];
+    case "insurance_fund":
+      return [
+        { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
+        { label: "APY", value: apyStr, colorClass: "text-neon" },
+        { label: "PnL", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
+        { label: "Days Held", value: fmtDays(position.held_days) },
+      ];
+    case "earn":
+      return [
+        { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
+        { label: "APY", value: apyStr, colorClass: "text-neon" },
+        { label: "Interest Earned", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
+        { label: "Days Held", value: fmtDays(position.held_days) },
+      ];
+    default: // "all"
+      return [
+        { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
+        { label: "PnL", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
+        { label: "APY", value: apyStr, colorClass: "text-neon" },
+      ];
+  }
+}
+
 function fmtProductType(t: string): string {
   const map: Record<string, string> = {
     earn_vault: "Earn Vault",
+    earn: "Earn",
     lending: "Lend",
     multiply: "Multiply",
     lp: "LP",
     insurance: "Insurance",
+    insurance_fund: "Insurance Fund",
   };
   return map[t] ?? t;
 }
@@ -86,15 +170,16 @@ const SIDEBAR_TYPES = [
   { key: "lending", label: "LEND" },
   { key: "multiply", label: "MULTIPLY" },
   { key: "earn_vault", label: "VAULTS" },
-  { key: "insurance", label: "INSURANCE FUNDS" },
+  { key: "insurance_fund", label: "INSURANCE FUNDS" },
+  { key: "earn", label: "EARN" },
 ];
 
 function LoadingSkeleton() {
   return (
     <div className="space-y-4">
       {/* Stats skeleton */}
-      <div className="grid grid-cols-3 gap-[1px] bg-outline-ghost rounded-sm overflow-hidden">
-        {[0, 1, 2].map((i) => (
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-[1px] bg-outline-ghost rounded-sm overflow-hidden">
+        {[0, 1, 2, 3, 4].map((i) => (
           <div key={i} className="bg-surface-low px-5 py-4">
             <div className="bg-surface-high animate-pulse rounded-sm h-3 w-16 mb-2" />
             <div className="bg-surface-high animate-pulse rounded-sm h-7 w-28" />
@@ -165,22 +250,34 @@ function SyncingState() {
 
 interface StatsRowProps {
   totalValue: number;
-  totalPnl: number;
+  totalPnlUsd: number;
+  roi: number;
+  weightedApy: number;
   count: number;
 }
 
-function StatsRow({ totalValue, totalPnl, count }: StatsRowProps) {
+function StatsRow({ totalValue, totalPnlUsd, roi, weightedApy, count }: StatsRowProps) {
   return (
-    <div className="grid grid-cols-3 gap-[1px] bg-outline-ghost rounded-sm overflow-hidden mb-[2.25rem]">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-[1px] bg-outline-ghost rounded-sm overflow-hidden mb-[2.25rem]">
       <div className="bg-surface-low px-5 py-4">
         <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">Net Value</p>
         <p className="font-display text-2xl tracking-[-0.02em] tabular-nums">{fmtUsd(totalValue)}</p>
       </div>
       <div className="bg-surface-low px-5 py-4">
-        <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">Total PnL</p>
-        <p className={`font-display text-2xl tracking-[-0.02em] tabular-nums ${pnlColor(totalPnl)}`}>
-          {fmtPct(totalPnl)}
+        <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">PnL ($)</p>
+        <p className={`font-display text-2xl tracking-[-0.02em] tabular-nums ${pnlColor(totalPnlUsd)}`}>
+          {fmtUsd(totalPnlUsd)}
         </p>
+      </div>
+      <div className="bg-surface-low px-5 py-4">
+        <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">ROI</p>
+        <p className={`font-display text-2xl tracking-[-0.02em] tabular-nums ${pnlColor(roi)}`}>
+          {fmtPct(roi)}
+        </p>
+      </div>
+      <div className="bg-surface-low px-5 py-4">
+        <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">Avg APY</p>
+        <p className="font-display text-2xl tracking-[-0.02em] tabular-nums text-neon">{fmtApy(weightedApy)}</p>
       </div>
       <div className="bg-surface-low px-5 py-4">
         <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">Positions</p>
@@ -272,7 +369,7 @@ interface TypeSidebarProps {
 
 function TypeSidebar({ byType, totalCount, activeType, onSelect }: TypeSidebarProps) {
   return (
-    <div className="w-[200px] shrink-0 bg-surface-low">
+    <div className="w-full lg:w-[200px] shrink-0 bg-surface-low flex lg:flex-col overflow-x-auto">
       {SIDEBAR_TYPES.map(({ key, label }) => {
         const count = key === "all" ? totalCount : (byType[key]?.length ?? 0);
         const isActive = activeType === key;
@@ -280,7 +377,7 @@ function TypeSidebar({ byType, totalCount, activeType, onSelect }: TypeSidebarPr
           <button
             key={key}
             onClick={() => onSelect(key)}
-            className={`w-full flex justify-between items-center px-4 py-2.5 text-[0.75rem] font-sans uppercase tracking-[0.05em] transition-colors text-left ${
+            className={`flex justify-between items-center gap-2 px-4 py-2.5 text-[0.75rem] font-sans uppercase tracking-[0.05em] transition-colors text-left whitespace-nowrap lg:w-full ${
               isActive ? "text-neon bg-surface-high" : "text-foreground-muted hover:text-foreground"
             }`}
           >
@@ -319,159 +416,232 @@ function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
 
   if (activeType === "lending") {
     return (
-      <div className="flex-1 bg-surface overflow-x-auto">
-        <table className="w-full text-[0.8rem] font-sans">
-          <thead>
-            <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
-              <th className="text-left px-5 py-2.5 font-medium">Market</th>
-              <th className="text-left px-5 py-2.5 font-medium">Token</th>
-              <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
-              <th className="text-right px-5 py-2.5 font-medium">Supply APY</th>
-              <th className="text-right px-5 py-2.5 font-medium">Interest Earned</th>
-              <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
-            </tr>
-          </thead>
-          <tbody>
-            {positions.map((p) => (
-              <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
-                <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
-                <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
-                <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
-                <ApyCell position={p} />
-                <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
-                <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
+      <div className="flex-1 bg-surface">
+        <div className="lg:hidden space-y-2 p-3">
+          {positions.map((p) => (
+            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "lending")} />
+          ))}
+        </div>
+        <div className="hidden lg:block overflow-x-auto">
+          <table className="w-full text-[0.8rem] font-sans">
+            <thead>
+              <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
+                <th className="text-left px-5 py-2.5 font-medium">Market</th>
+                <th className="text-left px-5 py-2.5 font-medium">Token</th>
+                <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
+                <th className="text-right px-5 py-2.5 font-medium">Supply APY</th>
+                <th className="text-right px-5 py-2.5 font-medium">Interest Earned</th>
+                <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {positions.map((p) => (
+                <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
+                  <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
+                  <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
+                  <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
+                  <ApyCell position={p} />
+                  <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
+                  <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     );
   }
 
   if (activeType === "multiply") {
     return (
-      <div className="flex-1 bg-surface overflow-x-auto">
-        <table className="w-full text-[0.8rem] font-sans">
-          <thead>
-            <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
-              <th className="text-left px-5 py-2.5 font-medium">Strategy</th>
-              <th className="text-left px-5 py-2.5 font-medium">Token</th>
-              <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
-              <th className="text-right px-5 py-2.5 font-medium">Net APY</th>
-              <th className="text-right px-5 py-2.5 font-medium">PnL ($)</th>
-              <th className="text-right px-5 py-2.5 font-medium">PnL (%)</th>
-              <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
-            </tr>
-          </thead>
-          <tbody>
-            {positions.map((p) => (
-              <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
-                <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
-                <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
-                <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
-                <ApyCell position={p} />
-                <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
-                <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_pct)}`}>{fmtPct(p.pnl_pct)}</td>
-                <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
+      <div className="flex-1 bg-surface">
+        <div className="lg:hidden space-y-2 p-3">
+          {positions.map((p) => (
+            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "multiply")} />
+          ))}
+        </div>
+        <div className="hidden lg:block overflow-x-auto">
+          <table className="w-full text-[0.8rem] font-sans">
+            <thead>
+              <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
+                <th className="text-left px-5 py-2.5 font-medium">Strategy</th>
+                <th className="text-left px-5 py-2.5 font-medium">Token</th>
+                <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
+                <th className="text-right px-5 py-2.5 font-medium">Net APY</th>
+                <th className="text-right px-5 py-2.5 font-medium">PnL ($)</th>
+                <th className="text-right px-5 py-2.5 font-medium">PnL (%)</th>
+                <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {positions.map((p) => (
+                <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
+                  <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
+                  <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
+                  <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
+                  <ApyCell position={p} />
+                  <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
+                  <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_pct)}`}>{fmtPct(p.pnl_pct)}</td>
+                  <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     );
   }
 
   if (activeType === "earn_vault") {
     return (
-      <div className="flex-1 bg-surface overflow-x-auto">
-        <table className="w-full text-[0.8rem] font-sans">
-          <thead>
-            <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
-              <th className="text-left px-5 py-2.5 font-medium">Vault</th>
-              <th className="text-left px-5 py-2.5 font-medium">Token</th>
-              <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
-              <th className="text-right px-5 py-2.5 font-medium">APY</th>
-              <th className="text-right px-5 py-2.5 font-medium">Interest Earned</th>
-              <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
-            </tr>
-          </thead>
-          <tbody>
-            {positions.map((p) => (
-              <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
-                <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
-                <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
-                <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
-                <ApyCell position={p} />
-                <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
-                <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
+      <div className="flex-1 bg-surface">
+        <div className="lg:hidden space-y-2 p-3">
+          {positions.map((p) => (
+            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "earn_vault")} />
+          ))}
+        </div>
+        <div className="hidden lg:block overflow-x-auto">
+          <table className="w-full text-[0.8rem] font-sans">
+            <thead>
+              <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
+                <th className="text-left px-5 py-2.5 font-medium">Vault</th>
+                <th className="text-left px-5 py-2.5 font-medium">Token</th>
+                <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
+                <th className="text-right px-5 py-2.5 font-medium">APY</th>
+                <th className="text-right px-5 py-2.5 font-medium">Interest Earned</th>
+                <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {positions.map((p) => (
+                <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
+                  <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
+                  <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
+                  <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
+                  <ApyCell position={p} />
+                  <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
+                  <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     );
   }
 
-  if (activeType === "insurance") {
+  if (activeType === "insurance_fund") {
     return (
-      <div className="flex-1 bg-surface overflow-x-auto">
-        <table className="w-full text-[0.8rem] font-sans">
-          <thead>
-            <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
-              <th className="text-left px-5 py-2.5 font-medium">Fund</th>
-              <th className="text-left px-5 py-2.5 font-medium">Token</th>
-              <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
-              <th className="text-right px-5 py-2.5 font-medium">APY</th>
-              <th className="text-right px-5 py-2.5 font-medium">PnL</th>
-              <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
-            </tr>
-          </thead>
-          <tbody>
-            {positions.map((p) => (
-              <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
-                <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
-                <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
-                <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
-                <ApyCell position={p} />
-                <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
-                <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
+      <div className="flex-1 bg-surface">
+        <div className="lg:hidden space-y-2 p-3">
+          {positions.map((p) => (
+            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "insurance_fund")} />
+          ))}
+        </div>
+        <div className="hidden lg:block overflow-x-auto">
+          <table className="w-full text-[0.8rem] font-sans">
+            <thead>
+              <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
+                <th className="text-left px-5 py-2.5 font-medium">Fund</th>
+                <th className="text-left px-5 py-2.5 font-medium">Token</th>
+                <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
+                <th className="text-right px-5 py-2.5 font-medium">APY</th>
+                <th className="text-right px-5 py-2.5 font-medium">PnL</th>
+                <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {positions.map((p) => (
+                <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
+                  <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
+                  <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
+                  <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
+                  <ApyCell position={p} />
+                  <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
+                  <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  if (activeType === "earn") {
+    return (
+      <div className="flex-1 bg-surface">
+        <div className="lg:hidden space-y-2 p-3">
+          {positions.map((p) => (
+            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "earn")} />
+          ))}
+        </div>
+        <div className="hidden lg:block overflow-x-auto">
+          <table className="w-full text-[0.8rem] font-sans">
+            <thead>
+              <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
+                <th className="text-left px-5 py-2.5 font-medium">Vault</th>
+                <th className="text-left px-5 py-2.5 font-medium">Token</th>
+                <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
+                <th className="text-right px-5 py-2.5 font-medium">APY</th>
+                <th className="text-right px-5 py-2.5 font-medium">Interest Earned</th>
+                <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
+              </tr>
+            </thead>
+            <tbody>
+              {positions.map((p) => (
+                <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
+                  <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
+                  <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
+                  <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
+                  <ApyCell position={p} />
+                  <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
+                  <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     );
   }
 
   // Default: ALL view
   return (
-    <div className="flex-1 bg-surface overflow-x-auto">
-      <table className="w-full text-[0.8rem] font-sans">
-        <thead>
-          <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
-            <th className="text-left px-5 py-2.5 font-medium">Protocol</th>
-            <th className="text-left px-5 py-2.5 font-medium">Type</th>
-            <th className="text-left px-5 py-2.5 font-medium">Token</th>
-            <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
-            <th className="text-right px-5 py-2.5 font-medium">PnL</th>
-            <th className="text-right px-5 py-2.5 font-medium">APY</th>
-          </tr>
-        </thead>
-        <tbody>
-          {positions.map((p) => (
-            <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
-              <td className="px-5 py-3">
-                <ProtocolChip slug={p.protocol_slug} />
-              </td>
-              <td className="px-5 py-3 text-foreground-muted">{fmtProductType(p.product_type)}</td>
-              <td className="px-5 py-3 text-foreground">{p.token_symbol ?? "—"}</td>
-              <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
-              <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
-              <ApyCell position={p} />
+    <div className="flex-1 bg-surface">
+      <div className="lg:hidden space-y-2 p-3">
+        {positions.map((p) => (
+          <PositionCard key={p.id} position={p} showProtocol={true} fields={getPositionFields(p, "all")} />
+        ))}
+      </div>
+      <div className="hidden lg:block overflow-x-auto">
+        <table className="w-full text-[0.8rem] font-sans">
+          <thead>
+            <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
+              <th className="text-left px-5 py-2.5 font-medium">Protocol</th>
+              <th className="text-left px-5 py-2.5 font-medium">Type</th>
+              <th className="text-left px-5 py-2.5 font-medium">Token</th>
+              <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
+              <th className="text-right px-5 py-2.5 font-medium">PnL</th>
+              <th className="text-right px-5 py-2.5 font-medium">APY</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {positions.map((p) => (
+              <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
+                <td className="px-5 py-3">
+                  <ProtocolChip slug={p.protocol_slug} />
+                </td>
+                <td className="px-5 py-3 text-foreground-muted">{fmtProductType(p.product_type)}</td>
+                <td className="px-5 py-3 text-foreground">{p.token_symbol ?? "—"}</td>
+                <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
+                <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
+                <ApyCell position={p} />
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -492,35 +662,32 @@ function EventsTable({ events }: EventsTableProps) {
 
   return (
     <div className="bg-surface-low rounded-sm overflow-hidden">
-      <table className="w-full text-[0.8rem] font-sans">
-        <thead>
-          <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
-            <th className="text-left px-5 py-2.5 font-medium">Date</th>
-            <th className="text-left px-5 py-2.5 font-medium">Protocol</th>
-            <th className="text-left px-5 py-2.5 font-medium">Type</th>
-            <th className="text-right px-5 py-2.5 font-medium">Amount</th>
-            <th className="text-right px-5 py-2.5 font-medium">Value (USD)</th>
-            <th className="text-right px-5 py-2.5 font-medium">Tx</th>
-          </tr>
-        </thead>
-        <tbody>
-          {events.map((e) => (
-            <tr key={e.id} className="hover:bg-surface-high transition-colors tabular-nums">
-              <td className="px-5 py-3 text-foreground-muted">{fmtDate(e.event_at)}</td>
-              <td className="px-5 py-3">
+      {/* Mobile cards */}
+      <div className="lg:hidden space-y-2 p-3">
+        {events.map((e) => (
+          <div key={e.id} className="bg-surface rounded-sm p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="bg-surface-high text-foreground rounded-sm px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.05em]">
+                {e.event_type}
+              </span>
+              <span className="text-[0.7rem] text-foreground-muted font-sans">{fmtDate(e.event_at)}</span>
+            </div>
+            <div className="space-y-1.5">
+              <div className="flex justify-between items-baseline">
+                <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Protocol</span>
                 <ProtocolChip slug={e.protocol_slug} />
-              </td>
-              <td className="px-5 py-3">
-                <span className="bg-surface-high text-foreground rounded-sm px-2 py-0.5 text-[0.65rem] uppercase tracking-[0.05em]">
-                  {e.event_type}
-                </span>
-              </td>
-              <td className="px-5 py-3 text-right text-foreground">
-                {e.amount != null ? e.amount.toFixed(4) : "—"}
-              </td>
-              <td className="px-5 py-3 text-right text-foreground">{fmtUsd(e.amount_usd)}</td>
-              <td className="px-5 py-3 text-right">
-                {e.tx_signature ? (
+              </div>
+              <div className="flex justify-between items-baseline">
+                <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Amount</span>
+                <span className="text-[0.8rem] font-sans tabular-nums">{e.amount != null ? e.amount.toFixed(4) : "—"}</span>
+              </div>
+              <div className="flex justify-between items-baseline">
+                <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Value (USD)</span>
+                <span className="text-[0.8rem] font-sans tabular-nums">{fmtUsd(e.amount_usd)}</span>
+              </div>
+              {e.tx_signature && (
+                <div className="flex justify-between items-baseline">
+                  <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Tx</span>
                   <a
                     href={`https://solscan.io/tx/${e.tx_signature}`}
                     target="_blank"
@@ -529,14 +696,60 @@ function EventsTable({ events }: EventsTableProps) {
                   >
                     {truncateId(e.tx_signature, 8)}
                   </a>
-                ) : (
-                  <span className="text-foreground-muted">—</span>
-                )}
-              </td>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      {/* Desktop table */}
+      <div className="hidden lg:block">
+        <table className="w-full text-[0.8rem] font-sans">
+          <thead>
+            <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
+              <th className="text-left px-5 py-2.5 font-medium">Date</th>
+              <th className="text-left px-5 py-2.5 font-medium">Protocol</th>
+              <th className="text-left px-5 py-2.5 font-medium">Type</th>
+              <th className="text-right px-5 py-2.5 font-medium">Amount</th>
+              <th className="text-right px-5 py-2.5 font-medium">Value (USD)</th>
+              <th className="text-right px-5 py-2.5 font-medium">Tx</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {events.map((e) => (
+              <tr key={e.id} className="hover:bg-surface-high transition-colors tabular-nums">
+                <td className="px-5 py-3 text-foreground-muted">{fmtDate(e.event_at)}</td>
+                <td className="px-5 py-3">
+                  <ProtocolChip slug={e.protocol_slug} />
+                </td>
+                <td className="px-5 py-3">
+                  <span className="bg-surface-high text-foreground rounded-sm px-2 py-0.5 text-[0.65rem] uppercase tracking-[0.05em]">
+                    {e.event_type}
+                  </span>
+                </td>
+                <td className="px-5 py-3 text-right text-foreground">
+                  {e.amount != null ? e.amount.toFixed(4) : "—"}
+                </td>
+                <td className="px-5 py-3 text-right text-foreground">{fmtUsd(e.amount_usd)}</td>
+                <td className="px-5 py-3 text-right">
+                  {e.tx_signature ? (
+                    <a
+                      href={`https://solscan.io/tx/${e.tx_signature}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-neon text-[0.7rem] hover:underline"
+                    >
+                      {truncateId(e.tx_signature, 8)}
+                    </a>
+                  ) : (
+                    <span className="text-foreground-muted">—</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -610,8 +823,12 @@ export default function Portfolio() {
   const summary = useMemo(() => {
     const totalValue = positions.reduce((sum, p) => sum + (p.deposit_amount_usd ?? 0), 0);
     const totalPnlUsd = positions.reduce((sum, p) => sum + (p.pnl_usd ?? 0), 0);
-    const totalPnlPct = totalValue > 0 ? (totalPnlUsd / totalValue) * 100 : 0;
-    return { totalValue, totalPnl: totalPnlPct, count: positions.length };
+    const totalInitialDeposit = positions.reduce((sum, p) => sum + (p.initial_deposit_usd ?? 0), 0);
+    const roi = totalInitialDeposit > 0 ? (totalPnlUsd / totalInitialDeposit) * 100 : 0;
+    const weightedApy = totalValue > 0
+      ? positions.reduce((sum, p) => sum + (p.apy ?? 0) * (p.deposit_amount_usd ?? 0), 0) / totalValue
+      : 0;
+    return { totalValue, totalPnlUsd, roi, weightedApy, count: positions.length };
   }, [positions]);
 
   const chartData: ChartPoint[] = useMemo(() => {
@@ -630,7 +847,7 @@ export default function Portfolio() {
     : "";
 
   return (
-    <main className="max-w-[1200px] mx-auto px-[3.5rem] py-[2.25rem]">
+    <main className="max-w-[1200px] mx-auto px-4 sm:px-8 lg:px-[3.5rem] py-[2.25rem]">
       {!walletAddress && <NoWalletState />}
 
       {walletAddress && positionsQuery.isLoading && <LoadingSkeleton />}
@@ -646,7 +863,9 @@ export default function Portfolio() {
 
           <StatsRow
             totalValue={summary.totalValue}
-            totalPnl={summary.totalPnl}
+            totalPnlUsd={summary.totalPnlUsd}
+            roi={summary.roi}
+            weightedApy={summary.weightedApy}
             count={summary.count}
           />
 
@@ -677,7 +896,7 @@ export default function Portfolio() {
           {showSyncing && <SyncingState />}
 
           {!showSyncing && activeTab === "positions" && (
-            <div className="flex rounded-sm overflow-hidden">
+            <div className="flex flex-col lg:flex-row rounded-sm overflow-hidden">
               <TypeSidebar
                 byType={byType}
                 totalCount={positions.length}

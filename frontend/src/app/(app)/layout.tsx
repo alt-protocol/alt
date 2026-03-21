@@ -14,11 +14,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-surface text-foreground">
-      <header className="bg-surface-low px-[3.5rem] py-3 flex items-center justify-between">
+      <header className="bg-surface-low px-4 sm:px-8 lg:px-[3.5rem] py-3 flex items-center justify-between flex-wrap gap-y-2">
         <Link href="/dashboard" className="font-brand text-lg tracking-[0.02em] text-neon">
           AKASHI
         </Link>
-        <nav className="flex gap-8 text-[0.8rem] uppercase tracking-[0.05em] font-sans">
+        <nav className="flex gap-4 sm:gap-8 text-[0.8rem] uppercase tracking-[0.05em] font-sans">
           {navLinks.map(({ href, label }) => (
             <Link
               key={href}

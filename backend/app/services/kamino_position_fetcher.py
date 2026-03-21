@@ -213,9 +213,11 @@ def _compute_obligation_pnl(txs: list[dict], current_net_value: float, now: date
       R = (V_end - Σ CF_i) / Σ(CF_i × w_i)
     where w_i = (T - t_i) / T  (fraction of period each cash flow was invested).
 
-    Cash flow sign convention (from investor perspective):
-      deposit/repay  → positive CF (money investor commits)
-      withdraw/borrow → negative CF (money investor receives back)
+    Cash flow sign convention (from investor/equity perspective):
+      deposit  → positive CF (money investor commits)
+      withdraw → negative CF (money investor receives back)
+      borrow   → negative CF (protocol-provided funds, offsets deposit)
+      repay    → positive CF (returning protocol funds, offsets withdraw)
     """
     sum_deposit = 0.0
     sum_withdraw = 0.0
@@ -232,11 +234,12 @@ def _compute_obligation_pnl(txs: list[dict], current_net_value: float, now: date
         "withdraw": "withdraw",
         "borrow": "borrow",
         "repay": "repay",
-        # Multiply compound operations (net user capital flow)
+        # User-initiated compound operations (actual equity flow)
         "depositandborrow": "deposit",
         "withdrawandrepay": "withdraw",
-        "leverageanddeposit": "deposit",
-        "deleverageandwithdraw": "withdraw",
+        # Leverage mechanics — NOT user equity flow, exclude from cash flows
+        "leverageanddeposit": "leverage",
+        "deleverageandwithdraw": "deleverage",
     }
 
     # --- Lifecycle reset detection ---
@@ -249,19 +252,25 @@ def _compute_obligation_pnl(txs: list[dict], current_net_value: float, now: date
     # multiply positions.
     reset_idx = None
     running = 0.0
+    seen_deposit = False
     for i, tx in enumerate(txs):
         display_name = (tx.get("transactionDisplayName") or "").lower()
         usd_val = _float(tx.get("liquidityUsdValue")) or 0.0
         category = tx_type_map.get(display_name)
         if category == "deposit":
             running += usd_val
+            if usd_val > 0:
+                seen_deposit = True
         elif category == "withdraw":
             running -= usd_val
-        # borrow/repay excluded — they're leverage mechanics, not equity flow
+        # borrow/repay/leverage/deleverage excluded — not equity flow
         # Balance dropped near zero and there are more txs after → lifecycle reset
-        if running < 0.01 and i < len(txs) - 1:
+        # Only check after first deposit — running=0 before any deposit is the
+        # initial state, not a closed position (borrows can precede deposits).
+        if seen_deposit and running < 0.01 and i < len(txs) - 1:
             reset_idx = i + 1
             running = 0.0  # restart tracking from new lifecycle
+            seen_deposit = False
 
     if reset_idx is not None:
         txs = txs[reset_idx:]
@@ -282,10 +291,17 @@ def _compute_obligation_pnl(txs: list[dict], current_net_value: float, now: date
                 cash_flows.append((tx_time, -usd_val))
         elif category == "borrow":
             sum_borrow += usd_val
-            # Not a cash flow — leverage mechanic, not user equity
+            # Borrow offsets deposit — protocol-provided funds, not user equity
+            if tx_time and usd_val > 0:
+                cash_flows.append((tx_time, -usd_val))
         elif category == "repay":
             sum_repay += usd_val
-            # Not a cash flow — leverage mechanic, not user equity
+            # Repay offsets withdraw — returning protocol funds, not user outflow
+            if tx_time and usd_val > 0:
+                cash_flows.append((tx_time, usd_val))
+        elif category in ("leverage", "deleverage"):
+            # Flash-loan-based leverage adjustment — not user equity
+            pass
 
         # Track first deposit as opened_at
         if category == "deposit" and opened_at is None and tx_time:
@@ -294,6 +310,14 @@ def _compute_obligation_pnl(txs: list[dict], current_net_value: float, now: date
         # Track token symbol from first collateral deposit
         if token_symbol is None and tx.get("liquidityToken"):
             token_symbol = tx["liquidityToken"]
+
+    # Debug: log raw tx type breakdown for Multiply positions
+    logger.info(
+        "obligation tx breakdown: deposit=%.2f withdraw=%.2f borrow=%.2f repay=%.2f "
+        "net_value=%.2f | tx_types=%s",
+        sum_deposit, sum_withdraw, sum_borrow, sum_repay, current_net_value,
+        [tx.get("transactionDisplayName", "?") for tx in txs],
+    )
 
     # net_equity = what the user actually put in (their own capital)
     net_equity = sum_deposit - sum_withdraw - sum_borrow + sum_repay
@@ -866,7 +890,7 @@ def fetch_wallet_positions(wallet_address: str, db: Session) -> dict:
 # Background job: snapshot all tracked wallets
 # ---------------------------------------------------------------------------
 
-def snapshot_all_wallets(db: Session) -> int:
+def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> int:
     """Iterate all active TrackedWallets, fetch positions, store snapshots."""
     wallets = (
         db.query(TrackedWallet)
@@ -878,7 +902,7 @@ def snapshot_all_wallets(db: Session) -> int:
         return 0
 
     logger.info("Snapshotting positions for %d wallets", len(wallets))
-    now = datetime.now(timezone.utc)
+    now = snapshot_at or datetime.now(timezone.utc)
     total_snapshots = 0
 
     with httpx.Client() as client:
