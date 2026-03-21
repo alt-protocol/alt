@@ -1,20 +1,26 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Space_Grotesk, Manrope, Orbitron } from "next/font/google";
 import QueryProvider from "@/components/QueryProvider";
+import SolanaProviders from "@/components/SolanaProviders";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const spaceGrotesk = Space_Grotesk({
+  variable: "--font-space-grotesk",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const manrope = Manrope({
+  variable: "--font-manrope",
+  subsets: ["latin"],
+});
+
+const orbitron = Orbitron({
+  variable: "--font-orbitron",
   subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
-  title: "Alt — Solana Yield Aggregator",
+  title: "Akashi — Solana Yield Aggregator",
   description: "Discover and compare yield opportunities across Kamino, Drift, and Exponent on Solana.",
 };
 
@@ -26,9 +32,11 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${spaceGrotesk.variable} ${manrope.variable} ${orbitron.variable} antialiased`}
       >
-        <QueryProvider>{children}</QueryProvider>
+        <QueryProvider>
+          <SolanaProviders>{children}</SolanaProviders>
+        </QueryProvider>
       </body>
     </html>
   );

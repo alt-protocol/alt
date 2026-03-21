@@ -16,6 +16,7 @@ from typing import Optional
 
 import httpx
 from sqlalchemy.orm import Session
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from app.models.base import SessionLocal
 from app.models.protocol import Protocol
@@ -32,9 +33,11 @@ MIN_TVL_USD = 100_000  # skip entries with < $100k TVL
 
 YIELD_BEARING_STABLES = {
     "PRIME", "syrupUSDC", "ONyc", "USCC", "PST", "eUSX",
+    "JUICED", "sUSDe", "USDY",
 }
 REGULAR_STABLES = {
     "USDC", "PYUSD", "USDG", "USDS", "CASH", "USD1", "USDT", "USX", "FDUSD",
+    "USDe", "USDH", "AUSD", "JupUSD",
 }
 LST_SYMBOLS = {
     "JITOSOL", "MSOL", "BSOL", "JUPSOL", "HSOL", "VSOL", "INF", "DSOL",
@@ -72,13 +75,23 @@ def _classify_multiply_pair(coll_symbol: str, debt_symbol: str) -> str:
 # Helpers
 # ---------------------------------------------------------------------------
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadTimeout)),
+    reraise=True,
+)
+def _get_with_retry(path: str, client: httpx.Client):
+    r = client.get(f"{KAMINO_API}{path}", timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
 def _get(path: str, client: httpx.Client) -> Optional[dict | list]:
     try:
-        r = client.get(f"{KAMINO_API}{path}", timeout=30)
-        r.raise_for_status()
-        return r.json()
+        return _get_with_retry(path, client)
     except Exception as exc:
-        logger.warning("Kamino API %s failed: %s", path, exc)
+        logger.warning("Kamino API %s failed after retries: %s", path, exc)
         return None
 
 

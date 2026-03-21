@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Alt** is a curated, non-custodial Solana yield aggregator. Users discover and deposit into yield opportunities across Kamino, Drift, and Exponent — the app never touches their funds. The backend only serves market data; all transactions are built client-side via protocol SDKs and signed by the user's wallet.
+**Akashi** is a curated, non-custodial Solana yield aggregator. Users discover and deposit into yield opportunities across Kamino, Drift, and Exponent — the app never touches their funds. The backend only serves market data; all transactions are built client-side via protocol SDKs and signed by the user's wallet.
 
 ## Commands
 
@@ -87,9 +87,41 @@ Three tables: `protocols`, `yield_opportunities`, `yield_snapshots`. The yield_s
 
 Frontend TypeScript SDKs: `@kamino-finance/kliquidity-sdk`, `@drift-labs/sdk`, Exponent TBD.
 
+## Design System ("The Kinetic Architect")
+
+All frontend work MUST follow the design system in `DESIGN.md`. Key rules:
+
+### Colors (dark-only, no light mode)
+- **Surface (base):** `#131313` | **Surface low:** `#1c1b1b` | **Surface high:** `#2a2a2a`
+- **Neon primary:** `#d9f99d` (accents, success states) | **CTA gradient:** `#ceee93` → `#b3d17a`
+- **Secondary purple:** `#4f319c` (chips, tags) | **Tertiary:** `#c0c1ff`
+- Use CSS variables defined in `globals.css` (e.g., `var(--surface)`, `var(--neon-primary)`)
+
+### Typography
+- **Brand/logo:** Orbitron (Bauhaus-inspired geometric), used only for "AKASHI" wordmark
+- **Headlines:** Space Grotesk, tight letter-spacing (`-0.02em`)
+- **Body/labels:** Manrope
+- Labels: uppercase, `+0.05em` letter-spacing for "blueprint" feel
+
+### Critical Do's and Don'ts
+- **NO 1px borders** — use surface color shifts to define sections
+- **NO large border-radius** — use `rounded-sm` (2px) or `rounded-none` only
+- **NO Material-style shadows** — use tonal depth or `0 10px 40px rgba(0,0,0,0.4)` for floating elements
+- **NO friendly/bouncy animations** — keep it institutional
+- **High density layouts** — tight spacing (0.2–0.5rem internal), data-rich
+- **Asymmetric editorial layout** — labels left, data right
+- **Glassmorphism for modals** — `backdrop-blur-[16px]` on 60% opaque surface
+
+### Components
+- **Primary button:** white bg `#ffffff`, dark text `#243600`, `rounded-sm`
+- **Neon button:** `#d9f99d` bg, `#131f00` text (for commit/success actions)
+- **Cards:** no dividers, `surface_container_lowest` bg, `rounded-sm` or `rounded-none`
+- **Inputs:** no border unfocused (bg shift only), neon 2px underline on focus
+- **Chips:** rectangular `rounded-sm`, purple `#4f319c` bg
+
 ## Tech Stack
 
-- **Frontend:** Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS v4, TanStack Query, `@solana/wallet-adapter-react`
+- **Frontend:** Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS v4, TanStack Query, `@solana/react` + `@solana/kit` (Wallet Standard)
 - **Backend:** FastAPI 0.135, SQLAlchemy 2.0, Alembic, APScheduler, `solana-py` + `solders`
 - **Database:** PostgreSQL
 - **RPC:** Helius (free tier, 100K credits/day)

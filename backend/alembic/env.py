@@ -27,6 +27,7 @@ if config.config_file_name is not None:
 from app.models.base import Base
 from app.models.protocol import Protocol  # noqa: F401
 from app.models.yield_opportunity import YieldOpportunity, YieldSnapshot  # noqa: F401
+from app.models.user_position import TrackedWallet, UserPosition, UserPositionEvent  # noqa: F401
 
 target_metadata = Base.metadata
 

@@ -26,8 +26,22 @@ export interface YieldOpportunity {
   min_deposit: number | null;
   lock_period_days: number;
   risk_tier: string | null;
+  protocol_name: string | null;
   is_active: boolean;
+  max_leverage: number | null;
+  utilization_pct: number | null;
+  liquidity_available_usd: number | null;
+  is_automated: boolean | null;
+  depeg: number | null;
+  protocol_url: string | null;
   updated_at: string | null;
+}
+
+export interface YieldOpportunityDetail extends YieldOpportunity {
+  extra_data: Record<string, unknown> | null;
+  deposit_address: string | null;
+  protocol: Protocol | null;
+  recent_snapshots: YieldHistoryPoint[];
 }
 
 export interface YieldHistoryPoint {
@@ -50,6 +64,50 @@ export interface Portfolio {
   total_value_usd: number;
 }
 
+export interface UserPositionOut {
+  id: number;
+  wallet_address: string;
+  protocol_slug: string;
+  product_type: string;
+  external_id: string;
+  opportunity_id: number | null;
+  deposit_amount: number | null;
+  deposit_amount_usd: number | null;
+  pnl_usd: number | null;
+  pnl_pct: number | null;
+  initial_deposit_usd: number | null;
+  opened_at: string | null;
+  held_days: number | null;
+  apy: number | null;
+  is_closed: boolean | null;
+  closed_at: string | null;
+  close_value_usd: number | null;
+  token_symbol: string | null;
+  extra_data: Record<string, unknown> | null;
+  snapshot_at: string;
+}
+
+export interface UserPositionHistoryPoint {
+  snapshot_at: string;
+  deposit_amount_usd: number | null;
+  pnl_usd: number | null;
+  pnl_pct: number | null;
+}
+
+export interface UserPositionEventOut {
+  id: number;
+  wallet_address: string;
+  protocol_slug: string;
+  product_type: string;
+  external_id: string;
+  event_type: string;
+  amount: number | null;
+  amount_usd: number | null;
+  tx_signature: string | null;
+  event_at: string;
+  extra_data: Record<string, unknown> | null;
+}
+
 async function apiFetch<T>(path: string): Promise<T> {
   const res = await fetch(`${API_URL}${path}`);
   if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
@@ -57,7 +115,7 @@ async function apiFetch<T>(path: string): Promise<T> {
 }
 
 export const api = {
-  getYields: (params?: { category?: string; sort?: string; tokens?: string }) => {
+  getYields: (params?: { category?: string; sort?: string; tokens?: string; stablecoins_only?: boolean }) => {
     const qs = new URLSearchParams(
       Object.fromEntries(
         Object.entries(params ?? {}).filter(([, v]) => v != null) as [string, string][]
@@ -67,6 +125,9 @@ export const api = {
       `/api/yields${qs ? `?${qs}` : ""}`
     );
   },
+
+  getYieldDetail: (id: number) =>
+    apiFetch<YieldOpportunityDetail>(`/api/yields/${id}`),
 
   getYieldHistory: (id: number, period: string = "7d") =>
     apiFetch<{ data: YieldHistoryPoint[] }>(`/api/yields/${id}/history?period=${period}`),
@@ -79,4 +140,26 @@ export const api = {
 
   getHealth: () =>
     apiFetch<{ status: string }>("/api/health"),
+
+  trackWallet: (wallet: string) =>
+    fetch(`${API_URL}/api/portfolio/${wallet}/track`, { method: "POST" })
+      .then(r => r.json()).catch(() => {}),
+
+  getPositions: (wallet: string, params?: { protocol?: string; product_type?: string }) => {
+    const qs = new URLSearchParams(
+      Object.fromEntries(Object.entries(params ?? {}).filter(([, v]) => v != null) as [string, string][])
+    ).toString();
+    return apiFetch<UserPositionOut[]>(`/api/portfolio/${wallet}/positions${qs ? `?${qs}` : ""}`);
+  },
+
+  getPositionHistory: (wallet: string, period: "7d" | "30d" | "90d" = "7d") =>
+    apiFetch<UserPositionHistoryPoint[]>(`/api/portfolio/${wallet}/positions/history?period=${period}`),
+
+  getWalletStatus: (wallet: string) =>
+    apiFetch<{ fetch_status: string; last_fetched_at: string | null }>(
+      `/api/portfolio/${wallet}/status`
+    ),
+
+  getPositionEvents: (wallet: string) =>
+    apiFetch<UserPositionEventOut[]>(`/api/portfolio/${wallet}/events`),
 };
