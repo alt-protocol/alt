@@ -82,8 +82,10 @@ def get_yields(
     elif sort == SortOrder.TVL_ASC:
         q = q.order_by(YieldOpportunity.tvl_usd.asc().nullsfirst())
 
-    total = q.count()
-    results = q.offset(offset).limit(limit).all()
+    count_col = func.count().over().label("_total")
+    rows = q.add_columns(count_col).offset(offset).limit(limit).all()
+    total = rows[0][1] if rows else 0
+    results = [row[0] for row in rows]
     last_updated = max((r.updated_at for r in results if r.updated_at), default=None)
 
     items = []

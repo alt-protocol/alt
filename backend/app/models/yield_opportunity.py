@@ -39,6 +39,11 @@ class YieldOpportunity(Base):
     __table_args__ = (
         Index("ix_yield_opportunities_protocol_id", "protocol_id"),
         UniqueConstraint("protocol_id", "external_id", name="uq_yield_opportunities_protocol_external"),
+        Index("ix_yield_opp_active_apy", "is_active", "apy_current"),
+        Index("ix_yield_opp_active_tvl", "is_active", "tvl_usd"),
+        Index("ix_yield_opp_category", "category"),
+        Index("ix_yield_opp_tokens", "tokens", postgresql_using="gin"),
+        Index("ix_yield_opp_extra_data", "extra_data", postgresql_using="gin"),
     )
 
 

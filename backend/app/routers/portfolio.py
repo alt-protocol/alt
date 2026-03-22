@@ -9,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from solders.pubkey import Pubkey
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, text
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db
@@ -398,17 +398,20 @@ def get_position_history(
     days = {"7d": 7, "30d": 30, "90d": 90}[period]
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-    query = db.query(UserPosition).filter(
-        UserPosition.wallet_address == wallet_address,
-        UserPosition.snapshot_at >= cutoff,
-    )
+    # Per-position history (single position, low row count)
     if external_id:
-        query = query.filter(UserPosition.external_id == external_id)
-
-    rows = query.order_by(UserPosition.snapshot_at).offset(offset).limit(limit).all()
-
-    # Group by snapshot_at for aggregate view, or return per-position if external_id given
-    if external_id:
+        rows = (
+            db.query(UserPosition)
+            .filter(
+                UserPosition.wallet_address == wallet_address,
+                UserPosition.snapshot_at >= cutoff,
+                UserPosition.external_id == external_id,
+            )
+            .order_by(UserPosition.snapshot_at)
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
         return [
             UserPositionHistoryPoint(
                 snapshot_at=r.snapshot_at,
@@ -419,28 +422,48 @@ def get_position_history(
             for r in rows
         ]
 
-    # Aggregate all positions sharing the same snapshot_at timestamp.
-    # All protocols now write with the same timestamp per snapshot cycle.
-    from collections import defaultdict
+    # Aggregate view — bucket by time interval to keep chart data small
+    bucket_interval = {"7d": "1 hour", "30d": "4 hours", "90d": "12 hours"}[period]
 
-    snapshots: dict[datetime, dict] = defaultdict(lambda: {
-        "deposit_amount_usd": 0.0, "pnl_usd": 0.0,
-    })
-    for r in rows:
-        key = r.snapshot_at
-        if r.deposit_amount_usd:
-            snapshots[key]["deposit_amount_usd"] += float(r.deposit_amount_usd)
-        if r.pnl_usd:
-            snapshots[key]["pnl_usd"] += float(r.pnl_usd)
+    # Step 1: sum all positions per snapshot timestamp
+    per_snapshot = (
+        db.query(
+            UserPosition.snapshot_at,
+            func.sum(UserPosition.deposit_amount_usd).label("total_usd"),
+            func.sum(UserPosition.pnl_usd).label("total_pnl"),
+        )
+        .filter(
+            UserPosition.wallet_address == wallet_address,
+            UserPosition.snapshot_at >= cutoff,
+        )
+        .group_by(UserPosition.snapshot_at)
+        .subquery()
+    )
+
+    # Step 2: pick the latest snapshot per time bucket via DISTINCT ON
+    bucket_expr = func.date_bin(
+        text(f"'{bucket_interval}'"), per_snapshot.c.snapshot_at, cutoff,
+    )
+
+    rows = (
+        db.query(
+            bucket_expr.label("bucket"),
+            per_snapshot.c.total_usd.label("deposit_amount_usd"),
+            per_snapshot.c.total_pnl.label("pnl_usd"),
+        )
+        .distinct(bucket_expr)
+        .order_by(bucket_expr, per_snapshot.c.snapshot_at.desc())
+        .all()
+    )
 
     return [
         UserPositionHistoryPoint(
-            snapshot_at=ts,
-            deposit_amount_usd=vals["deposit_amount_usd"],
-            pnl_usd=vals["pnl_usd"],
+            snapshot_at=row.bucket,
+            deposit_amount_usd=float(row.deposit_amount_usd) if row.deposit_amount_usd else 0.0,
+            pnl_usd=float(row.pnl_usd) if row.pnl_usd else 0.0,
             pnl_pct=None,
         )
-        for ts, vals in sorted(snapshots.items())
+        for row in rows
     ]
 
 

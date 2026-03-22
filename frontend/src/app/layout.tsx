@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Space_Grotesk, Manrope, Orbitron } from "next/font/google";
 import QueryProvider from "@/components/QueryProvider";
-import SolanaProviders from "@/components/SolanaProviders";
 import "./globals.css";
 
 const spaceGrotesk = Space_Grotesk({
@@ -34,9 +33,7 @@ export default function RootLayout({
       <body
         className={`${spaceGrotesk.variable} ${manrope.variable} ${orbitron.variable} antialiased`}
       >
-        <QueryProvider>
-          <SolanaProviders>{children}</SolanaProviders>
-        </QueryProvider>
+        <QueryProvider>{children}</QueryProvider>
       </body>
     </html>
   );

@@ -16,17 +16,29 @@ interface DropdownProps {
 
 export default function Dropdown({ value, options, onChange, placeholder = "Select" }: DropdownProps) {
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const selectedLabel = options.find((o) => o.value === value)?.label ?? placeholder;
+
+  const filtered = search
+    ? options.filter(
+        (o) => o.value !== "" && o.label.toLowerCase().includes(search.toLowerCase())
+      )
+    : options;
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) {
         setOpen(false);
+        setSearch("");
       }
     }
-    if (open) document.addEventListener("mousedown", handleClick);
+    if (open) {
+      document.addEventListener("mousedown", handleClick);
+      setTimeout(() => inputRef.current?.focus(), 0);
+    }
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open]);
 
@@ -35,7 +47,11 @@ export default function Dropdown({ value, options, onChange, placeholder = "Sele
       {/* Trigger */}
       <button
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          const next = !open;
+          setOpen(next);
+          if (!next) setSearch("");
+        }}
         className="w-full flex items-center justify-between gap-2 bg-surface text-foreground rounded-sm px-3 py-2 text-[0.8rem] font-sans outline-none hover:bg-surface-high transition-colors cursor-pointer text-left"
       >
         <span className={value ? "text-foreground" : "text-foreground-muted"}>{selectedLabel}</span>
@@ -57,26 +73,43 @@ export default function Dropdown({ value, options, onChange, placeholder = "Sele
       {/* Dropdown menu */}
       {open && (
         <div
-          className="absolute left-0 right-0 top-full mt-1 bg-surface rounded-sm z-50 max-h-[240px] overflow-y-auto"
+          className="absolute left-0 right-0 top-full mt-1 bg-surface rounded-sm z-50"
           style={{ boxShadow: "0 10px 40px rgba(0,0,0,0.5)" }}
         >
-          {options.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => { onChange(opt.value); setOpen(false); }}
-              className={`w-full flex items-center justify-between px-3 py-2.5 text-[0.8rem] font-sans text-left transition-colors hover:bg-surface-high ${
-                opt.value === value ? "text-foreground" : "text-foreground-muted"
-              }`}
-            >
-              <span>{opt.label}</span>
-              {opt.value === value && (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-neon shrink-0">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              )}
-            </button>
-          ))}
+          <div className="px-3 py-2">
+            <input
+              ref={inputRef}
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search…"
+              className="w-full bg-surface text-foreground text-[0.8rem] font-sans outline-none border-b-2 border-transparent focus:border-neon pb-1 placeholder:text-foreground-muted"
+            />
+          </div>
+          <div className="max-h-[200px] overflow-y-auto">
+            {filtered.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => { onChange(opt.value); setOpen(false); setSearch(""); }}
+                className={`w-full flex items-center justify-between px-3 py-2.5 text-[0.8rem] font-sans text-left transition-colors hover:bg-surface-high ${
+                  opt.value === value ? "text-foreground" : "text-foreground-muted"
+                }`}
+              >
+                <span>{opt.label}</span>
+                {opt.value === value && (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-neon shrink-0">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+              </button>
+            ))}
+            {filtered.length === 0 && (
+              <div className="px-3 py-2.5 text-[0.8rem] font-sans text-foreground-muted">
+                No results
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

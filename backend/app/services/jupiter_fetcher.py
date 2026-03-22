@@ -7,7 +7,7 @@ Two data sources:
 import logging
 import math
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -19,6 +19,7 @@ from app.models.protocol import Protocol
 from app.config.stablecoins import compute_depeg
 from app.models.yield_opportunity import YieldOpportunity, YieldSnapshot
 from app.services.kamino_fetcher import _classify_multiply_pair as classify_multiply_pair
+from app.services.kamino_fetcher import _batch_snapshot_avg
 
 logger = logging.getLogger(__name__)
 
@@ -53,34 +54,6 @@ def _float(val) -> Optional[float]:
         return None
 
 
-def _snapshot_avg(db: Session, opp_id: int, days: int) -> Optional[float]:
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    # Only compute if we have at least one snapshot older than the window start.
-    # Check is done in SQL to avoid comparing naive vs tz-aware datetimes in Python.
-    has_old_enough = (
-        db.query(YieldSnapshot.id)
-        .filter(
-            YieldSnapshot.opportunity_id == opp_id,
-            YieldSnapshot.snapshot_at <= since,
-        )
-        .first()
-    )
-    if has_old_enough is None:
-        return None
-    rows = (
-        db.query(YieldSnapshot.apy)
-        .filter(
-            YieldSnapshot.opportunity_id == opp_id,
-            YieldSnapshot.snapshot_at >= since,
-            YieldSnapshot.apy.isnot(None),
-        )
-        .all()
-    )
-    if len(rows) < 2:
-        return None
-    return float(sum(r.apy for r in rows) / len(rows))
-
-
 def _upsert_opportunity(
     db: Session,
     protocol: Protocol,
@@ -99,6 +72,8 @@ def _upsert_opportunity(
     liquidity_available_usd: Optional[float] = None,
     is_automated: Optional[bool] = None,
     depeg: Optional[float] = None,
+    apy_7d_avg: Optional[float] = None,
+    apy_30d_avg: Optional[float] = None,
 ) -> YieldOpportunity:
     opp = db.query(YieldOpportunity).filter(YieldOpportunity.external_id == external_id).first()
 
@@ -147,8 +122,8 @@ def _upsert_opportunity(
         source="jupiter_api",
     )
     db.add(snapshot)
-    opp.apy_7d_avg = _snapshot_avg(db, opp.id, 7)
-    opp.apy_30d_avg = _snapshot_avg(db, opp.id, 30)
+    opp.apy_7d_avg = apy_7d_avg
+    opp.apy_30d_avg = apy_30d_avg
     return opp
 
 
@@ -174,6 +149,7 @@ def fetch_earn_tokens(
 
     count = 0
     upserted_ids: set[str] = set()
+    avgs = _batch_snapshot_avg(db, protocol.id, "lending")
 
     for token in data:
         asset = token.get("asset", {})
@@ -203,6 +179,7 @@ def fetch_earn_tokens(
         supply_rate = _float(token.get("supplyRate"))
         rewards_rate = _float(token.get("rewardsRate"))
 
+        opp_avgs = avgs.get(external_id, {})
         _upsert_opportunity(
             db=db,
             protocol=protocol,
@@ -225,6 +202,8 @@ def fetch_earn_tokens(
             now=now,
             is_automated=True,
             depeg=compute_depeg(symbol, price),
+            apy_7d_avg=opp_avgs.get("7d"),
+            apy_30d_avg=opp_avgs.get("30d"),
         )
         upserted_ids.add(external_id)
         count += 1
@@ -272,6 +251,7 @@ def fetch_multiply_vaults(
 
     count = 0
     upserted_ids: set[str] = set()
+    avgs = _batch_snapshot_avg(db, protocol.id, "multiply")
 
     for vault in data:
         # Only multiply-enabled vaults
@@ -345,6 +325,7 @@ def fetch_multiply_vaults(
 
         vault_tag = classify_multiply_pair(supply_symbol, borrow_symbol)
 
+        opp_avgs = avgs.get(external_id, {})
         _upsert_opportunity(
             db=db,
             protocol=protocol,
@@ -381,6 +362,8 @@ def fetch_multiply_vaults(
             liquidity_available_usd=round(liquidity_usd, 2) if liquidity_usd is not None else None,
             is_automated=True,
             depeg=multiply_depeg,
+            apy_7d_avg=opp_avgs.get("7d"),
+            apy_30d_avg=opp_avgs.get("30d"),
         )
         upserted_ids.add(external_id)
         count += 1

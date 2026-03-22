@@ -4,7 +4,11 @@ import { useQuery } from "@tanstack/react-query";
 import { createSolanaRpc, address } from "@solana/kit";
 import { HELIUS_RPC_URL, TOKEN_MINTS } from "../constants";
 
-const rpc = createSolanaRpc(HELIUS_RPC_URL);
+let _rpc: ReturnType<typeof createSolanaRpc> | null = null;
+function getRpc() {
+  if (!_rpc) _rpc = createSolanaRpc(HELIUS_RPC_URL);
+  return _rpc;
+}
 
 const TOKEN_DECIMALS: Record<string, number> = {
   SOL: 9,
@@ -23,14 +27,14 @@ async function fetchBalance(walletAddress: string, tokenSymbol: string): Promise
   const mint = getMintForSymbol(tokenSymbol);
 
   if (tokenSymbol === "SOL") {
-    const result = await rpc.getBalance(address(walletAddress)).send();
+    const result = await getRpc().getBalance(address(walletAddress)).send();
     const decimals = TOKEN_DECIMALS.SOL ?? 9;
     return Number(result.value) / 10 ** decimals;
   }
 
   if (!mint) return 0;
 
-  const result = await rpc
+  const result = await getRpc()
     .getTokenAccountsByOwner(
       address(walletAddress),
       { mint: address(mint) },

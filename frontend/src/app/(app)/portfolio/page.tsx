@@ -2,18 +2,13 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useState, useMemo, useEffect, useRef } from "react";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
+import dynamic from "next/dynamic";
 import { useSelectedWalletAccount } from "@solana/react";
 import { api, UserPositionOut, UserPositionEventOut } from "@/lib/api";
 import { ProtocolChip } from "@/components/ProtocolChip";
 import WalletButton from "@/components/WalletButton";
+
+const PortfolioChart = dynamic(() => import("@/components/PortfolioChart"), { ssr: false });
 
 // Utility functions
 function fmtUsd(n: number | null | undefined): string {
@@ -325,36 +320,7 @@ function ChartCard({ chartData, period, onPeriod, isSuccess }: ChartCardProps) {
           <p className="uppercase text-[0.65rem] tracking-[0.05em] text-foreground-muted font-sans">No history data</p>
         </div>
       ) : (
-        <ResponsiveContainer width="100%" height={180}>
-          <LineChart data={chartData} margin={{ top: 8, right: 20, bottom: 8, left: 0 }}>
-            <XAxis
-              dataKey="date"
-              tick={{ fontSize: 10, fill: "#a1a1a1" }}
-              axisLine={false}
-              tickLine={false}
-            />
-            <YAxis
-              tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`}
-              tick={{ fontSize: 10, fill: "#a1a1a1" }}
-              axisLine={false}
-              tickLine={false}
-              width={48}
-            />
-            <Tooltip
-              contentStyle={{ background: "#1c1b1b", border: "none", borderRadius: 2, fontSize: 12 }}
-              labelStyle={{ color: "#a1a1a1" }}
-              formatter={(value) => [fmtUsd(value as number), "Value"]}
-            />
-            <Line
-              type="monotone"
-              dataKey="value"
-              stroke="#d9f99d"
-              strokeWidth={1.5}
-              dot={false}
-              activeDot={{ r: 3, fill: "#d9f99d" }}
-            />
-          </LineChart>
-        </ResponsiveContainer>
+        <PortfolioChart data={chartData} />
       )}
     </div>
   );

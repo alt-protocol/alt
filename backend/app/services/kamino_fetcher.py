@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
+from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -127,6 +128,54 @@ def _max_leverage_from_ltv(ltv: Optional[float]) -> Optional[float]:
     if ltv is None or ltv <= 0 or ltv >= 1:
         return None
     return round(1.0 / (1.0 - ltv), 1)
+
+
+def _batch_snapshot_avg(
+    db: Session, protocol_id: int, category: str,
+) -> dict[str, dict[str, Optional[float]]]:
+    """Compute 7d and 30d APY averages from snapshots for all opportunities in a category.
+
+    Returns {external_id: {"7d": float|None, "30d": float|None}}.
+    Only returns an average when snapshots cover at least half the window
+    (i.e. the oldest snapshot is at least days/2 old).
+    """
+    now = datetime.now(timezone.utc)
+    result: dict[str, dict[str, Optional[float]]] = {}
+
+    for days, key in [(7, "7d"), (30, "30d")]:
+        since = now - timedelta(days=days)
+        half_window = now - timedelta(days=days // 2)
+        # Subquery: opportunity IDs that have at least one snapshot older than half the window
+        has_enough = (
+            db.query(YieldSnapshot.opportunity_id)
+            .join(YieldOpportunity, YieldOpportunity.id == YieldSnapshot.opportunity_id)
+            .filter(
+                YieldOpportunity.protocol_id == protocol_id,
+                YieldOpportunity.category == category,
+                YieldSnapshot.snapshot_at <= half_window,
+            )
+            .distinct()
+            .subquery()
+        )
+        rows = (
+            db.query(
+                YieldOpportunity.external_id,
+                sa_func.avg(YieldSnapshot.apy).label("avg_apy"),
+            )
+            .join(YieldSnapshot, YieldSnapshot.opportunity_id == YieldOpportunity.id)
+            .filter(
+                YieldOpportunity.id.in_(db.query(has_enough.c.opportunity_id)),
+                YieldSnapshot.snapshot_at >= since,
+                YieldSnapshot.apy.isnot(None),
+            )
+            .group_by(YieldOpportunity.external_id)
+            .all()
+        )
+        for ext_id, avg_apy in rows:
+            result.setdefault(ext_id, {})
+            result[ext_id][key] = float(avg_apy) if avg_apy is not None else None
+
+    return result
 
 
 def _upsert_opportunity(
@@ -306,6 +355,8 @@ def fetch_lending_reserves(
     primary_markets = [m for m in markets_raw if m.get("isPrimary")]
     logger.info("Kamino lending: %d primary markets", len(primary_markets))
 
+    avg_map = _batch_snapshot_avg(db, protocol.id, "lending")
+
     count = 0
     for market in primary_markets:
         market_pubkey = market["lendingMarket"]
@@ -333,6 +384,7 @@ def fetch_lending_reserves(
 
             reserve_pubkey = reserve.get("reserve", "")
             external_id = f"klend-{market_pubkey[:8]}-{reserve_pubkey[:8]}"
+            avgs = avg_map.get(external_id, {})
 
             _upsert_opportunity(
                 db=db,
@@ -342,8 +394,8 @@ def fetch_lending_reserves(
                 category="lending",
                 tokens=[symbol],
                 apy_current=supply_apy,
-                apy_7d_avg=None,
-                apy_30d_avg=None,
+                apy_7d_avg=avgs.get("7d"),
+                apy_30d_avg=avgs.get("30d"),
                 tvl_usd=tvl,
                 deposit_address=reserve_pubkey,
                 risk_tier="low",
@@ -786,7 +838,7 @@ def fetch_multiply_markets(
                 "type": "multiply",
             }
 
-            _upsert_opportunity(
+            opp = _upsert_opportunity(
                 db=db,
                 protocol=protocol,
                 external_id=external_id,
@@ -802,6 +854,7 @@ def fetch_multiply_markets(
                 extra=extra,
                 now=now,
             )
+            opp.liquidity_available_usd = liq_available_usd
             upserted_ids.add(external_id)
             count += 1
             logger.info(

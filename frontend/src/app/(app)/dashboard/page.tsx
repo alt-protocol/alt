@@ -1,8 +1,8 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useState, useMemo, useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useMemo, useRef, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api, YieldOpportunity } from "@/lib/api";
 import Dropdown from "@/components/Dropdown";
 
@@ -29,6 +29,7 @@ type SortDir = "asc" | "desc";
 interface Filters {
   protocol: string;
   category: string;
+  token: string;
   apyMin: string;
   apyMax: string;
   apy30dMin: string;
@@ -37,15 +38,51 @@ interface Filters {
   tvlMax: string;
 }
 
-const EMPTY_FILTERS: Filters = { protocol: "", category: "", apyMin: "", apyMax: "", apy30dMin: "", apy30dMax: "", tvlMin: "", tvlMax: "" };
+const EMPTY_FILTERS: Filters = { protocol: "", category: "", token: "", apyMin: "", apyMax: "", apy30dMin: "", apy30dMax: "", tvlMin: "", tvlMax: "" };
 const CATEGORIES = ["", "lending", "multiply", "insurance_fund", "vault"];
+const QUICK_TOKENS = ["USDC"];
 
 export default function Dashboard() {
+  return (
+    <Suspense fallback={<div className="max-w-[1200px] mx-auto px-4 sm:px-8 lg:px-[3.5rem] py-[2.25rem]" />}>
+      <DashboardContent />
+    </Suspense>
+  );
+}
+
+function DashboardContent() {
   const router = useRouter();
-  const [sortField, setSortField] = useState<SortField>("apy");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
-  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
-  const [draftFilters, setDraftFilters] = useState<Filters>(EMPTY_FILTERS);
+  const searchParams = useSearchParams();
+
+  const initialFilters = useMemo<Filters>(() => ({
+    protocol: searchParams.get("protocol") ?? "",
+    category: searchParams.get("category") ?? "",
+    token: searchParams.get("token") ?? "",
+    apyMin: searchParams.get("apyMin") ?? "",
+    apyMax: searchParams.get("apyMax") ?? "",
+    apy30dMin: searchParams.get("apy30dMin") ?? "",
+    apy30dMax: searchParams.get("apy30dMax") ?? "",
+    tvlMin: searchParams.get("tvlMin") ?? "",
+    tvlMax: searchParams.get("tvlMax") ?? "",
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), []);
+
+  const initialSortField = useMemo<SortField>(() => {
+    const s = searchParams.get("sort");
+    return s === "tvl" || s === "apy30d" ? s : "apy";
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const initialSortDir = useMemo<SortDir>(() => {
+    const d = searchParams.get("dir");
+    return d === "asc" ? "asc" : "desc";
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const [sortField, setSortField] = useState<SortField>(initialSortField);
+  const [sortDir, setSortDir] = useState<SortDir>(initialSortDir);
+  const [filters, setFilters] = useState<Filters>(initialFilters);
+  const [draftFilters, setDraftFilters] = useState<Filters>(initialFilters);
   const [filterOpen, setFilterOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -67,6 +104,7 @@ export default function Dashboard() {
   const yields = useMemo(() => {
     let result = allYields;
     if (filters.protocol) result = result.filter((y) => y.protocol_name === filters.protocol);
+    if (filters.token) result = result.filter((y) => y.tokens.includes(filters.token));
     const apyMin = filters.apyMin ? parseFloat(filters.apyMin) : null;
     const apyMax = filters.apyMax ? parseFloat(filters.apyMax) : null;
     const apy30dMin = filters.apy30dMin ? parseFloat(filters.apy30dMin) : null;
@@ -95,6 +133,11 @@ export default function Dashboard() {
     return Array.from(names).sort() as string[];
   }, [allYields]);
 
+  const allTokens = useMemo(() => {
+    const tokens = new Set(allYields.flatMap((y) => y.tokens).filter(Boolean));
+    return Array.from(tokens).sort();
+  }, [allYields]);
+
   // Close filter panel on click outside
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -106,12 +149,29 @@ export default function Dashboard() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [filterOpen]);
 
+  function updateFilters(f: Filters) {
+    setFilters(f);
+    syncToUrl(f, sortField, sortDir);
+  }
+
+  function syncToUrl(f: Filters, sf: SortField, sd: SortDir) {
+    const params = new URLSearchParams();
+    Object.entries(f).forEach(([k, v]) => { if (v) params.set(k, v); });
+    if (sf !== "apy") params.set("sort", sf);
+    if (sd !== "desc") params.set("dir", sd);
+    const qs = params.toString();
+    router.replace(qs ? `?${qs}` : "/dashboard", { scroll: false });
+  }
+
   function toggleSort(field: SortField) {
     if (sortField === field) {
-      setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+      const newDir = sortDir === "desc" ? "asc" : "desc";
+      setSortDir(newDir);
+      syncToUrl(filters, field, newDir);
     } else {
       setSortField(field);
       setSortDir("desc");
+      syncToUrl(filters, field, "desc");
     }
   }
 
@@ -124,17 +184,20 @@ export default function Dashboard() {
   function applyFilters() {
     setFilters(draftFilters);
     setFilterOpen(false);
+    syncToUrl(draftFilters, sortField, sortDir);
   }
 
   function resetFilters() {
     setDraftFilters(EMPTY_FILTERS);
     setFilters(EMPTY_FILTERS);
     setFilterOpen(false);
+    syncToUrl(EMPTY_FILTERS, sortField, sortDir);
   }
 
-  const activeFilterCount = [filters.protocol, filters.category, filters.apyMin, filters.apyMax, filters.apy30dMin, filters.apy30dMax, filters.tvlMin, filters.tvlMax].filter(Boolean).length;
+  const activeFilterCount = [filters.protocol, filters.category, filters.token, filters.apyMin, filters.apyMax, filters.apy30dMin, filters.apy30dMax, filters.tvlMin, filters.tvlMax].filter(Boolean).length;
 
   const protocolOptions = [{ value: "", label: "All Protocols" }, ...sources.map((s) => ({ value: s, label: s }))];
+  const tokenOptions = [{ value: "", label: "All Tokens" }, ...allTokens.map((t) => ({ value: t, label: t }))];
   const categoryOptions = [{ value: "", label: "All Categories" }, ...CATEGORIES.filter(Boolean).map((c) => ({ value: c, label: fmtCategory(c) }))];
 
   const inputClass = "w-full bg-surface text-foreground rounded-sm px-3 py-2 text-[0.8rem] font-sans outline-none focus:bg-surface-high transition-colors placeholder:text-foreground-muted";
@@ -176,7 +239,22 @@ export default function Dashboard() {
       {/* Yield Marketplace */}
       <div className="bg-surface-low rounded-sm overflow-hidden">
         <div className="px-5 py-3 flex items-center justify-between gap-3">
-          <h2 className="font-display text-sm uppercase tracking-[0.03em] shrink-0">Yield Marketplace</h2>
+          <div className="flex items-center gap-5">
+            <h2 className="font-display text-sm uppercase tracking-[0.03em] shrink-0">Yield Marketplace</h2>
+            {QUICK_TOKENS.map((t) => (
+              <button
+                key={t}
+                onClick={() => updateFilters({ ...filters, token: filters.token === t ? "" : t })}
+                className={`text-[0.7rem] font-sans rounded-sm px-3 py-1 transition-colors ${
+                  filters.token === t
+                    ? "bg-white text-[#243600] font-semibold"
+                    : "border border-outline-ghost text-foreground-muted hover:text-foreground hover:border-foreground-muted"
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
 
           {/* Filter chips + filter button — right side */}
           <div className="flex items-center gap-2 flex-wrap justify-end">
@@ -184,36 +262,42 @@ export default function Dashboard() {
             {filters.protocol && (
               <span className="flex items-center gap-1.5 bg-surface-high text-foreground text-[0.7rem] font-sans rounded-sm px-2.5 py-1 hover:bg-secondary hover:text-secondary-text transition-colors cursor-default">
                 {filters.protocol}
-                <button onClick={() => setFilters({ ...filters, protocol: "" })} className="text-foreground-muted hover:text-foreground transition-colors leading-none">&times;</button>
+                <button onClick={() => updateFilters({ ...filters, protocol: "" })} className="text-foreground-muted hover:text-foreground transition-colors leading-none">&times;</button>
+              </span>
+            )}
+            {filters.token && (
+              <span className="flex items-center gap-1.5 bg-surface-high text-foreground text-[0.7rem] font-sans rounded-sm px-2.5 py-1 hover:bg-secondary hover:text-secondary-text transition-colors cursor-default">
+                {filters.token}
+                <button onClick={() => updateFilters({ ...filters, token: "" })} className="text-foreground-muted hover:text-foreground transition-colors leading-none">&times;</button>
               </span>
             )}
             {filters.category && (
               <span className="flex items-center gap-1.5 bg-surface-high text-foreground text-[0.7rem] font-sans rounded-sm px-2.5 py-1 hover:bg-secondary hover:text-secondary-text transition-colors cursor-default">
                 {fmtCategory(filters.category)}
-                <button onClick={() => setFilters({ ...filters, category: "" })} className="text-foreground-muted hover:text-foreground transition-colors leading-none">&times;</button>
+                <button onClick={() => updateFilters({ ...filters, category: "" })} className="text-foreground-muted hover:text-foreground transition-colors leading-none">&times;</button>
               </span>
             )}
             {(filters.apyMin || filters.apyMax) && (
               <span className="flex items-center gap-1.5 bg-surface-high text-foreground text-[0.7rem] font-sans rounded-sm px-2.5 py-1 hover:bg-secondary hover:text-secondary-text transition-colors cursor-default">
                 APR: {filters.apyMin || "0"}% – {filters.apyMax || "\u221e"}%
-                <button onClick={() => setFilters({ ...filters, apyMin: "", apyMax: "" })} className="text-foreground-muted hover:text-foreground transition-colors leading-none">&times;</button>
+                <button onClick={() => updateFilters({ ...filters, apyMin: "", apyMax: "" })} className="text-foreground-muted hover:text-foreground transition-colors leading-none">&times;</button>
               </span>
             )}
             {(filters.apy30dMin || filters.apy30dMax) && (
               <span className="flex items-center gap-1.5 bg-surface-high text-foreground text-[0.7rem] font-sans rounded-sm px-2.5 py-1 hover:bg-secondary hover:text-secondary-text transition-colors cursor-default">
                 30D APR: {filters.apy30dMin || "0"}% – {filters.apy30dMax || "\u221e"}%
-                <button onClick={() => setFilters({ ...filters, apy30dMin: "", apy30dMax: "" })} className="text-foreground-muted hover:text-foreground transition-colors leading-none">&times;</button>
+                <button onClick={() => updateFilters({ ...filters, apy30dMin: "", apy30dMax: "" })} className="text-foreground-muted hover:text-foreground transition-colors leading-none">&times;</button>
               </span>
             )}
             {(filters.tvlMin || filters.tvlMax) && (
               <span className="flex items-center gap-1.5 bg-surface-high text-foreground text-[0.7rem] font-sans rounded-sm px-2.5 py-1 hover:bg-secondary hover:text-secondary-text transition-colors cursor-default">
                 TVL: ${filters.tvlMin || "0"} – ${filters.tvlMax || "\u221e"}
-                <button onClick={() => setFilters({ ...filters, tvlMin: "", tvlMax: "" })} className="text-foreground-muted hover:text-foreground transition-colors leading-none">&times;</button>
+                <button onClick={() => updateFilters({ ...filters, tvlMin: "", tvlMax: "" })} className="text-foreground-muted hover:text-foreground transition-colors leading-none">&times;</button>
               </span>
             )}
             {activeFilterCount > 0 && (
               <button
-                onClick={() => setFilters(EMPTY_FILTERS)}
+                onClick={() => updateFilters(EMPTY_FILTERS)}
                 className="text-foreground-muted hover:text-foreground text-[0.7rem] font-sans transition-colors"
               >
                 Clear all
@@ -264,6 +348,17 @@ export default function Dashboard() {
                       options={protocolOptions}
                       onChange={(v) => setDraftFilters({ ...draftFilters, protocol: v })}
                       placeholder="All Protocols"
+                    />
+                  </div>
+
+                  {/* Token */}
+                  <div className="flex items-center justify-between gap-4">
+                    <label className="text-[0.8rem] text-foreground-muted font-sans shrink-0 w-24">Token</label>
+                    <Dropdown
+                      value={draftFilters.token}
+                      options={tokenOptions}
+                      onChange={(v) => setDraftFilters({ ...draftFilters, token: v })}
+                      placeholder="All Tokens"
                     />
                   </div>
 

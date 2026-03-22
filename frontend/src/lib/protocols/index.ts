@@ -1,6 +1,6 @@
 import type { ProtocolAdapter } from "./types";
 
-const SUPPORTED_ADAPTERS = new Set(["kamino"]);
+const SUPPORTED_ADAPTERS = new Set(["kamino", "jupiter", "drift"]);
 
 const adapterCache = new Map<string, ProtocolAdapter>();
 
@@ -15,6 +15,18 @@ export async function getAdapter(slug: string): Promise<ProtocolAdapter | undefi
     const { kaminoAdapter } = await import("./kamino");
     adapterCache.set(key, kaminoAdapter);
     return kaminoAdapter;
+  }
+
+  if (key === "jupiter") {
+    const { jupiterAdapter } = await import("./jupiter");
+    adapterCache.set(key, jupiterAdapter);
+    return jupiterAdapter;
+  }
+
+  if (key === "drift") {
+    const { driftAdapter } = await import("./drift");
+    adapterCache.set(key, driftAdapter);
+    return driftAdapter;
   }
 
   return undefined;

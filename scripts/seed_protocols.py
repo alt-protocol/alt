@@ -52,11 +52,11 @@ PROTOCOLS = [
     {
         "slug": "jupiter",
         "name": "Jupiter",
-        "description": "Leading DEX aggregator on Solana with stable AMM LP pools.",
+        "description": "Leading DEX aggregator on Solana with Earn (lending) and LP pools.",
         "website_url": "https://jup.ag",
         "audit_status": "audited",
         "auditors": ["OtterSec"],
-        "integration": "data_only",
+        "integration": "full",
     },
 ]
 
@@ -69,7 +69,17 @@ if __name__ == "__main__":
                 db.add(Protocol(**p))
                 print(f"  Added: {p['name']}")
             else:
-                print(f"  Skipped (exists): {p['name']}")
+                updated = False
+                for key, value in p.items():
+                    if key == "slug":
+                        continue
+                    if getattr(existing, key, None) != value:
+                        setattr(existing, key, value)
+                        updated = True
+                if updated:
+                    print(f"  Updated: {p['name']}")
+                else:
+                    print(f"  Skipped (up to date): {p['name']}")
         db.commit()
         print("Done.")
     finally:

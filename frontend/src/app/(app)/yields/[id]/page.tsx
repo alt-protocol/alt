@@ -4,18 +4,16 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
+import dynamic from "next/dynamic";
 import { api } from "@/lib/api";
+
+const ApyChart = dynamic(() => import("@/components/ApyChart"), { ssr: false });
 import { ProtocolChip } from "@/components/ProtocolChip";
 import { hasAdapter } from "@/lib/protocols";
-import DepositWithdrawPanel from "@/components/DepositWithdrawPanel";
+const DepositWithdrawPanel = dynamic(
+  () => import("@/components/DepositWithdrawPanel"),
+  { ssr: false }
+);
 
 function fmtApy(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -262,37 +260,7 @@ export default function YieldDetailPage() {
             )}
 
             {!historyQuery.isLoading && chartData.length > 0 && (
-              <ResponsiveContainer width="100%" height={200}>
-                <LineChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <XAxis
-                    dataKey="date"
-                    tick={{ fill: "var(--foreground-muted)", fontSize: 10, fontFamily: "var(--font-sans)" }}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                  <YAxis
-                    tickFormatter={(v) => `${v}%`}
-                    tick={{ fill: "var(--foreground-muted)", fontSize: 10, fontFamily: "var(--font-sans)" }}
-                    tickLine={false}
-                    axisLine={false}
-                    width={42}
-                  />
-                  <Tooltip
-                    formatter={(value) => [`${Number(value).toFixed(2)}%`, "APY"]}
-                    contentStyle={{ background: "#1c1b1b", border: "none", borderRadius: 2, fontSize: 11 }}
-                    labelStyle={{ color: "var(--foreground-muted)" }}
-                    itemStyle={{ color: "var(--neon-primary)" }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="apy"
-                    stroke="var(--neon-primary)"
-                    strokeWidth={1.5}
-                    dot={false}
-                    activeDot={{ r: 3, fill: "var(--neon-primary)" }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              <ApyChart data={chartData} />
             )}
           </div>
         </>

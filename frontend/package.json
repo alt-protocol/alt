@@ -9,12 +9,15 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@drift-labs/sdk": "^2.155.0",
+    "@jup-ag/lend": "^0.1.8",
     "@kamino-finance/klend-sdk": "^7.3.21",
     "@solana-program/address-lookup-table": "^0.11.0",
     "@solana-program/compute-budget": "^0.15.0",
     "@solana/kit": "^6.5.0",
     "@solana/react": "^6.5.0",
     "@tanstack/react-query": "^5.90.21",
+    "bn.js": "^5.2.3",
     "decimal.js": "^10.6.0",
     "next": "16.1.6",
     "react": "19.2.3",
@@ -23,6 +26,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/bn.js": "^5.2.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

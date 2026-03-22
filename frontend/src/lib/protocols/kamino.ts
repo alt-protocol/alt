@@ -21,6 +21,9 @@ async function loadSdk() {
     KaminoVault: sdk.KaminoVault,
     KaminoMarket: sdk.KaminoMarket,
     KaminoAction: sdk.KaminoAction,
+    VanillaObligation: sdk.VanillaObligation,
+    PROGRAM_ID: sdk.PROGRAM_ID,
+    BN: (await import("bn.js")).default,
     Decimal: decimalMod.default,
   };
 }
@@ -61,27 +64,31 @@ async function buildVaultWithdraw(params: BuildTxParams): Promise<Instruction[]>
 }
 
 async function buildLendingDeposit(params: BuildTxParams): Promise<Instruction[]> {
-  const { KaminoMarket, KaminoAction } = await loadSdk();
+  const { KaminoMarket, KaminoAction, VanillaObligation, PROGRAM_ID, BN } = await loadSdk();
   const marketAddress = params.extraData?.market as string | undefined;
   if (!marketAddress) throw new Error("Missing market address in extra_data");
 
   const tokenMint = params.extraData?.token_mint as string | undefined;
   if (!tokenMint) throw new Error("Missing token_mint in extra_data");
 
+  const decimals = params.extraData?.decimals != null ? Number(params.extraData.decimals) : 6;
+  const amountBase = new BN(Math.floor(parseFloat(params.amount) * 10 ** decimals));
+
   const market = await KaminoMarket.load(getRpc(), addr(marketAddress), 400);
   if (!market) throw new Error("Failed to load Kamino market");
 
   const action = await KaminoAction.buildDepositTxns(
     market,
-    params.amount,
+    amountBase,
     addr(tokenMint),
     params.signer as any,
-    { deposit: {} } as any,
+    new VanillaObligation(PROGRAM_ID),
     true,
     undefined,
   );
 
   return [
+    ...action.computeBudgetIxs,
     ...action.setupIxs,
     ...action.lendingIxs,
     ...action.cleanupIxs,
@@ -89,27 +96,31 @@ async function buildLendingDeposit(params: BuildTxParams): Promise<Instruction[]
 }
 
 async function buildLendingWithdraw(params: BuildTxParams): Promise<Instruction[]> {
-  const { KaminoMarket, KaminoAction } = await loadSdk();
+  const { KaminoMarket, KaminoAction, VanillaObligation, PROGRAM_ID, BN } = await loadSdk();
   const marketAddress = params.extraData?.market as string | undefined;
   if (!marketAddress) throw new Error("Missing market address in extra_data");
 
   const tokenMint = params.extraData?.token_mint as string | undefined;
   if (!tokenMint) throw new Error("Missing token_mint in extra_data");
 
+  const decimals = params.extraData?.decimals != null ? Number(params.extraData.decimals) : 6;
+  const amountBase = new BN(Math.floor(parseFloat(params.amount) * 10 ** decimals));
+
   const market = await KaminoMarket.load(getRpc(), addr(marketAddress), 400);
   if (!market) throw new Error("Failed to load Kamino market");
 
   const action = await KaminoAction.buildWithdrawTxns(
     market,
-    params.amount,
+    amountBase,
     addr(tokenMint),
     params.signer as any,
-    { deposit: {} } as any,
+    new VanillaObligation(PROGRAM_ID),
     true,
     undefined,
   );
 
   return [
+    ...action.computeBudgetIxs,
     ...action.setupIxs,
     ...action.lendingIxs,
     ...action.cleanupIxs,
