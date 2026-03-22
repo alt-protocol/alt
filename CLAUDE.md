@@ -6,25 +6,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Akashi** is a curated, non-custodial Solana yield aggregator. Users discover and deposit into yield opportunities across Kamino, Drift, and Exponent — the app never touches their funds. The backend only serves market data; all transactions are built client-side via protocol SDKs and signed by the user's wallet.
 
-## Commands
+## Development Setup
 
-### Frontend (`frontend/`)
+### 1. Start Postgres
 ```bash
-npm install
-npm run dev       # http://localhost:3000
-npm run build
-npm run lint
+docker compose up -d      # starts only Postgres (port 5432)
 ```
-Requires `frontend/.env.local` with a Helius RPC URL (copy from `.env.example`).
 
-### Backend (`backend/`)
+### 2. Backend (`backend/`, port 8000)
 ```bash
+cd backend
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-alembic upgrade head                    # run from backend/
-uvicorn app.main:app --reload           # http://localhost:8000
+alembic upgrade head
+uvicorn app.main:app --reload
 ```
-Requires `backend/.env` with `DATABASE_URL` and Helius API key (copy from `.env.example`).
+Requires `backend/.env` with `DATABASE_URL=postgresql://localhost/alt` and Helius API key.
+
+### 3. Frontend (`frontend/`, port 3000)
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Requires `frontend/.env.local` with Helius RPC URL.
 
 ### Alembic migrations (run from `backend/`)
 ```bash
@@ -33,10 +38,14 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-### Seed database
+### Seed database (run from repo root)
 ```bash
-python scripts/seed_protocols.py        # run from repo root
+python scripts/seed_protocols.py
 ```
+
+### Deployment
+- Dockerfiles in `backend/` and `frontend/` are used by Railway and Vercel for production builds
+- `docker-compose.yml` is for local development only (Postgres)
 
 ## Architecture
 

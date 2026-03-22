@@ -29,4 +29,8 @@ fi
 
 echo "BACKEND HEALTH CHECK FAILED: /api/health returned $HEALTH (expected 200)" >&2
 echo "The backend may have crashed after this edit. Check the uvicorn logs." >&2
+
+# Show Docker backend logs as fallback (in case full Docker stack is running)
+docker compose logs --tail=20 backend 2>/dev/null
+
 exit 2

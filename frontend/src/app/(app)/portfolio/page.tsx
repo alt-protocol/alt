@@ -764,7 +764,7 @@ export default function Portfolio() {
   const prevFetchStatus = useRef<string | undefined>(undefined);
   useEffect(() => {
     const status = statusQuery.data?.fetch_status;
-    if (prevFetchStatus.current === "fetching" && status === "ready") {
+    if (prevFetchStatus.current !== "ready" && status === "ready") {
       positionsQuery.refetch();
       historyQuery.refetch();
     }

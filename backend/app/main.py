@@ -18,6 +18,7 @@ load_dotenv()
 
 from app.dependencies import get_db  # noqa: E402
 from app.models.base import SessionLocal  # noqa: E402
+from app.models.protocol import Protocol  # noqa: E402
 from app.routers import yields, protocols, portfolio  # noqa: E402
 from app.services.kamino_fetcher import fetch_kamino_yields  # noqa: E402
 from app.services.drift_fetcher import fetch_drift_yields  # noqa: E402
@@ -62,6 +63,78 @@ def snapshot_all_positions_job():
 FETCHERS = YIELD_FETCHERS + [snapshot_all_positions_job]
 
 
+SEED_PROTOCOLS = [
+    {
+        "slug": "kamino",
+        "name": "Kamino",
+        "description": "Automated liquidity management and lending vaults on Solana.",
+        "website_url": "https://kamino.finance",
+        "audit_status": "audited",
+        "auditors": ["OtterSec", "Halborn"],
+        "integration": "full",
+    },
+    {
+        "slug": "drift",
+        "name": "Drift Protocol",
+        "description": "Decentralized perpetuals exchange with earn vaults on Solana.",
+        "website_url": "https://drift.trade",
+        "audit_status": "audited",
+        "auditors": ["OtterSec"],
+        "integration": "full",
+    },
+    {
+        "slug": "exponent",
+        "name": "Exponent Finance",
+        "description": "Fixed-yield tokenization protocol on Solana (Pendle-equivalent).",
+        "website_url": "https://exponent.finance",
+        "audit_status": "audited",
+        "auditors": [],
+        "integration": "full",
+    },
+    {
+        "slug": "solstice",
+        "name": "Solstice",
+        "description": "Delta-neutral yield strategies on Solana (USX/eUSX).",
+        "website_url": "https://solstice.finance",
+        "audit_status": "unaudited",
+        "auditors": [],
+        "integration": "data_only",
+    },
+    {
+        "slug": "jupiter",
+        "name": "Jupiter",
+        "description": "Leading DEX aggregator on Solana with Earn (lending) and LP pools.",
+        "website_url": "https://jup.ag",
+        "audit_status": "audited",
+        "auditors": ["OtterSec"],
+        "integration": "full",
+    },
+]
+
+
+def _seed_protocols():
+    """Insert protocol rows if missing. Idempotent — safe to run every startup."""
+    db = SessionLocal()
+    try:
+        added = 0
+        for p in SEED_PROTOCOLS:
+            existing = db.query(Protocol).filter(Protocol.slug == p["slug"]).first()
+            if not existing:
+                db.add(Protocol(**p))
+                added += 1
+                logger.info("Seeded protocol: %s", p["name"])
+        if added:
+            db.commit()
+            logger.info("Seeded %d protocol(s)", added)
+        else:
+            logger.info("All protocols already present — skipping seed")
+    except Exception as exc:
+        db.rollback()
+        logger.error("Protocol seeding failed: %s", exc)
+    finally:
+        db.close()
+
+
 def _run_initial_fetch():
     """Run all fetchers once on startup, in a background thread."""
     logger.info("Running initial yield fetch in background...")
@@ -75,6 +148,9 @@ def _run_initial_fetch():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Seed protocols before fetchers (they depend on protocol FK rows)
+    _seed_protocols()
+
     # Run initial fetch in background so the server starts accepting connections immediately
     init_thread = threading.Thread(target=_run_initial_fetch, daemon=True)
     init_thread.start()

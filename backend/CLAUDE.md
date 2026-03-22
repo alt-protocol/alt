@@ -4,6 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
+**Prerequisite:** Postgres must be running — `docker compose up -d` from repo root.
+
 ```bash
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
@@ -11,7 +13,7 @@ alembic upgrade head
 uvicorn app.main:app --reload          # http://localhost:8000
 ```
 
-Requires `backend/.env` with `DATABASE_URL`, `HELIUS_API_KEY`, and optionally `CORS_ORIGINS` (defaults to `http://localhost:3000`).
+Requires `backend/.env` with `DATABASE_URL=postgresql://localhost/alt`, `HELIUS_API_KEY`, and optionally `CORS_ORIGINS` (defaults to `http://localhost:3000`).
 
 ### Alembic migrations (run from `backend/`)
 ```bash

@@ -17,8 +17,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     <SolanaProviders>
       <div className="min-h-screen bg-surface text-foreground">
         <header className="bg-surface-low px-4 sm:px-8 lg:px-[3.5rem] py-3 flex items-center justify-between flex-wrap gap-y-2">
-          <Link href="/dashboard" className="font-brand text-lg tracking-[0.02em] text-neon">
+          <Link href="/dashboard" className="font-brand text-lg tracking-[0.02em] text-neon flex items-center gap-2">
             AKASHI
+            <span className="bg-secondary text-secondary-text text-[0.5rem] uppercase tracking-[0.05em] font-sans px-1.5 py-0.5 rounded-sm">Beta</span>
           </Link>
           <nav className="flex gap-4 sm:gap-8 text-[0.8rem] uppercase tracking-[0.05em] font-sans">
             {navLinks.map(({ href, label }) => (

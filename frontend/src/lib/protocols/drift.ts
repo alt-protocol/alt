@@ -81,12 +81,23 @@ async function buildInsuranceFundDeposit(
     const collateralAccount =
       await driftClient.getAssociatedTokenAccount(marketIndex);
 
-    // getAddInsuranceFundStakeIxs handles init of stake account if needed
+    // Check if the IF stake account already exists on-chain.
+    // If it does, we must NOT pass initializeStakeAccount: true,
+    // because the init IX will fail with "account already in use".
+    const ifStakeAccountPublicKey =
+      driftSdk.getInsuranceFundStakeAccountPublicKey(
+        driftClient.program.programId,
+        signerPubkey,
+        marketIndex,
+      );
+    const existingAccount =
+      await connection.getAccountInfo(ifStakeAccountPublicKey);
+
     const ixs = await driftClient.getAddInsuranceFundStakeIxs({
       marketIndex,
       amount,
       collateralAccountPublicKey: collateralAccount,
-      initializeStakeAccount: true,
+      initializeStakeAccount: existingAccount === null,
     });
 
     return ixs.flat().map(convertIx);

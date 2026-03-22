@@ -535,7 +535,7 @@ function DashboardContent() {
                       className="w-full border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-2 hover:bg-secondary hover:text-foreground transition-colors font-sans"
                       onClick={(e) => { e.stopPropagation(); router.push(`/yields/${y.id}`); }}
                     >
-                      Deposit
+                      Details
                     </button>
                   </div>
                 );
@@ -610,7 +610,7 @@ function DashboardContent() {
                           className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors font-sans inline-block"
                           onClick={(e) => { e.stopPropagation(); router.push(`/yields/${y.id}`); }}
                         >
-                          Deposit
+                          Details
                         </button>
                       </td>
                     </tr>

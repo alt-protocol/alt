@@ -204,6 +204,7 @@ def _upsert_opportunity(
         opp.tvl_usd = tvl_usd
         opp.tokens = tokens
         opp.deposit_address = deposit_address
+        opp.protocol_name = protocol.name
         opp.is_active = True
         opp.extra_data = extra
         opp.updated_at = now
@@ -219,6 +220,7 @@ def _upsert_opportunity(
             apy_30d_avg=apy_30d_avg,
             tvl_usd=tvl_usd,
             deposit_address=deposit_address,
+            protocol_name=protocol.name,
             risk_tier=risk_tier,
             is_active=True,
             extra_data=extra,
@@ -768,9 +770,9 @@ def fetch_multiply_markets(
             extra = {
                 # Deep link
                 "protocol_url": (
-                    f"{KAMINO_APP}/lending/borrow?search={coll_symbol}"
+                    f"https://kamino.com/lending/borrow?search={coll_symbol}"
                     if market_pubkey in BROKEN_MULTIPLY_MARKETS
-                    else f"{KAMINO_APP}/lending/multiply/{coll_reserve.get('liquidityTokenMint', '')}/{debt_reserve.get('liquidityTokenMint', '')}/{market_pubkey}"
+                    else f"https://kamino.com/multiply/{coll_reserve.get('liquidityTokenMint', '')}/{debt_reserve.get('liquidityTokenMint', '')}/{market_pubkey}"
                 ),
                 # Market info
                 "market": market_pubkey,

@@ -15,7 +15,7 @@ Base.metadata.create_all(bind=engine)
 PROTOCOLS = [
     {
         "slug": "kamino",
-        "name": "Kamino Finance",
+        "name": "Kamino",
         "description": "Automated liquidity management and lending vaults on Solana.",
         "website_url": "https://kamino.finance",
         "audit_status": "audited",

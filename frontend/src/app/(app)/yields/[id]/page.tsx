@@ -152,9 +152,6 @@ export default function YieldDetailPage() {
                 {y.tokens.length > 0 && (
                   <DetailRow label="Tokens" value={y.tokens.join(", ")} />
                 )}
-                {y.risk_tier && (
-                  <DetailRow label="Risk Tier" value={y.risk_tier} />
-                )}
                 {y.min_deposit != null && (
                   <DetailRow label="Min Deposit" value={fmtTvl(y.min_deposit)} />
                 )}
@@ -203,7 +200,7 @@ export default function YieldDetailPage() {
             </div>
 
             {/* Action card */}
-            {y.protocol?.slug && hasAdapter(y.protocol.slug) && y.deposit_address ? (
+            {y.category !== "multiply" && y.protocol?.slug && hasAdapter(y.protocol.slug) && y.deposit_address ? (
               <DepositWithdrawPanel yield_={y} protocolSlug={y.protocol.slug} />
             ) : (
               <div className="flex-[1] bg-surface-low px-6 py-5 flex flex-col justify-between">
