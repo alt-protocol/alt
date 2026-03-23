@@ -523,6 +523,10 @@ function DashboardContent() {
                         <span className="text-[0.8rem] font-sans tabular-nums text-foreground-muted">{fmtTvl(y.tvl_usd)}</span>
                       </div>
                       <div className="flex justify-between items-baseline">
+                        <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Liquidity</span>
+                        <span className="text-[0.8rem] font-sans tabular-nums text-foreground-muted">{y.liquidity_available_usd != null ? fmtTvl(y.liquidity_available_usd) : "\u2014"}</span>
+                      </div>
+                      <div className="flex justify-between items-baseline">
                         <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">APR</span>
                         <span className="text-[0.8rem] font-sans tabular-nums text-neon font-semibold">{fmt(y.apy_current)}%</span>
                       </div>
@@ -555,6 +559,7 @@ function DashboardContent() {
                     >
                       TVL<SortArrow field="tvl" />
                     </th>
+                    <th className="text-right px-5 py-2.5 font-medium whitespace-nowrap">Liquidity</th>
                     <th
                       className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
                       onClick={() => toggleSort("apy")}
@@ -599,6 +604,7 @@ function DashboardContent() {
                         {fmtCategory(y.category)}
                       </td>
                       <td className="px-5 py-3 text-right text-foreground-muted tabular-nums">{fmtTvl(y.tvl_usd)}</td>
+                      <td className="px-5 py-3 text-right text-foreground-muted tabular-nums">{y.liquidity_available_usd != null ? fmtTvl(y.liquidity_available_usd) : "\u2014"}</td>
                       <td className="px-5 py-3 text-right font-semibold text-neon tabular-nums">
                         {fmt(y.apy_current)}%
                       </td>

@@ -67,13 +67,14 @@ def _risk_tier(symbol: str) -> str:
 
 def _snapshot_avg(db: Session, opp_id: int, days: int) -> Optional[float]:
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    # Only compute if we have at least one snapshot older than the window start.
-    # Check is done in SQL to avoid comparing naive vs tz-aware datetimes in Python.
+    half_window = datetime.now(timezone.utc) - timedelta(days=days // 2)
+    # Only compute if we have at least one snapshot older than half the window.
+    # This matches Kamino's approach so averages appear sooner.
     has_old_enough = (
         db.query(YieldSnapshot.id)
         .filter(
             YieldSnapshot.opportunity_id == opp_id,
-            YieldSnapshot.snapshot_at <= since,
+            YieldSnapshot.snapshot_at <= half_window,
         )
         .first()
     )

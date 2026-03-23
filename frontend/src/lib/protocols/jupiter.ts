@@ -79,7 +79,7 @@ async function buildEarnDeposit(params: BuildTxParams): Promise<Instruction[]> {
   const signer = new PublicKey(params.signer.address);
   const asset = new PublicKey(mint);
 
-  const { ixs } = await getDepositIxs({ amount, asset, signer, connection });
+  const { ixs } = await getDepositIxs({ amount, asset, signer, connection: connection as any });
   return ixs.map(convertInstruction);
 }
 
@@ -98,7 +98,7 @@ async function buildEarnWithdraw(params: BuildTxParams): Promise<Instruction[]> 
   const signer = new PublicKey(params.signer.address);
   const asset = new PublicKey(mint);
 
-  const { ixs } = await getWithdrawIxs({ amount, asset, signer, connection });
+  const { ixs } = await getWithdrawIxs({ amount, asset, signer, connection: connection as any });
   return ixs.map(convertInstruction);
 }
 

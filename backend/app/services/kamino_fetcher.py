@@ -19,7 +19,6 @@ from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-from app.config.kamino_markets import BROKEN_MULTIPLY_MARKETS
 from app.models.base import SessionLocal
 from app.models.protocol import Protocol
 from app.models.yield_opportunity import YieldOpportunity, YieldSnapshot
@@ -769,11 +768,7 @@ def fetch_multiply_markets(
 
             extra = {
                 # Deep link
-                "protocol_url": (
-                    f"https://kamino.com/lending/borrow?search={coll_symbol}"
-                    if market_pubkey in BROKEN_MULTIPLY_MARKETS
-                    else f"https://kamino.com/multiply/{coll_reserve.get('liquidityTokenMint', '')}/{debt_reserve.get('liquidityTokenMint', '')}/{market_pubkey}"
-                ),
+                "protocol_url": "https://kamino.com/multiply",
                 # Market info
                 "market": market_pubkey,
                 "market_name": market_name,

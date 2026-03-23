@@ -165,10 +165,142 @@ async function buildInsuranceFundWithdraw(
   }
 }
 
+async function buildVaultDeposit(
+  params: BuildTxParams,
+): Promise<Instruction[]> {
+  const { driftSdk: _driftSdk, web3, BN } = await loadSdk();
+  const vaultsSdk = await import("@drift-labs/vaults-sdk");
+
+  const connection = new web3.Connection(HELIUS_RPC_URL);
+  const signerPubkey = new web3.PublicKey(params.signer.address);
+  const driftClient = createDriftClient(_driftSdk, connection, signerPubkey);
+
+  await driftClient.subscribe();
+
+  try {
+    const vaultPubkey = new web3.PublicKey(params.depositAddress);
+    const wallet = {
+      publicKey: signerPubkey,
+      signTransaction: async (t: any) => t,
+      signAllTransactions: async (t: any) => t,
+    };
+    const vaultClient = vaultsSdk.getVaultClient(
+      connection,
+      wallet as any,
+      driftClient,
+    );
+
+    const vaultDepositor = vaultsSdk.getVaultDepositorAddressSync(
+      vaultsSdk.VAULT_PROGRAM_ID,
+      vaultPubkey,
+      signerPubkey,
+    );
+
+    const existingAccount = await connection.getAccountInfo(vaultDepositor);
+    const decimals = getDecimals(params.extraData);
+    const amount = new BN(
+      Math.floor(parseFloat(params.amount) * 10 ** decimals),
+    );
+
+    const initParam =
+      existingAccount === null
+        ? { authority: signerPubkey, vault: vaultPubkey }
+        : undefined;
+
+    // Use prepDepositTx to get raw accounts/instructions instead of
+    // createDepositTx which returns a VersionedTransaction with ALTs.
+    // Rebuilding without ALTs caused simulation reverts.
+    const { accounts, remainingAccounts, preIxs, postIxs } =
+      await vaultClient.prepDepositTx(vaultDepositor, amount, initParam);
+
+    const ixs: any[] = [];
+
+    // Init vault depositor if needed
+    if (existingAccount === null) {
+      const initIx = (vaultClient as any).createInitVaultDepositorIx(
+        vaultPubkey,
+        signerPubkey,
+      );
+      ixs.push(initIx);
+    }
+
+    // Pre-instructions (e.g. WSOL wrapping)
+    ixs.push(...preIxs);
+
+    // Build deposit instruction directly from the Anchor program
+    const depositIx = await vaultClient.program.methods
+      .deposit(amount)
+      .accounts({ authority: signerPubkey, ...accounts })
+      .remainingAccounts(remainingAccounts)
+      .instruction();
+    ixs.push(depositIx);
+
+    // Post-instructions (e.g. WSOL unwrapping)
+    ixs.push(...postIxs);
+
+    return ixs.map(convertIx);
+  } finally {
+    await driftClient.unsubscribe();
+  }
+}
+
+async function buildVaultWithdraw(
+  params: BuildTxParams,
+): Promise<Instruction[]> {
+  const { driftSdk: _driftSdk, web3, BN } = await loadSdk();
+  const vaultsSdk = await import("@drift-labs/vaults-sdk");
+
+  const connection = new web3.Connection(HELIUS_RPC_URL);
+  const signerPubkey = new web3.PublicKey(params.signer.address);
+  const driftClient = createDriftClient(_driftSdk, connection, signerPubkey);
+
+  await driftClient.subscribe();
+
+  try {
+    const vaultPubkey = new web3.PublicKey(params.depositAddress);
+    const wallet = {
+      publicKey: signerPubkey,
+      signTransaction: async (t: any) => t,
+      signAllTransactions: async (t: any) => t,
+    };
+    const vaultClient = vaultsSdk.getVaultClient(
+      connection,
+      wallet as any,
+      driftClient,
+    );
+
+    const vaultDepositor = vaultsSdk.getVaultDepositorAddressSync(
+      vaultsSdk.VAULT_PROGRAM_ID,
+      vaultPubkey,
+      signerPubkey,
+    );
+
+    const decimals = getDecimals(params.extraData);
+    const amount = new BN(
+      Math.floor(parseFloat(params.amount) * 10 ** decimals),
+    );
+
+    // Vault withdrawal is 2-step: requestWithdraw → wait redeem period → withdraw.
+    // This returns the "request" instructions (same pattern as IF withdraw).
+    const ixs = await vaultClient.getRequestWithdrawIx(
+      vaultDepositor,
+      amount,
+      vaultsSdk.WithdrawUnit.TOKEN,
+    );
+
+    return ixs.map(convertIx);
+  } finally {
+    await driftClient.unsubscribe();
+  }
+}
+
 export const driftAdapter: ProtocolAdapter = {
   async buildDepositTx(params) {
     if (params.category === "insurance_fund") {
       return buildInsuranceFundDeposit(params);
+    }
+    if (params.category === "vault") {
+      return buildVaultDeposit(params);
     }
     throw new Error(
       `Drift adapter does not yet support category "${params.category}"`,
@@ -178,6 +310,9 @@ export const driftAdapter: ProtocolAdapter = {
   async buildWithdrawTx(params) {
     if (params.category === "insurance_fund") {
       return buildInsuranceFundWithdraw(params);
+    }
+    if (params.category === "vault") {
+      return buildVaultWithdraw(params);
     }
     throw new Error(
       `Drift adapter does not yet support category "${params.category}"`,
