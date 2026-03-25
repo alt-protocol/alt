@@ -1,15 +1,14 @@
 # Alt
 
-A curated, non-custodial Solana yield dashboard. Discover, deposit, and monitor yield positions across Kamino, Drift, Exponent, and more — without leaving the app.
+A curated, non-custodial Solana yield dashboard. Discover, deposit, and monitor yield positions across Kamino, Drift, Jupiter, and more — without leaving the app.
 
 ## Structure
 
 ```
 alt/
-├── docs/               # Strategy, architecture, roadmap
-├── frontend/           # Next.js 14, TypeScript, Tailwind
+├── frontend/           # Next.js 16, TypeScript, Tailwind
 ├── backend/            # Python, FastAPI, PostgreSQL
-├── scripts/            # DB seed scripts
+├── scripts/            # DB seed, backfill, and validation scripts
 └── README.md
 ```
 
@@ -38,9 +37,3 @@ uvicorn app.main:app --reload  # http://localhost:8000
 ```bash
 python scripts/seed_protocols.py
 ```
-
-## Docs
-- [Brainstorm Summary](docs/00-BRAINSTORM-SUMMARY.md)
-- [MVP Scope](docs/01-MVP-SCOPE.md)
-- [Architecture](docs/02-ARCHITECTURE.md)
-- [Roadmap](docs/03-ROADMAP.md)

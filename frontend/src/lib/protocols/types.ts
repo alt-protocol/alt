@@ -15,10 +15,22 @@ export interface BuildTxResultWithLookups {
   lookupTableAddresses: string[];
 }
 
-export type BuildTxResult = Instruction[] | BuildTxResultWithLookups;
+/** Extended result with setup transactions (needed for Kamino Multiply user LUT creation). */
+export interface BuildTxResultWithSetup {
+  instructions: Instruction[];
+  lookupTableAddresses: string[];
+  /** Each element is a set of instructions for a separate setup tx (e.g. user LUT creation). */
+  setupInstructionSets?: Instruction[][];
+}
+
+export type BuildTxResult = Instruction[] | BuildTxResultWithLookups | BuildTxResultWithSetup;
 
 export function isBuildTxResultWithLookups(r: BuildTxResult): r is BuildTxResultWithLookups {
   return !Array.isArray(r) && "lookupTableAddresses" in r;
+}
+
+export function isBuildTxResultWithSetup(r: BuildTxResult): r is BuildTxResultWithSetup {
+  return !Array.isArray(r) && "setupInstructionSets" in r;
 }
 
 export interface ProtocolAdapter {

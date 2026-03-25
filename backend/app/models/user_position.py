@@ -43,6 +43,7 @@ class UserPosition(Base):
     __table_args__ = (
         Index("ix_user_positions_wallet_snapshot", "wallet_address", "snapshot_at"),
         Index("ix_user_positions_wallet_external", "wallet_address", "external_id"),
+        Index("ix_user_positions_wallet_protocol", "wallet_address", "protocol_slug"),
     )
 
 

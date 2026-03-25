@@ -12,7 +12,18 @@ frontend/.next/
 frontend/.env.local
 frontend/.git/
 
+# Additional env patterns
+.env.*.local
+frontend/.env.production.local
+
+# Test caches
+.pytest_cache/
+backend/.pytest_cache/
+
 # General
 .DS_Store
 *.log
 .env
+*.egg-info/
+.venv/
+__pycache__/

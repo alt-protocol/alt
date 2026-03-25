@@ -27,29 +27,7 @@ function getRpc(): any {
   return createSolanaRpc(HELIUS_RPC_URL);
 }
 
-/**
- * Convert Jupiter API instruction JSON to @solana/kit Instruction.
- * Jupiter returns: { programId, accounts: [{pubkey, isSigner, isWritable}], data }
- */
-function convertJupIx(ix: any): Instruction {
-  const accounts = ix.accounts.map((acc: any) => ({
-    address: acc.pubkey as Address,
-    role:
-      acc.isSigner && acc.isWritable
-        ? 3 // WRITABLE_SIGNER
-        : acc.isSigner
-          ? 2 // READONLY_SIGNER
-          : acc.isWritable
-            ? 1 // WRITABLE
-            : 0, // READONLY
-  }));
-
-  return {
-    programAddress: ix.programId as Address,
-    accounts,
-    data: Buffer.from(ix.data, "base64"),
-  } as unknown as Instruction;
-}
+import { convertJupiterApiInstruction as convertJupIx } from "./instruction-converter";
 
 /**
  * SwapQuoteProvider — fetches a Jupiter quote for the given swap inputs.

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useClickOutside } from "@/lib/hooks/useClickOutside";
 
 interface DropdownOption {
   value: string;
@@ -28,18 +29,11 @@ export default function Dropdown({ value, options, onChange, placeholder = "Sele
       )
     : options;
 
+  const closeDropdown = useCallback(() => { setOpen(false); setSearch(""); }, []);
+  useClickOutside(ref, open, closeDropdown);
+
   useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-        setSearch("");
-      }
-    }
-    if (open) {
-      document.addEventListener("mousedown", handleClick);
-      setTimeout(() => inputRef.current?.focus(), 0);
-    }
-    return () => document.removeEventListener("mousedown", handleClick);
+    if (open) setTimeout(() => inputRef.current?.focus(), 0);
   }, [open]);
 
   return (

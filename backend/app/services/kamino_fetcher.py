@@ -17,11 +17,11 @@ from typing import Optional
 import httpx
 from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from app.models.base import SessionLocal
 from app.models.protocol import Protocol
 from app.models.yield_opportunity import YieldOpportunity, YieldSnapshot
+from app.services.utils import safe_float, get_with_retry, get_or_none, upsert_opportunity
 
 logger = logging.getLogger(__name__)
 
@@ -77,32 +77,11 @@ def _classify_multiply_pair(coll_symbol: str, debt_symbol: str) -> str:
 # Helpers
 # ---------------------------------------------------------------------------
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadTimeout)),
-    reraise=True,
-)
-def _get_with_retry(path: str, client: httpx.Client):
-    r = client.get(f"{KAMINO_API}{path}", timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-
 def _get(path: str, client: httpx.Client) -> Optional[dict | list]:
-    try:
-        return _get_with_retry(path, client)
-    except Exception as exc:
-        logger.warning("Kamino API %s failed after retries: %s", path, exc)
-        return None
+    return get_or_none(f"{KAMINO_API}{path}", client, log_label="Kamino API")
 
 
-def _float(val) -> Optional[float]:
-    """Safely coerce a string or number to float."""
-    try:
-        return float(val) if val is not None else None
-    except (TypeError, ValueError):
-        return None
+_float = safe_float
 
 
 def _build_mint_map(client: httpx.Client) -> dict[str, str]:
@@ -177,68 +156,6 @@ def _batch_snapshot_avg(
     return result
 
 
-def _upsert_opportunity(
-    db: Session,
-    protocol: Protocol,
-    external_id: str,
-    name: str,
-    category: str,
-    tokens: list[str],
-    apy_current: Optional[float],
-    apy_7d_avg: Optional[float],
-    apy_30d_avg: Optional[float],
-    tvl_usd: Optional[float],
-    deposit_address: Optional[str],
-    risk_tier: str,
-    extra: dict,
-    now: datetime,
-) -> YieldOpportunity:
-    opp = db.query(YieldOpportunity).filter(YieldOpportunity.external_id == external_id).first()
-
-    if opp:
-        opp.name = name
-        opp.apy_current = apy_current
-        opp.apy_7d_avg = apy_7d_avg
-        opp.apy_30d_avg = apy_30d_avg
-        opp.tvl_usd = tvl_usd
-        opp.tokens = tokens
-        opp.deposit_address = deposit_address
-        opp.protocol_name = protocol.name
-        opp.is_active = True
-        opp.extra_data = extra
-        opp.updated_at = now
-    else:
-        opp = YieldOpportunity(
-            protocol_id=protocol.id,
-            external_id=external_id,
-            name=name,
-            category=category,
-            tokens=tokens,
-            apy_current=apy_current,
-            apy_7d_avg=apy_7d_avg,
-            apy_30d_avg=apy_30d_avg,
-            tvl_usd=tvl_usd,
-            deposit_address=deposit_address,
-            protocol_name=protocol.name,
-            risk_tier=risk_tier,
-            is_active=True,
-            extra_data=extra,
-        )
-        db.add(opp)
-        db.flush()
-
-    # Record snapshot
-    snapshot = YieldSnapshot(
-        opportunity_id=opp.id,
-        apy=apy_current,
-        tvl_usd=tvl_usd,
-        snapshot_at=now,
-        source="kamino_api",
-    )
-    db.add(snapshot)
-    return opp
-
-
 # ---------------------------------------------------------------------------
 # Earn Vaults
 # ---------------------------------------------------------------------------
@@ -310,7 +227,9 @@ def fetch_earn_vaults(
         if apy_30d is not None:
             apy_30d *= 100
 
-        _upsert_opportunity(
+        tokens_available_usd = _float(metrics.get("tokensAvailableUsd"))
+
+        upsert_opportunity(
             db=db,
             protocol=protocol,
             external_id=pubkey,
@@ -331,6 +250,8 @@ def fetch_earn_vaults(
                 "type": "earn_vault",
             },
             now=now,
+            source="kamino_api",
+            liquidity_available_usd=round(tokens_available_usd, 2) if tokens_available_usd is not None else None,
         )
         count += 1
 
@@ -387,7 +308,7 @@ def fetch_lending_reserves(
             external_id = f"klend-{market_pubkey[:8]}-{reserve_pubkey[:8]}"
             avgs = avg_map.get(external_id, {})
 
-            _upsert_opportunity(
+            upsert_opportunity(
                 db=db,
                 protocol=protocol,
                 external_id=external_id,
@@ -403,6 +324,7 @@ def fetch_lending_reserves(
                 extra={
                     "token_mint": token_mint,
                     "reserve": reserve_pubkey,
+                    "decimals": int(reserve.get("decimals", 6)),
                     "protocol_url": f"{KAMINO_APP}/lending/reserve/{reserve_pubkey}/{market_pubkey}",
                     "supply_apy_raw": reserve.get("supplyApy"),
                     "borrow_apy_raw": reserve.get("borrowApy"),
@@ -418,6 +340,7 @@ def fetch_lending_reserves(
                     "type": "lending",
                 },
                 now=now,
+                source="kamino_api",
             )
             count += 1
 
@@ -835,7 +758,7 @@ def fetch_multiply_markets(
                 "type": "multiply",
             }
 
-            opp = _upsert_opportunity(
+            opp = upsert_opportunity(
                 db=db,
                 protocol=protocol,
                 external_id=external_id,
@@ -850,6 +773,7 @@ def fetch_multiply_markets(
                 risk_tier="high" if (max_leverage or 0) >= 8 else "medium",
                 extra=extra,
                 now=now,
+                source="kamino_api",
             )
             opp.liquidity_available_usd = liq_available_usd
             upserted_ids.add(external_id)

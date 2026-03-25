@@ -1,10 +1,7 @@
-```markdown
 # Design System Document: The Kinetic Architect
 
-## 1. Overview & Creative North Star: "The Kinetic Architect"
-This design system is built upon the concept of **The Kinetic Architect**. It moves away from the "startup-chic" aesthetic of rounded bubbles and friendly gradients, favoring instead the cold, calculated precision of architectural blueprints and high-end editorial journals. 
-
-The goal is to establish **Institutional Trust** through data clarity and brutalist elegance. We achieve this by rejecting "standard" UI patterns in favor of high-density layouts, intentional asymmetry, and a sophisticated interplay between deep charcoal voids and high-precision neon accents. We do not chase hype; we provide a platform for absolute clarity.
+## 1. Overview
+Brutalist, high-density design system built on institutional trust through data clarity — deep charcoal voids with surgical neon accents. No "startup-chic" rounded bubbles or friendly gradients.
 
 ---
 
@@ -35,7 +32,7 @@ For floating overlays or high-importance modal states, use **Glassmorphism**. Ap
 The typographic system relies on the tension between the geometric, technical `Space Grotesk` and the highly legible, professional `Manrope`.
 
 *   **Display & Headline (Space Grotesk):** These should be treated as architectural elements. Use `display-lg` (3.5rem) for hero moments with a tight `-0.02em` letter-spacing. This font communicates the "Dessau-inspired" heritage—functional and bold.
-*   **Body & Labels (Manrope):** Use `body-md` (0.875rem) for all technical data. Manrope’s neutrality balances the aggression of the headlines, ensuring institutional trust.
+*   **Body & Labels (Manrope):** Use `body-md` (0.875rem) for all technical data. Manrope's neutrality balances the aggression of the headlines, ensuring institutional trust.
 *   **Hierarchy Tip:** For labels, use `label-sm` in uppercase with `+0.05em` letter-spacing to create a "technical blueprint" feel.
 
 ---
@@ -70,23 +67,8 @@ In this system, elevation is a matter of light and tone, not physical shadows.
 
 ---
 
-## 6. Do’s and Don’ts
-
-### Do:
-*   **Embrace High Density:** Use the spacing scale (0.2rem - 0.5rem) to pack data tightly. This is for professionals, not casual scrollers.
-*   **Use Asymmetry:** Align text to the left while placing data metrics on the far right of a container to create an editorial "spread" feel.
-*   **Prioritize Type Scale:** Let the difference between `display-lg` and `label-sm` create the visual interest.
-
-### Don’t:
-*   **No Gamification:** Avoid bouncy animations, "friendly" icons, or bright primary-color backgrounds for anything other than specific CTAs.
-*   **No 1px Borders:** Never use a solid, high-contrast line to separate two sections of the same importance.
-*   **No Standard Shadows:** Avoid the "Material Design" look of 2px blur shadows. Keep it tonal or keep it flat.
-*   **No Large Radii:** Never use `rounded-full` or `xl` (0.75rem) for functional containers. Keep corners sharp (`sm` or `none`) to maintain the brutalist elegance.
-
----
-
-## 7. Spacing Utility Reference
+## 6. Spacing Utility Reference
 *   **Micro (1.5):** 0.3rem — For internal label-to-data spacing.
 *   **Standard (4):** 0.9rem — For internal component padding.
 *   **Section (10):** 2.25rem — For vertical separation between major data modules.
-*   **Gutter (16):** 3.5rem — For page margins.```
+*   **Gutter (16):** 3.5rem — For page margins.

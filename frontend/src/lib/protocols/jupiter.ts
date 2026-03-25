@@ -32,29 +32,7 @@ async function loadSdk() {
   };
 }
 
-/**
- * Convert a legacy TransactionInstruction to @solana/kit Instruction.
- * Legacy shape: { keys: [{pubkey, isSigner, isWritable}], programId, data }
- * Kit shape:    { accounts: [{address, role}], programAddress, data }
- */
-function convertInstruction(ix: any): Instruction {
-  const accounts = ix.keys.map((key: any) => ({
-    address: key.pubkey.toBase58(),
-    role:
-      key.isSigner && key.isWritable
-        ? 3 // AccountRole.WRITABLE_SIGNER
-        : key.isSigner
-          ? 2 // AccountRole.READONLY_SIGNER
-          : key.isWritable
-            ? 1 // AccountRole.WRITABLE
-            : 0, // AccountRole.READONLY
-  }));
-  return {
-    programAddress: ix.programId.toBase58(),
-    accounts,
-    data: ix.data,
-  } as unknown as Instruction;
-}
+import { convertLegacyInstruction as convertInstruction } from "../instruction-converter";
 
 function isEarnCategory(category: string): boolean {
   return (

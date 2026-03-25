@@ -1,5 +1,4 @@
 import type { Instruction } from "@solana/kit";
-import { address } from "@solana/kit";
 import type { ProtocolAdapter, BuildTxParams } from "./types";
 import { HELIUS_RPC_URL } from "../constants";
 
@@ -34,21 +33,7 @@ function createDriftClient(
   });
 }
 
-/**
- * Convert a legacy TransactionInstruction into @solana/kit's Instruction format.
- * Field mapping: programId → programAddress, keys → accounts, data stays Uint8Array.
- * AccountRole: 0=readonly, 1=writable, 2=readonly+signer, 3=writable+signer
- */
-function convertIx(ix: any): Instruction {
-  return {
-    programAddress: address(ix.programId.toBase58()),
-    accounts: ix.keys.map((k: any) => ({
-      address: address(k.pubkey.toBase58()),
-      role: k.isWritable ? (k.isSigner ? 3 : 1) : (k.isSigner ? 2 : 0),
-    })),
-    data: new Uint8Array(ix.data),
-  };
-}
+import { convertLegacyInstruction as convertIx } from "../instruction-converter";
 
 function getDecimals(extraData?: Record<string, unknown>): number {
   if (extraData?.decimals != null) return Number(extraData.decimals);

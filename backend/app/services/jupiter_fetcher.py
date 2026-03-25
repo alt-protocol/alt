@@ -12,31 +12,19 @@ from typing import Optional
 
 import httpx
 from sqlalchemy.orm import Session
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from app.models.base import SessionLocal
 from app.models.protocol import Protocol
 from app.config.stablecoins import compute_depeg
-from app.models.yield_opportunity import YieldOpportunity, YieldSnapshot
+from app.models.yield_opportunity import YieldOpportunity
 from app.services.kamino_fetcher import _classify_multiply_pair as classify_multiply_pair
 from app.services.kamino_fetcher import _batch_snapshot_avg
+from app.services.utils import safe_float, get_with_retry, upsert_opportunity
 
 logger = logging.getLogger(__name__)
 
 JUPITER_LEND_API = "https://api.jup.ag/lend/v1"
 MIN_TVL_USD = 100_000
-
-
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadTimeout)),
-    reraise=True,
-)
-def _get_with_retry(url: str, client: httpx.Client, timeout: int = 30):
-    r = client.get(url, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
 
 
 def _build_headers() -> dict[str, str]:
@@ -47,84 +35,8 @@ def _build_headers() -> dict[str, str]:
     return headers
 
 
-def _float(val) -> Optional[float]:
-    try:
-        return float(val) if val is not None else None
-    except (TypeError, ValueError):
-        return None
+_float = safe_float
 
-
-def _upsert_opportunity(
-    db: Session,
-    protocol: Protocol,
-    external_id: str,
-    name: str,
-    category: str,
-    tokens: list[str],
-    apy_current: Optional[float],
-    tvl_usd: Optional[float],
-    deposit_address: Optional[str],
-    risk_tier: str,
-    min_deposit: Optional[float],
-    extra: dict,
-    now: datetime,
-    max_leverage: Optional[float] = None,
-    liquidity_available_usd: Optional[float] = None,
-    is_automated: Optional[bool] = None,
-    depeg: Optional[float] = None,
-    apy_7d_avg: Optional[float] = None,
-    apy_30d_avg: Optional[float] = None,
-) -> YieldOpportunity:
-    opp = db.query(YieldOpportunity).filter(YieldOpportunity.external_id == external_id).first()
-
-    if opp:
-        opp.name = name
-        opp.apy_current = apy_current
-        opp.tvl_usd = tvl_usd
-        opp.tokens = tokens
-        opp.deposit_address = deposit_address
-        opp.protocol_name = "Jupiter"
-        opp.is_active = True
-        opp.extra_data = extra
-        opp.max_leverage = max_leverage
-        opp.liquidity_available_usd = liquidity_available_usd
-        opp.is_automated = is_automated
-        opp.depeg = depeg
-        opp.updated_at = now
-    else:
-        opp = YieldOpportunity(
-            protocol_id=protocol.id,
-            external_id=external_id,
-            name=name,
-            category=category,
-            tokens=tokens,
-            apy_current=apy_current,
-            tvl_usd=tvl_usd,
-            deposit_address=deposit_address,
-            risk_tier=risk_tier,
-            protocol_name="Jupiter",
-            is_active=True,
-            extra_data=extra,
-            min_deposit=min_deposit,
-            max_leverage=max_leverage,
-            liquidity_available_usd=liquidity_available_usd,
-            is_automated=is_automated,
-            depeg=depeg,
-        )
-        db.add(opp)
-        db.flush()
-
-    snapshot = YieldSnapshot(
-        opportunity_id=opp.id,
-        apy=apy_current,
-        tvl_usd=tvl_usd,
-        snapshot_at=now,
-        source="jupiter_api",
-    )
-    db.add(snapshot)
-    opp.apy_7d_avg = apy_7d_avg
-    opp.apy_30d_avg = apy_30d_avg
-    return opp
 
 
 def fetch_earn_tokens(
@@ -138,7 +50,7 @@ def fetch_earn_tokens(
     Returns (count, set_of_external_ids).
     """
     try:
-        data = _get_with_retry(f"{JUPITER_LEND_API}/earn/tokens", client)
+        data = get_with_retry(f"{JUPITER_LEND_API}/earn/tokens", client)
     except Exception as exc:
         logger.warning("Jupiter Lend API /earn/tokens failed after retries: %s", exc)
         return 0, set()
@@ -180,7 +92,7 @@ def fetch_earn_tokens(
         rewards_rate = _float(token.get("rewardsRate"))
 
         opp_avgs = avgs.get(external_id, {})
-        _upsert_opportunity(
+        upsert_opportunity(
             db=db,
             protocol=protocol,
             external_id=external_id,
@@ -200,6 +112,7 @@ def fetch_earn_tokens(
                 "total_rate_bps": total_rate_bps,
             },
             now=now,
+            source="jupiter_api",
             is_automated=True,
             depeg=compute_depeg(symbol, price),
             apy_7d_avg=opp_avgs.get("7d"),
@@ -240,7 +153,7 @@ def fetch_multiply_vaults(
     Returns (count, set_of_external_ids).
     """
     try:
-        data = _get_with_retry(f"{JUPITER_LEND_API}/borrow/vaults", client)
+        data = get_with_retry(f"{JUPITER_LEND_API}/borrow/vaults", client)
     except Exception as exc:
         logger.warning("Jupiter Lend API /borrow/vaults failed after retries: %s", exc)
         return 0, set()
@@ -326,7 +239,7 @@ def fetch_multiply_vaults(
         vault_tag = classify_multiply_pair(supply_symbol, borrow_symbol)
 
         opp_avgs = avgs.get(external_id, {})
-        _upsert_opportunity(
+        upsert_opportunity(
             db=db,
             protocol=protocol,
             external_id=external_id,
@@ -358,6 +271,7 @@ def fetch_multiply_vaults(
                 "borrow_token_mint": borrow_token.get("address", ""),
             },
             now=now,
+            source="jupiter_api",
             max_leverage=max_leverage,
             liquidity_available_usd=round(liquidity_usd, 2) if liquidity_usd is not None else None,
             is_automated=True,

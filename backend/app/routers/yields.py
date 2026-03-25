@@ -2,7 +2,9 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy import and_, or_, func, text
 from sqlalchemy.orm import Session, joinedload
 
@@ -12,6 +14,7 @@ from app.models.yield_opportunity import YieldOpportunity, YieldSnapshot
 from app.schemas import YieldOpportunityListOut, YieldOpportunityDetailOut, YieldHistoryPoint, ProtocolOut
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 
 
 class SortOrder(str, Enum):
@@ -25,7 +28,9 @@ PERIOD_DAYS = {"7d": 7, "30d": 30, "90d": 90}
 
 
 @router.get("/yields", response_model=dict)
+@limiter.limit("60/minute")
 def get_yields(
+    request: Request,
     category: Optional[str] = Query(None),
     sort: SortOrder = Query(SortOrder.APY_DESC),
     tokens: Optional[str] = Query(None),
@@ -102,7 +107,9 @@ def get_yields(
 
 
 @router.get("/yields/{yield_id}", response_model=YieldOpportunityDetailOut)
+@limiter.limit("60/minute")
 def get_yield_detail(
+    request: Request,
     yield_id: int,
     db: Session = Depends(get_db),
 ):
@@ -134,7 +141,9 @@ def get_yield_detail(
 
 
 @router.get("/yields/{yield_id}/history", response_model=dict)
+@limiter.limit("60/minute")
 def get_yield_history(
+    request: Request,
     yield_id: int,
     period: str = Query("7d"),
     limit: int = Query(500, ge=1, le=2000),

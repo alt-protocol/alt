@@ -4,12 +4,27 @@ import { useState } from "react";
 import { useSelectedWalletAccount } from "@solana/react";
 import { useWalletAccountTransactionSendingSigner } from "@solana/react";
 import type { YieldOpportunityDetail } from "@/lib/api";
+import { api } from "@/lib/api";
 import { getAdapter } from "@/lib/protocols";
+import { fmtUsd, fmtPct, pnlColor } from "@/lib/format";
 import { useTokenBalance } from "@/lib/hooks/useTokenBalance";
 import { useVaultTransaction } from "@/lib/hooks/useVaultTransaction";
+import { usePositionForOpportunity } from "@/lib/hooks/usePositionForOpportunity";
+import { useInvalidateAfterTransaction } from "@/lib/hooks/useInvalidateAfterTransaction";
 import WalletButton from "./WalletButton";
 
 type Tab = "deposit" | "withdraw";
+
+function BalanceRow({ label, value, className }: { label: string; value: React.ReactNode; className?: string }) {
+  return (
+    <div className={`flex justify-between items-center ${className ?? "mb-4"}`}>
+      <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">
+        {label}
+      </span>
+      <span className="font-sans text-[0.8rem] tabular-nums">{value}</span>
+    </div>
+  );
+}
 
 interface Props {
   yield_: YieldOpportunityDetail;
@@ -25,14 +40,20 @@ export default function DepositWithdrawPanel({ yield_, protocolSlug }: Props) {
     ? useWalletAccountTransactionSendingSigner(selectedAccount, "solana:mainnet")
     : null;
 
+  const invalidateAfterTx = useInvalidateAfterTransaction();
   const primaryToken = yield_.tokens[0] ?? "USDC";
   const { data: balance } = useTokenBalance(selectedAccount?.address, primaryToken);
+  const { position, isLoading: positionLoading } = usePositionForOpportunity(
+    selectedAccount?.address,
+    yield_.id,
+  );
 
   const { execute, status, error, txSignature, reset } = useVaultTransaction(signer);
 
+  const effectiveBalance = tab === "deposit" ? (balance ?? null) : (position?.deposit_amount ?? null);
   const numAmount = parseFloat(amount) || 0;
   const meetsMinimum = tab === "withdraw" || !yield_.min_deposit || numAmount >= yield_.min_deposit;
-  const isValid = numAmount > 0 && (balance == null || numAmount <= balance) && meetsMinimum;
+  const isValid = numAmount > 0 && (effectiveBalance == null || numAmount <= effectiveBalance) && meetsMinimum;
   const isBusy = status === "building" || status === "signing" || status === "confirming";
 
   function handleAmountChange(value: string) {
@@ -42,11 +63,11 @@ export default function DepositWithdrawPanel({ yield_, protocolSlug }: Props) {
   }
 
   function handleHalf() {
-    if (balance != null) setAmount((balance / 2).toString());
+    if (effectiveBalance != null) setAmount((effectiveBalance / 2).toString());
   }
 
   function handleMax() {
-    if (balance != null) setAmount(balance.toString());
+    if (effectiveBalance != null) setAmount(effectiveBalance.toString());
   }
 
   async function handleSubmit() {
@@ -57,7 +78,7 @@ export default function DepositWithdrawPanel({ yield_, protocolSlug }: Props) {
 
     reset();
 
-    await execute(async () => {
+    const success = await execute(async () => {
       const params = {
         signer: signer!,
         depositAddress: yield_.deposit_address!,
@@ -72,7 +93,15 @@ export default function DepositWithdrawPanel({ yield_, protocolSlug }: Props) {
       return adapter.buildWithdrawTx(params);
     });
 
+    if (!success) return;
+
     setAmount("");
+    invalidateAfterTx({
+      walletAddress: selectedAccount!.address,
+      tokenSymbol: primaryToken,
+      opportunityId: yield_.id,
+    });
+    api.trackWallet(selectedAccount!.address);
   }
 
   const statusLabel =
@@ -112,91 +141,122 @@ export default function DepositWithdrawPanel({ yield_, protocolSlug }: Props) {
         </div>
       ) : (
         <>
-          {/* Position display */}
-          {balance != null && (
-            <div className="flex justify-between items-center mb-4">
-              <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">
-                Available
-              </span>
-              <span className="font-sans text-[0.8rem] tabular-nums">
-                {balance.toLocaleString(undefined, { maximumFractionDigits: 6 })} {primaryToken}
-              </span>
-            </div>
-          )}
-
-          {/* Amount input */}
-          <div className="bg-surface-high rounded-sm px-4 py-3 mb-2 focus-within:shadow-[0_2px_0_0_var(--neon-primary)] transition-shadow">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-foreground-muted text-[0.65rem] font-sans uppercase tracking-[0.05em]">
-                {primaryToken}
-              </span>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleHalf}
-                  className="text-neon text-[0.65rem] font-sans uppercase tracking-[0.05em] hover:opacity-80"
-                >
-                  Half
-                </button>
-                <button
-                  onClick={handleMax}
-                  className="text-neon text-[0.65rem] font-sans uppercase tracking-[0.05em] hover:opacity-80"
-                >
-                  Max
-                </button>
-              </div>
-            </div>
-            <input
-              type="text"
-              inputMode="decimal"
-              placeholder="0.00"
-              value={amount}
-              onChange={(e) => handleAmountChange(e.target.value)}
-              className="w-full bg-transparent text-foreground font-display text-xl tracking-[-0.02em] outline-none placeholder:text-foreground-muted/40"
+          {/* Balance display */}
+          {tab === "deposit" && balance != null && (
+            <BalanceRow
+              label="Available"
+              value={<>{balance.toLocaleString(undefined, { maximumFractionDigits: 6 })} {primaryToken}</>}
             />
-          </div>
-
-          {/* Validation */}
-          {numAmount > 0 && balance != null && numAmount > balance && (
-            <p className="text-red-400 text-[0.65rem] font-sans mb-2">
-              Insufficient {primaryToken} balance
-            </p>
-          )}
-          {tab === "deposit" && numAmount > 0 && !meetsMinimum && (
-            <p className="text-red-400 text-[0.65rem] font-sans mb-2">
-              Minimum deposit: ${yield_.min_deposit}
-            </p>
           )}
 
-          {/* Submit button */}
-          <button
-            onClick={handleSubmit}
-            disabled={!isValid || isBusy}
-            className="bg-neon text-on-neon rounded-sm px-6 py-3 text-sm font-semibold font-sans w-full mt-3 hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {isBusy
-              ? statusLabel
-              : `${tab === "deposit" ? "Deposit" : "Withdraw"} ${primaryToken}`}
-          </button>
+          {tab === "withdraw" && position && (
+            <>
+              <BalanceRow
+                label="Deposited"
+                className="mb-2"
+                value={<>{position.deposit_amount?.toLocaleString(undefined, { maximumFractionDigits: 6 })} {primaryToken}</>}
+              />
+              {position.pnl_usd != null && (
+                <BalanceRow
+                  label="PnL"
+                  value={
+                    <span className={pnlColor(position.pnl_usd)}>
+                      {fmtUsd(position.pnl_usd)} ({fmtPct(position.pnl_pct)})
+                    </span>
+                  }
+                />
+              )}
+            </>
+          )}
 
-          {/* Status feedback */}
-          {status === "success" && txSignature && (
-            <div className="mt-3 text-center">
-              <p className="text-neon text-[0.75rem] font-sans mb-1">Transaction confirmed</p>
-              <a
-                href={`https://solscan.io/tx/${txSignature}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-foreground-muted text-[0.65rem] font-sans hover:text-foreground underline"
-              >
-                View on Solscan
-              </a>
+          {tab === "withdraw" && !position && !positionLoading && (
+            <div className="flex-1 flex flex-col items-center justify-center gap-2">
+              <p className="text-foreground-muted font-sans text-[0.75rem]">
+                No active position
+              </p>
+              <p className="text-foreground-muted/60 font-sans text-[0.65rem]">
+                Deposit first to withdraw later
+              </p>
             </div>
           )}
 
-          {status === "error" && error && (
-            <p className="mt-3 text-red-400 text-[0.7rem] font-sans text-center">
-              {error}
-            </p>
+          {/* Amount input + actions (hidden when withdraw has no position) */}
+          {(tab === "deposit" || position) && (
+            <>
+              <div className="bg-surface-high rounded-sm px-4 py-3 mb-2 focus-within:shadow-[0_2px_0_0_var(--neon-primary)] transition-shadow">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-foreground-muted text-[0.65rem] font-sans uppercase tracking-[0.05em]">
+                    {primaryToken}
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleHalf}
+                      className="text-neon text-[0.65rem] font-sans uppercase tracking-[0.05em] hover:opacity-80"
+                    >
+                      Half
+                    </button>
+                    <button
+                      onClick={handleMax}
+                      className="text-neon text-[0.65rem] font-sans uppercase tracking-[0.05em] hover:opacity-80"
+                    >
+                      Max
+                    </button>
+                  </div>
+                </div>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={amount}
+                  onChange={(e) => handleAmountChange(e.target.value)}
+                  className="w-full bg-transparent text-foreground font-display text-xl tracking-[-0.02em] outline-none placeholder:text-foreground-muted/40"
+                />
+              </div>
+
+              {/* Validation */}
+              {numAmount > 0 && effectiveBalance != null && numAmount > effectiveBalance && (
+                <p className="text-red-400 text-[0.65rem] font-sans mb-2">
+                  {tab === "deposit" ? `Insufficient ${primaryToken} balance` : "Exceeds deposited amount"}
+                </p>
+              )}
+              {tab === "deposit" && numAmount > 0 && !meetsMinimum && (
+                <p className="text-red-400 text-[0.65rem] font-sans mb-2">
+                  Minimum deposit: ${yield_.min_deposit}
+                </p>
+              )}
+
+              {/* Submit button */}
+              <button
+                onClick={handleSubmit}
+                disabled={!isValid || isBusy}
+                className="bg-neon text-on-neon rounded-sm px-6 py-3 text-sm font-semibold font-sans w-full mt-3 hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {isBusy
+                  ? statusLabel
+                  : `${tab === "deposit" ? "Deposit" : "Withdraw"} ${primaryToken}`}
+              </button>
+
+              {/* Status feedback */}
+              {status === "success" && txSignature && (
+                <div className="mt-3 text-center">
+                  <p className="text-neon text-[0.75rem] font-sans mb-1">Transaction confirmed</p>
+                  <a
+                    href={`https://solscan.io/tx/${txSignature}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-foreground-muted text-[0.65rem] font-sans hover:text-foreground underline"
+                  >
+                    View on Solscan
+                  </a>
+                </div>
+              )}
+
+              {status === "error" && error && (
+                <p className="mt-3 text-red-400 text-[0.7rem] font-sans text-center">
+                  {error}
+                </p>
+              )}
+            </>
           )}
 
           <p className="text-foreground-muted text-[0.6rem] font-sans mt-4 text-center">

@@ -7,54 +7,38 @@ Two data sources:
 Vault APYs come from app.drift.trade/api/vaults (7d/30d/90d/180d/365d breakdowns).
 """
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
+from solders.pubkey import Pubkey
 from sqlalchemy.orm import Session
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from app.models.base import SessionLocal
 from app.models.protocol import Protocol
 from app.models.yield_opportunity import YieldOpportunity, YieldSnapshot
+from app.services.utils import safe_float, get_or_none, upsert_opportunity
 
 logger = logging.getLogger(__name__)
 
 DRIFT_API = "https://data.api.drift.trade"
 DRIFT_APP_API = "https://app.drift.trade"
 DRIFT_BASE = "https://app.drift.trade"
-DRIFT_MAINNET_API = "https://mainnet-beta.api.drift.trade"
 MIN_VAULT_TVL_USD = 10_000
+HELIUS_RPC_URL = os.getenv("HELIUS_RPC_URL", "")
+DRIFT_PROGRAM = Pubkey.from_string("dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH")
+IF_UNSTAKING_PERIOD_DAYS = 13  # Standard Drift IF unstaking period
 
 STABLE_SYMBOLS = {"USDC", "USDT", "PYUSD", "USDe", "USDS", "DAI", "USDY"}
 SOL_LST_SYMBOLS = {"SOL", "JITOSOL", "MSOL", "BSOL"}
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadTimeout)),
-    reraise=True,
-)
-def _get_with_retry(url: str, client: httpx.Client):
-    r = client.get(url, timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-
 def _get(path: str, client: httpx.Client) -> Optional[dict | list]:
-    try:
-        return _get_with_retry(f"{DRIFT_API}{path}", client)
-    except Exception as exc:
-        logger.warning("Drift API %s failed after retries: %s", path, exc)
-        return None
+    return get_or_none(f"{DRIFT_API}{path}", client, log_label="Drift API")
 
 
-def _float(val) -> Optional[float]:
-    try:
-        return float(val) if val is not None else None
-    except (TypeError, ValueError):
-        return None
+_float = safe_float
 
 
 def _risk_tier(symbol: str) -> str:
@@ -94,60 +78,59 @@ def _snapshot_avg(db: Session, opp_id: int, days: int) -> Optional[float]:
     return float(sum(r.apy for r in rows) / len(rows))
 
 
-def _fetch_if_market_data(client: httpx.Client) -> dict[int, dict]:
-    """Fetch insurance fund vault addresses and staked shares from spotMarketAccounts.
+def _if_vault_pda(market_index: int) -> str:
+    """Derive the Insurance Fund vault PDA for a given market index."""
+    pda, _ = Pubkey.find_program_address(
+        [b"insurance_fund_vault", market_index.to_bytes(2, "little")],
+        DRIFT_PROGRAM,
+    )
+    return str(pda)
 
-    Returns dict keyed by marketIndex with deposit_address, tvl_tokens, decimals.
+
+def _fetch_vault_token_balances(
+    vault_map: dict[int, str], client: httpx.Client,
+) -> dict[int, float]:
+    """Fetch actual token balances for IF vault addresses via Helius RPC.
+
+    Takes {market_index: vault_pubkey}, returns {market_index: balance_tokens}.
     """
+    if not HELIUS_RPC_URL or not vault_map:
+        return {}
+
+    pubkeys = list(vault_map.values())
+    idx_by_pubkey = {v: k for k, v in vault_map.items()}
+
     try:
-        r = client.get(f"{DRIFT_MAINNET_API}/stats/spotMarketAccounts", timeout=30)
-        r.raise_for_status()
-        raw = r.json()
+        resp = client.post(
+            HELIUS_RPC_URL,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getMultipleAccounts",
+                "params": [pubkeys, {"encoding": "jsonParsed"}],
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
     except Exception as exc:
-        logger.warning("Drift mainnet API /stats/spotMarketAccounts failed: %s", exc)
+        logger.warning("Helius RPC getMultipleAccounts failed: %s", exc)
         return {}
 
-    if isinstance(raw, dict):
-        raw = raw.get("result", [])
-    if not isinstance(raw, list):
-        logger.warning("Unexpected /stats/spotMarketAccounts response type: %s", type(raw))
-        return {}
-
-    result: dict[int, dict] = {}
-    for acct in raw:
-        market_index = acct.get("marketIndex")
-        if market_index is None:
+    accounts = data.get("result", {}).get("value", [])
+    balances: dict[int, float] = {}
+    for pubkey, acct in zip(pubkeys, accounts):
+        if acct is None:
+            continue
+        try:
+            parsed = acct["data"]["parsed"]["info"]["tokenAmount"]
+            balance = float(parsed["uiAmount"])
+            balances[idx_by_pubkey[pubkey]] = balance
+        except (KeyError, TypeError, ValueError):
             continue
 
-        insurance_fund = acct.get("insuranceFund", {})
-        vault = insurance_fund.get("vault")
-        total_shares_hex = insurance_fund.get("totalShares")
-        decimals = acct.get("decimals", 6)
-
-        tvl_tokens = None
-        if total_shares_hex is not None:
-            try:
-                tvl_tokens = int(total_shares_hex, 16) / 10**decimals
-            except (ValueError, TypeError):
-                pass
-
-        unstaking_period_days = None
-        unstaking_hex = insurance_fund.get("unstakingPeriod")
-        if unstaking_hex is not None:
-            try:
-                unstaking_period_days = round(int(unstaking_hex, 16) / 86400, 1)
-            except (ValueError, TypeError):
-                pass
-
-        result[int(market_index)] = {
-            "deposit_address": vault,
-            "tvl_tokens": tvl_tokens,
-            "decimals": decimals,
-            "unstaking_period_days": unstaking_period_days,
-        }
-
-    logger.info("Drift spotMarketAccounts: %d markets with IF data", len(result))
-    return result
+    logger.info("Helius RPC: fetched %d IF vault balances", len(balances))
+    return balances
 
 
 def _fetch_vault_apys(client: httpx.Client) -> dict[str, dict]:
@@ -185,87 +168,13 @@ def _fetch_vault_apys(client: httpx.Client) -> dict[str, dict]:
     return result
 
 
-
-def _upsert_opportunity(
-    db: Session,
-    protocol: Protocol,
-    external_id: str,
-    name: str,
-    category: str,
-    tokens: list[str],
-    apy_current: Optional[float],
-    tvl_usd: Optional[float],
-    deposit_address: Optional[str],
-    risk_tier: str,
-    min_deposit: Optional[float],
-    extra: dict,
-    now: datetime,
-    apy_7d_avg: Optional[float] = None,
-    apy_30d_avg: Optional[float] = None,
-    lock_period_days: Optional[int] = None,
-    liquidity_available_usd: Optional[float] = None,
-    is_automated: Optional[bool] = None,
-) -> YieldOpportunity:
-    opp = db.query(YieldOpportunity).filter(YieldOpportunity.external_id == external_id).first()
-
-    if opp:
-        opp.name = name
-        opp.apy_current = apy_current
-        opp.apy_7d_avg = apy_7d_avg
-        opp.apy_30d_avg = apy_30d_avg
-        opp.tvl_usd = tvl_usd
-        opp.tokens = tokens
-        opp.deposit_address = deposit_address
-        opp.protocol_name = "Drift"
-        opp.is_active = True
-        opp.extra_data = extra
-        opp.liquidity_available_usd = liquidity_available_usd
-        opp.is_automated = is_automated
-        if lock_period_days is not None:
-            opp.lock_period_days = lock_period_days
-        opp.updated_at = now
-    else:
-        opp = YieldOpportunity(
-            protocol_id=protocol.id,
-            external_id=external_id,
-            name=name,
-            category=category,
-            tokens=tokens,
-            apy_current=apy_current,
-            apy_7d_avg=apy_7d_avg,
-            apy_30d_avg=apy_30d_avg,
-            tvl_usd=tvl_usd,
-            deposit_address=deposit_address,
-            risk_tier=risk_tier,
-            protocol_name="Drift",
-            is_active=True,
-            extra_data=extra,
-            min_deposit=min_deposit,
-            lock_period_days=lock_period_days or 0,
-            liquidity_available_usd=liquidity_available_usd,
-            is_automated=is_automated,
-        )
-        db.add(opp)
-        db.flush()
-
-    snapshot = YieldSnapshot(
-        opportunity_id=opp.id,
-        apy=apy_current,
-        tvl_usd=tvl_usd,
-        snapshot_at=now,
-        source="drift_api",
-    )
-    db.add(snapshot)
-    return opp
-
-
 def fetch_insurance_fund(
     client: httpx.Client,
     protocol: Protocol,
     db: Session,
     now: datetime,
 ) -> tuple[int, dict[int, str]]:
-    """Fetch insurance fund staking opportunities.
+    """Fetch stablecoin insurance fund staking opportunities.
 
     Returns (count, market_index_map) where market_index_map is {marketIndex: symbol}.
     """
@@ -280,35 +189,37 @@ def fetch_insurance_fund(
         logger.error("Unexpected /stats/insuranceFund response")
         return 0, {}
 
-    # Fetch IF vault addresses and staked shares
-    if_market_data = _fetch_if_market_data(client)
-
+    # Build market_index_map (all symbols) and stablecoin vault map (PDAs)
     market_index_map: dict[int, str] = {}
-    count = 0
-
+    stable_vaults: dict[int, str] = {}
     for entry in data:
         idx = entry.get("marketIndex")
         symbol = entry.get("symbol", "")
         if idx is not None and symbol:
             market_index_map[int(idx)] = symbol
+        if symbol in STABLE_SYMBOLS and idx is not None:
+            stable_vaults[int(idx)] = _if_vault_pda(int(idx))
 
+    # Fetch actual on-chain vault balances for stablecoin IFs
+    vault_balances = _fetch_vault_token_balances(stable_vaults, client)
+
+    count = 0
+    for entry in data:
+        idx = entry.get("marketIndex")
+        symbol = entry.get("symbol", "")
         apy = _float(entry.get("apy"))
-        if apy is None:
+
+        # Only ingest stablecoin IFs
+        if symbol not in STABLE_SYMBOLS or apy is None or idx is None:
             continue
 
-        # Enrich with spotMarketAccounts data
-        mkt_data = if_market_data.get(int(idx), {}) if idx is not None else {}
-        deposit_address = mkt_data.get("deposit_address")
-        tvl_tokens = mkt_data.get("tvl_tokens")
+        deposit_address = stable_vaults.get(int(idx))
 
-        # TVL in USD: stablecoins map 1:1, others need a price oracle
-        tvl_usd = tvl_tokens if symbol in STABLE_SYMBOLS and tvl_tokens is not None else None
-
-        # Unstaking period from spotMarketAccounts
-        unstaking_days = mkt_data.get("unstaking_period_days")
+        # TVL from on-chain vault balance (stablecoins = 1:1 USD)
+        tvl_usd = vault_balances.get(int(idx))
 
         external_id = f"drift-if-{idx}"
-        opp = _upsert_opportunity(
+        opp = upsert_opportunity(
             db=db,
             protocol=protocol,
             external_id=external_id,
@@ -324,20 +235,21 @@ def fetch_insurance_fund(
                 "market_index": idx,
                 "source": "drift_api",
                 "type": "insurance_fund",
-                "tvl_tokens": tvl_tokens,
+                "vault_balance_tokens": tvl_usd,
                 "deposit_address": deposit_address,
-                "unstaking_period_days": unstaking_days,
+                "unstaking_period_days": IF_UNSTAKING_PERIOD_DAYS,
                 "protocol_url": f"{DRIFT_BASE}/vaults/insurance-fund-vaults",
             },
             now=now,
-            lock_period_days=int(unstaking_days) if unstaking_days is not None else None,
+            source="drift_api",
+            lock_period_days=IF_UNSTAKING_PERIOD_DAYS,
             is_automated=True,
         )
         opp.apy_7d_avg = _snapshot_avg(db, opp.id, 7)
         opp.apy_30d_avg = _snapshot_avg(db, opp.id, 30)
         count += 1
 
-    logger.info("Drift insurance fund: %d entries", count)
+    logger.info("Drift insurance fund: %d stablecoin entries", count)
     return count, market_index_map
 
 
@@ -426,7 +338,7 @@ def fetch_vaults(
         max_tokens = _float(vault.get("maxTokens"))
         vault_liq_usd = (max_tokens - net_deposits) if max_tokens and max_tokens > 0 else None
 
-        opp = _upsert_opportunity(
+        opp = upsert_opportunity(
             db=db,
             protocol=protocol,
             external_id=external_id,
@@ -440,6 +352,7 @@ def fetch_vaults(
             min_deposit=min_deposit_raw,
             extra=extra,
             now=now,
+            source="drift_api",
             apy_7d_avg=apy_7d,
             apy_30d_avg=apy_30d,
             liquidity_available_usd=round(vault_liq_usd, 2) if vault_liq_usd is not None else None,

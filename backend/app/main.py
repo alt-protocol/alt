@@ -112,6 +112,14 @@ SEED_PROTOCOLS = [
 ]
 
 
+def _validate_environment():
+    """Fail fast if critical env vars are missing."""
+    required = ["DATABASE_URL", "HELIUS_API_KEY", "HELIUS_RPC_URL"]
+    missing = [v for v in required if not os.getenv(v)]
+    if missing:
+        raise RuntimeError(f"Missing required env vars: {', '.join(missing)}")
+
+
 def _seed_protocols():
     """Insert protocol rows if missing. Idempotent — safe to run every startup."""
     db = SessionLocal()
@@ -148,6 +156,8 @@ def _run_initial_fetch():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _validate_environment()
+
     # Seed protocols before fetchers (they depend on protocol FK rows)
     _seed_protocols()
 

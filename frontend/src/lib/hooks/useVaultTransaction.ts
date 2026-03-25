@@ -24,7 +24,7 @@ import { HELIUS_RPC_URL } from "../constants";
 export type TxStatus = "idle" | "building" | "signing" | "confirming" | "success" | "error";
 
 interface UseVaultTransactionReturn {
-  execute: (buildIxs: () => Promise<BuildTxResult>) => Promise<void>;
+  execute: (buildIxs: () => Promise<BuildTxResult>) => Promise<boolean>;
   status: TxStatus;
   error: string | null;
   txSignature: string | null;
@@ -49,7 +49,7 @@ export function useVaultTransaction(
       if (!signer) {
         setError("Wallet not connected");
         setStatus("error");
-        return;
+        return false;
       }
 
       try {
@@ -101,6 +101,7 @@ export function useVaultTransaction(
           .send();
 
         setStatus("success");
+        return true;
       } catch (err) {
         const msg =
           err instanceof Error ? err.message : "Transaction failed";
@@ -112,6 +113,7 @@ export function useVaultTransaction(
           setError(msg);
         }
         setStatus("error");
+        return false;
       }
     },
     [signer],

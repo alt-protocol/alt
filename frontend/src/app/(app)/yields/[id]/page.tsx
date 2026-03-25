@@ -6,53 +6,30 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { api } from "@/lib/api";
+import { fmtApy, fmtTvl, fmtDateShort, fmtCategory } from "@/lib/format";
+import { queryKeys } from "@/lib/queryKeys";
+import RefreshButton from "@/components/RefreshButton";
 
 const ApyChart = dynamic(() => import("@/components/ApyChart"), { ssr: false });
 import { ProtocolChip } from "@/components/ProtocolChip";
 import { hasAdapter } from "@/lib/protocols";
+import StatsGrid from "@/components/StatsGrid";
+import PeriodSelector from "@/components/PeriodSelector";
 const DepositWithdrawPanel = dynamic(
   () => import("@/components/DepositWithdrawPanel"),
   { ssr: false }
 );
-
-function fmtApy(n: number | null | undefined): string {
-  if (n == null) return "—";
-  return `${n.toFixed(2)}%`;
-}
-
-function fmtTvl(n: number | null | undefined): string {
-  if (n == null) return "—";
-  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`;
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
-  return `$${n.toFixed(0)}`;
-}
-
-function fmtDate(s: string | null | undefined): string {
-  if (!s) return "—";
-  const d = new Date(s);
-  return d.toLocaleString("en-US", { month: "short", day: "numeric" });
-}
-
-function fmtCategory(s: string): string {
-  return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
+const MultiplyPanel = dynamic(
+  () => import("@/components/MultiplyPanel"),
+  { ssr: false }
+);
 
 function truncate(s: string, len = 20): string {
   if (s.length <= len) return s;
-  return s.slice(0, 8) + "…" + s.slice(-8);
+  return s.slice(0, 8) + "\u2026" + s.slice(-8);
 }
 
-type Period = "7d" | "30d" | "90d";
-
-function StatCell({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="bg-surface-low px-5 py-4">
-      <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">{label}</p>
-      <p className="font-display text-xl tracking-[-0.02em]">{value}</p>
-    </div>
-  );
-}
+import type { Period } from "@/components/PeriodSelector";
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -69,13 +46,13 @@ export default function YieldDetailPage() {
   const [period, setPeriod] = useState<Period>("7d");
 
   const detailQuery = useQuery({
-    queryKey: ["yield", id],
+    queryKey: queryKeys.yields.detail(id),
     queryFn: () => api.getYieldDetail(Number(id)),
     enabled: !!id,
   });
 
   const historyQuery = useQuery({
-    queryKey: ["yieldHistory", id, period],
+    queryKey: queryKeys.yields.history(id, period),
     queryFn: () => api.getYieldHistory(Number(id), period),
     enabled: !!id,
     initialData: period === "7d" && detailQuery.data?.recent_snapshots?.length
@@ -87,7 +64,7 @@ export default function YieldDetailPage() {
   const historyPoints = historyQuery.data?.data ?? [];
 
   const chartData = historyPoints.map((pt) => ({
-    date: fmtDate(pt.snapshot_at),
+    date: fmtDateShort(pt.snapshot_at),
     apy: pt.apy != null ? parseFloat(pt.apy.toFixed(2)) : null,
   }));
 
@@ -133,15 +110,26 @@ export default function YieldDetailPage() {
             <span className="bg-surface-high text-foreground-muted rounded-sm px-2.5 py-0.5 text-[0.65rem] font-sans uppercase tracking-[0.05em]">
               {fmtCategory(y.category)}
             </span>
+            <RefreshButton
+              queryKeys={[
+                queryKeys.yields.detail(id),
+                queryKeys.yields.history(id, period),
+              ]}
+              className="ml-auto"
+            />
           </div>
 
           {/* Stats strip */}
-          <div className="grid grid-cols-4 gap-[1px] bg-outline-ghost rounded-sm overflow-hidden mb-[1.5rem]">
-            <StatCell label="APY Now" value={fmtApy(y.apy_current)} />
-            <StatCell label="7D Avg" value={fmtApy(y.apy_7d_avg)} />
-            <StatCell label="30D Avg" value={fmtApy(y.apy_30d_avg)} />
-            <StatCell label="TVL" value={fmtTvl(y.tvl_usd)} />
-          </div>
+          <StatsGrid
+            stats={[
+              { label: "APY Now", value: fmtApy(y.apy_current) },
+              { label: "7D Avg", value: fmtApy(y.apy_7d_avg) },
+              { label: "30D Avg", value: fmtApy(y.apy_30d_avg) },
+              { label: "TVL", value: fmtTvl(y.tvl_usd) },
+            ]}
+            columns="grid-cols-4"
+            className="mb-[1.5rem]"
+          />
 
           {/* Two-column layout */}
           <div className="flex gap-[1px] bg-outline-ghost rounded-sm overflow-hidden mb-[1.5rem]">
@@ -200,7 +188,9 @@ export default function YieldDetailPage() {
             </div>
 
             {/* Action card */}
-            {y.category !== "multiply" && y.protocol?.slug && hasAdapter(y.protocol.slug) && y.deposit_address ? (
+            {y.category === "multiply" && y.protocol?.slug && hasAdapter(y.protocol.slug) && y.deposit_address ? (
+              <MultiplyPanel yield_={y} protocolSlug={y.protocol.slug} />
+            ) : y.category !== "multiply" && y.protocol?.slug && hasAdapter(y.protocol.slug) && y.deposit_address ? (
               <DepositWithdrawPanel yield_={y} protocolSlug={y.protocol.slug} />
             ) : (
               <div className="flex-[1] bg-surface-low px-6 py-5 flex flex-col justify-between">
@@ -229,21 +219,7 @@ export default function YieldDetailPage() {
           <div className="bg-surface-low rounded-sm px-6 py-5">
             <div className="flex items-center justify-between mb-4">
               <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">APY History</p>
-              <div className="flex gap-1">
-                {(["7d", "30d", "90d"] as Period[]).map((p) => (
-                  <button
-                    key={p}
-                    onClick={() => setPeriod(p)}
-                    className={`text-[0.7rem] font-sans rounded-sm px-3 py-1 uppercase tracking-[0.04em] transition-colors ${
-                      period === p
-                        ? "bg-neon text-on-neon"
-                        : "text-foreground-muted hover:text-foreground"
-                    }`}
-                  >
-                    {p}
-                  </button>
-                ))}
-              </div>
+              <PeriodSelector value={period} onChange={setPeriod} variant="neon" />
             </div>
 
             {historyQuery.isLoading && (

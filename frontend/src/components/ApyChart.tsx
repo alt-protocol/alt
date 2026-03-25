@@ -32,7 +32,7 @@ export default function ApyChart({ data }: ApyChartProps) {
         />
         <Tooltip
           formatter={(value) => [`${Number(value).toFixed(2)}%`, "APY"]}
-          contentStyle={{ background: "#1c1b1b", border: "none", borderRadius: 2, fontSize: 11 }}
+          contentStyle={{ background: "var(--surface-low)", border: "none", borderRadius: 2, fontSize: 11 }}
           labelStyle={{ color: "var(--foreground-muted)" }}
           itemStyle={{ color: "var(--neon-primary)" }}
         />

@@ -6,42 +6,24 @@ Jupiter Lend API endpoints used:
   - GET /lend/v1/earn/earnings?user={wallet}&positions={pos1},{pos2} — PnL per position
 """
 import logging
-import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 
 import httpx
 from sqlalchemy.orm import Session
 
 from app.models.base import SessionLocal
-from app.models.user_position import TrackedWallet, UserPosition, UserPositionEvent
+from app.models.user_position import TrackedWallet
 from app.models.yield_opportunity import YieldOpportunity
+from app.services.utils import safe_float, cached
 
 logger = logging.getLogger(__name__)
 
 JUPITER_LEND_API = "https://api.jup.ag/lend/v1"
 
-# ---------------------------------------------------------------------------
-# Simple TTL cache
-# ---------------------------------------------------------------------------
-_cache: dict[str, tuple[float, Any]] = {}
 
-
-def _cached(key: str, ttl: float, fn):
-    now = time.monotonic()
-    if key in _cache and (now - _cache[key][0]) < ttl:
-        return _cache[key][1]
-    result = fn()
-    if result is not None:
-        _cache[key] = (now, result)
-    return result
-
-
-def _float(val) -> Optional[float]:
-    try:
-        return float(val) if val is not None else None
-    except (TypeError, ValueError):
-        return None
+_float = safe_float
+_cached = cached
 
 
 def _build_headers() -> dict[str, str]:
@@ -322,30 +304,8 @@ def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> in
                 earn_positions = _fetch_earn_positions(
                     wallet.wallet_address, client, db, now,
                 )
-                for pos_data in earn_positions:
-                    position = UserPosition(
-                        wallet_address=pos_data["wallet_address"],
-                        protocol_slug=pos_data["protocol_slug"],
-                        product_type=pos_data["product_type"],
-                        external_id=pos_data["external_id"],
-                        opportunity_id=pos_data.get("opportunity_id"),
-                        deposit_amount=pos_data.get("deposit_amount"),
-                        deposit_amount_usd=pos_data.get("deposit_amount_usd"),
-                        pnl_usd=pos_data.get("pnl_usd"),
-                        pnl_pct=pos_data.get("pnl_pct"),
-                        initial_deposit_usd=pos_data.get("initial_deposit_usd"),
-                        opened_at=pos_data.get("opened_at"),
-                        held_days=pos_data.get("held_days"),
-                        apy=pos_data.get("apy"),
-                        is_closed=pos_data.get("is_closed"),
-                        closed_at=pos_data.get("closed_at"),
-                        close_value_usd=pos_data.get("close_value_usd"),
-                        token_symbol=pos_data.get("token_symbol"),
-                        extra_data=pos_data.get("extra_data"),
-                        snapshot_at=now,
-                    )
-                    db.add(position)
-                    total_snapshots += 1
+                from app.services.utils import store_position_rows
+                total_snapshots += store_position_rows(db, earn_positions, now)
 
                 db.flush()
                 logger.info(

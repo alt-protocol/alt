@@ -1,165 +1,20 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { useState, useMemo, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
-import { useSelectedWalletAccount } from "@solana/react";
-import { api, UserPositionOut, UserPositionEventOut } from "@/lib/api";
-import { ProtocolChip } from "@/components/ProtocolChip";
-import WalletButton from "@/components/WalletButton";
+import { fmtUsd, fmtPct, fmtApy, pnlColor } from "@/lib/format";
+import PositionTable, { getColumnsForType } from "@/components/PositionTable";
+import StatsGrid from "@/components/StatsGrid";
+import PeriodSelector from "@/components/PeriodSelector";
+import TabBar from "@/components/TabBar";
+import EventsTable from "@/components/EventsTable";
+import { LoadingSkeleton, NoWalletState, ErrorState, SyncingState } from "@/components/PortfolioStates";
+import RefreshButton from "@/components/RefreshButton";
+import { usePortfolioData } from "@/lib/hooks/usePortfolioData";
+import { queryKeys } from "@/lib/queryKeys";
+import type { ChartPoint } from "@/lib/hooks/usePortfolioData";
+import type { UserPositionOut } from "@/lib/api";
 
 const PortfolioChart = dynamic(() => import("@/components/PortfolioChart"), { ssr: false });
-
-// Utility functions
-function fmtUsd(n: number | null | undefined): string {
-  if (n == null) return "—";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
-}
-
-function fmtPct(n: number | null | undefined): string {
-  if (n == null) return "—";
-  const sign = n > 0 ? "+" : "";
-  return `${sign}${n.toFixed(2)}%`;
-}
-
-function fmtApy(n: number | null | undefined): string {
-  if (n == null) return "—";
-  return `${n.toFixed(2)}%`;
-}
-
-function fmtDays(n: number | null | undefined): string {
-  if (n == null) return "—";
-  return `${n.toFixed(1)}d`;
-}
-
-function fmtDate(s: string | null | undefined): string {
-  if (!s) return "—";
-  const d = new Date(s);
-  return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
-}
-
-function truncateId(id: string, len = 12): string {
-  if (id.length <= len) return id;
-  return id.slice(0, len) + "…";
-}
-
-function pnlColor(n: number | null | undefined): string {
-  if (n == null) return "text-foreground-muted";
-  if (n > 0) return "text-neon";
-  if (n < 0) return "text-red-400";
-  return "text-foreground-muted";
-}
-
-function ApyCell({ position }: { position: UserPositionOut }) {
-  const forwardApy = (position.extra_data as Record<string, unknown> | null)?.forward_apy as number | null | undefined;
-  const showBoth = forwardApy != null && position.apy !== forwardApy;
-  return (
-    <td className="px-5 py-3 text-right">
-      <span className="text-neon">{fmtApy(position.apy)}</span>
-      {showBoth && (
-        <div className="text-xs text-foreground-muted mt-0.5">
-          {fmtApy(forwardApy)} mkt
-        </div>
-      )}
-    </td>
-  );
-}
-
-interface PositionCardField {
-  label: string;
-  value: string;
-  colorClass?: string;
-}
-
-function PositionCard({ position, showProtocol, fields, onClick }: { position: UserPositionOut; showProtocol: boolean; fields: PositionCardField[]; onClick?: () => void }) {
-  return (
-    <div className={`bg-surface-low rounded-sm p-4 space-y-3${onClick ? " cursor-pointer" : ""}`} onClick={onClick}>
-      <div className="flex items-center justify-between">
-        <span className="font-display text-sm tracking-[-0.02em]">{position.token_symbol ?? "—"}</span>
-        {showProtocol && <ProtocolChip slug={position.protocol_slug} />}
-      </div>
-      {showProtocol && (
-        <span className="inline-block bg-surface-high text-foreground-muted rounded-sm px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.05em]">
-          {fmtProductType(position.product_type)}
-        </span>
-      )}
-      <div className="space-y-1.5">
-        {fields.map((f) => (
-          <div key={f.label} className="flex justify-between items-baseline">
-            <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">{f.label}</span>
-            <span className={`text-[0.8rem] font-sans tabular-nums ${f.colorClass ?? "text-foreground"}`}>{f.value}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function getPositionFields(position: UserPositionOut, type: string): PositionCardField[] {
-  const forwardApy = (position.extra_data as Record<string, unknown> | null)?.forward_apy as number | null | undefined;
-  const apyStr = forwardApy != null && position.apy !== forwardApy
-    ? `${fmtApy(position.apy)} (${fmtApy(forwardApy)} mkt)`
-    : fmtApy(position.apy);
-
-  switch (type) {
-    case "lending":
-      return [
-        { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
-        { label: "Supply APY", value: apyStr, colorClass: "text-neon" },
-        { label: "Interest Earned", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
-        { label: "Days Held", value: fmtDays(position.held_days) },
-      ];
-    case "multiply":
-      return [
-        { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
-        { label: "Net APY", value: apyStr, colorClass: "text-neon" },
-        { label: "PnL ($)", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
-        { label: "PnL (%)", value: fmtPct(position.pnl_pct), colorClass: pnlColor(position.pnl_pct) },
-        { label: "Days Held", value: fmtDays(position.held_days) },
-      ];
-    case "earn_vault":
-      return [
-        { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
-        { label: "APY", value: apyStr, colorClass: "text-neon" },
-        { label: "Interest Earned", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
-        { label: "Days Held", value: fmtDays(position.held_days) },
-      ];
-    case "insurance_fund":
-      return [
-        { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
-        { label: "APY", value: apyStr, colorClass: "text-neon" },
-        { label: "PnL", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
-        { label: "Days Held", value: fmtDays(position.held_days) },
-      ];
-    case "earn":
-      return [
-        { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
-        { label: "APY", value: apyStr, colorClass: "text-neon" },
-        { label: "Interest Earned", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
-        { label: "Days Held", value: fmtDays(position.held_days) },
-      ];
-    default: // "all"
-      return [
-        { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
-        { label: "PnL", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
-        { label: "APY", value: apyStr, colorClass: "text-neon" },
-      ];
-  }
-}
-
-function fmtProductType(t: string): string {
-  const map: Record<string, string> = {
-    earn_vault: "Earn Vault",
-    earn: "Earn",
-    lending: "Lend",
-    multiply: "Multiply",
-    lp: "LP",
-    insurance: "Insurance",
-    insurance_fund: "Insurance Fund",
-  };
-  return map[t] ?? t;
-}
 
 const SIDEBAR_TYPES = [
   { key: "all", label: "ALL" },
@@ -169,125 +24,6 @@ const SIDEBAR_TYPES = [
   { key: "insurance_fund", label: "INSURANCE FUNDS" },
   { key: "earn", label: "EARN" },
 ];
-
-function LoadingSkeleton() {
-  return (
-    <div className="space-y-4">
-      {/* Stats skeleton */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-[1px] bg-outline-ghost rounded-sm overflow-hidden">
-        {[0, 1, 2, 3, 4].map((i) => (
-          <div key={i} className="bg-surface-low px-5 py-4">
-            <div className="bg-surface-high animate-pulse rounded-sm h-3 w-16 mb-2" />
-            <div className="bg-surface-high animate-pulse rounded-sm h-7 w-28" />
-          </div>
-        ))}
-      </div>
-      {/* Chart skeleton */}
-      <div className="bg-surface-low rounded-sm p-5">
-        <div className="bg-surface-high animate-pulse rounded-sm h-[180px] w-full" />
-      </div>
-      {/* Table skeleton */}
-      <div className="bg-surface-low rounded-sm overflow-hidden">
-        <div className="bg-surface h-10" />
-        {[0, 1, 2, 3, 4].map((i) => (
-          <div key={i} className="flex gap-4 px-5 py-3">
-            <div className="bg-surface-high animate-pulse rounded-sm h-4 flex-1" />
-            <div className="bg-surface-high animate-pulse rounded-sm h-4 w-24" />
-            <div className="bg-surface-high animate-pulse rounded-sm h-4 w-20" />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function NoWalletState() {
-  return (
-    <div className="bg-surface-low rounded-sm px-6 py-12 text-center">
-      <p className="uppercase text-[0.65rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">
-        No wallet detected
-      </p>
-      <p className="font-display text-lg tracking-[-0.02em] mb-5">
-        Connect to view your positions
-      </p>
-      <WalletButton variant="cta" />
-    </div>
-  );
-}
-
-function ErrorState() {
-  return (
-    <div className="bg-surface-low rounded-sm px-6 py-12 text-center">
-      <p className="uppercase text-[0.65rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">
-        Error loading positions
-      </p>
-      <p className="font-display text-lg tracking-[-0.02em]">
-        Could not fetch portfolio data
-      </p>
-    </div>
-  );
-}
-
-function SyncingState() {
-  return (
-    <div className="bg-surface-low rounded-sm px-6 py-12 text-center">
-      <p className="uppercase text-[0.65rem] tracking-[0.05em] text-foreground-muted font-sans mb-1 animate-pulse">
-        Syncing
-      </p>
-      <p className="font-display text-lg tracking-[-0.02em]">
-        Fetching on-chain positions...
-      </p>
-      <p className="text-foreground-muted text-[0.75rem] font-sans mt-2">
-        This may take a moment on first load
-      </p>
-    </div>
-  );
-}
-
-interface StatsRowProps {
-  totalValue: number;
-  totalPnlUsd: number;
-  roi: number;
-  weightedApy: number;
-  count: number;
-}
-
-function StatsRow({ totalValue, totalPnlUsd, roi, weightedApy, count }: StatsRowProps) {
-  return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-[1px] bg-outline-ghost rounded-sm overflow-hidden mb-[2.25rem]">
-      <div className="bg-surface-low px-5 py-4">
-        <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">Net Value</p>
-        <p className="font-display text-2xl tracking-[-0.02em] tabular-nums">{fmtUsd(totalValue)}</p>
-      </div>
-      <div className="bg-surface-low px-5 py-4">
-        <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">PnL ($)</p>
-        <p className={`font-display text-2xl tracking-[-0.02em] tabular-nums ${pnlColor(totalPnlUsd)}`}>
-          {fmtUsd(totalPnlUsd)}
-        </p>
-      </div>
-      <div className="bg-surface-low px-5 py-4">
-        <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">ROI</p>
-        <p className={`font-display text-2xl tracking-[-0.02em] tabular-nums ${pnlColor(roi)}`}>
-          {fmtPct(roi)}
-        </p>
-      </div>
-      <div className="bg-surface-low px-5 py-4">
-        <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">Avg APY</p>
-        <p className="font-display text-2xl tracking-[-0.02em] tabular-nums text-neon">{fmtApy(weightedApy)}</p>
-      </div>
-      <div className="bg-surface-low px-5 py-4">
-        <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">Positions</p>
-        <p className="font-display text-2xl tracking-[-0.02em] tabular-nums">{count}</p>
-      </div>
-    </div>
-  );
-}
-
-interface ChartPoint {
-  date: string;
-  value: number | null;
-  pnl: number | null;
-}
 
 interface ChartCardProps {
   chartData: ChartPoint[];
@@ -301,19 +37,7 @@ function ChartCard({ chartData, period, onPeriod, isSuccess }: ChartCardProps) {
     <div className="bg-surface-low rounded-sm mb-[2.25rem]">
       <div className="px-5 pt-4 pb-2 flex items-center justify-between">
         <h2 className="font-display text-sm uppercase tracking-[0.03em]">Net Value</h2>
-        <div className="flex items-center gap-1">
-          {(["7d", "30d", "90d"] as const).map((p) => (
-            <button
-              key={p}
-              onClick={() => onPeriod(p)}
-              className={`rounded-sm px-3 py-1 text-[0.7rem] uppercase tracking-[0.05em] font-sans transition-colors ${
-                period === p ? "bg-surface-high text-foreground" : "text-foreground-muted hover:text-foreground"
-              }`}
-            >
-              {p.toUpperCase()}
-            </button>
-          ))}
-        </div>
+        <PeriodSelector value={period} onChange={onPeriod} />
       </div>
 
       {isSuccess && chartData.length === 0 ? (
@@ -361,494 +85,26 @@ function TypeSidebar({ byType, totalCount, activeType, onSelect }: TypeSidebarPr
   );
 }
 
-interface PositionsPanelProps {
-  positions: UserPositionOut[];
-  activeType: string;
-}
-
-function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
-  const router = useRouter();
-  if (positions.length === 0) {
-    const typeLabel = SIDEBAR_TYPES.find((t) => t.key === activeType)?.label ?? activeType.toUpperCase();
-    return (
-      <div className="flex-1 bg-surface flex flex-col items-center justify-center py-16">
-        <p className="uppercase text-[0.65rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">
-          No {typeLabel} positions found
-        </p>
-        <p className="font-display text-lg tracking-[-0.02em] text-foreground-muted">
-          Nothing to display
-        </p>
-      </div>
-    );
-  }
-
-  if (activeType === "lending") {
-    return (
-      <div className="flex-1 bg-surface">
-        <div className="lg:hidden space-y-2 p-3">
-          {positions.map((p) => (
-            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "lending")} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined} />
-          ))}
-        </div>
-        <div className="hidden lg:block overflow-x-auto">
-          <table className="w-full text-[0.8rem] font-sans">
-            <thead>
-              <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
-                <th className="text-left px-5 py-2.5 font-medium">Market</th>
-                <th className="text-left px-5 py-2.5 font-medium">Token</th>
-                <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
-                <th className="text-right px-5 py-2.5 font-medium">Supply APY</th>
-                <th className="text-right px-5 py-2.5 font-medium">Interest Earned</th>
-                <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
-                <th className="px-5 py-2.5" />
-              </tr>
-            </thead>
-            <tbody>
-              {positions.map((p) => (
-                <tr key={p.id} className={`hover:bg-surface-high transition-colors tabular-nums${p.opportunity_id ? " cursor-pointer" : ""}`} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined}>
-                  <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
-                  <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
-                  <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
-                  <ApyCell position={p} />
-                  <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
-                  <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
-                  <td className="px-5 py-3 text-right">
-                    {p.opportunity_id && (
-                      <button onClick={(e) => { e.stopPropagation(); router.push(`/yields/${p.opportunity_id}`); }} className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors">Details</button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
-  }
-
-  if (activeType === "multiply") {
-    return (
-      <div className="flex-1 bg-surface">
-        <div className="lg:hidden space-y-2 p-3">
-          {positions.map((p) => (
-            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "multiply")} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined} />
-          ))}
-        </div>
-        <div className="hidden lg:block overflow-x-auto">
-          <table className="w-full text-[0.8rem] font-sans">
-            <thead>
-              <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
-                <th className="text-left px-5 py-2.5 font-medium">Strategy</th>
-                <th className="text-left px-5 py-2.5 font-medium">Token</th>
-                <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
-                <th className="text-right px-5 py-2.5 font-medium">Net APY</th>
-                <th className="text-right px-5 py-2.5 font-medium">PnL ($)</th>
-                <th className="text-right px-5 py-2.5 font-medium">PnL (%)</th>
-                <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
-                <th className="px-5 py-2.5" />
-              </tr>
-            </thead>
-            <tbody>
-              {positions.map((p) => (
-                <tr key={p.id} className={`hover:bg-surface-high transition-colors tabular-nums${p.opportunity_id ? " cursor-pointer" : ""}`} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined}>
-                  <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
-                  <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
-                  <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
-                  <ApyCell position={p} />
-                  <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
-                  <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_pct)}`}>{fmtPct(p.pnl_pct)}</td>
-                  <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
-                  <td className="px-5 py-3 text-right">
-                    {p.opportunity_id && (
-                      <button onClick={(e) => { e.stopPropagation(); router.push(`/yields/${p.opportunity_id}`); }} className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors">Details</button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
-  }
-
-  if (activeType === "earn_vault") {
-    return (
-      <div className="flex-1 bg-surface">
-        <div className="lg:hidden space-y-2 p-3">
-          {positions.map((p) => (
-            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "earn_vault")} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined} />
-          ))}
-        </div>
-        <div className="hidden lg:block overflow-x-auto">
-          <table className="w-full text-[0.8rem] font-sans">
-            <thead>
-              <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
-                <th className="text-left px-5 py-2.5 font-medium">Vault</th>
-                <th className="text-left px-5 py-2.5 font-medium">Token</th>
-                <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
-                <th className="text-right px-5 py-2.5 font-medium">APY</th>
-                <th className="text-right px-5 py-2.5 font-medium">Interest Earned</th>
-                <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
-                <th className="px-5 py-2.5" />
-              </tr>
-            </thead>
-            <tbody>
-              {positions.map((p) => (
-                <tr key={p.id} className={`hover:bg-surface-high transition-colors tabular-nums${p.opportunity_id ? " cursor-pointer" : ""}`} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined}>
-                  <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
-                  <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
-                  <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
-                  <ApyCell position={p} />
-                  <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
-                  <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
-                  <td className="px-5 py-3 text-right">
-                    {p.opportunity_id && (
-                      <button onClick={(e) => { e.stopPropagation(); router.push(`/yields/${p.opportunity_id}`); }} className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors">Details</button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
-  }
-
-  if (activeType === "insurance_fund") {
-    return (
-      <div className="flex-1 bg-surface">
-        <div className="lg:hidden space-y-2 p-3">
-          {positions.map((p) => (
-            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "insurance_fund")} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined} />
-          ))}
-        </div>
-        <div className="hidden lg:block overflow-x-auto">
-          <table className="w-full text-[0.8rem] font-sans">
-            <thead>
-              <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
-                <th className="text-left px-5 py-2.5 font-medium">Fund</th>
-                <th className="text-left px-5 py-2.5 font-medium">Token</th>
-                <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
-                <th className="text-right px-5 py-2.5 font-medium">APY</th>
-                <th className="text-right px-5 py-2.5 font-medium">PnL</th>
-                <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
-                <th className="px-5 py-2.5" />
-              </tr>
-            </thead>
-            <tbody>
-              {positions.map((p) => (
-                <tr key={p.id} className={`hover:bg-surface-high transition-colors tabular-nums${p.opportunity_id ? " cursor-pointer" : ""}`} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined}>
-                  <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
-                  <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
-                  <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
-                  <ApyCell position={p} />
-                  <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
-                  <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
-                  <td className="px-5 py-3 text-right">
-                    {p.opportunity_id && (
-                      <button onClick={(e) => { e.stopPropagation(); router.push(`/yields/${p.opportunity_id}`); }} className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors">Details</button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
-  }
-
-  if (activeType === "earn") {
-    return (
-      <div className="flex-1 bg-surface">
-        <div className="lg:hidden space-y-2 p-3">
-          {positions.map((p) => (
-            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "earn")} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined} />
-          ))}
-        </div>
-        <div className="hidden lg:block overflow-x-auto">
-          <table className="w-full text-[0.8rem] font-sans">
-            <thead>
-              <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
-                <th className="text-left px-5 py-2.5 font-medium">Vault</th>
-                <th className="text-left px-5 py-2.5 font-medium">Token</th>
-                <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
-                <th className="text-right px-5 py-2.5 font-medium">APY</th>
-                <th className="text-right px-5 py-2.5 font-medium">Interest Earned</th>
-                <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
-                <th className="px-5 py-2.5" />
-              </tr>
-            </thead>
-            <tbody>
-              {positions.map((p) => (
-                <tr key={p.id} className={`hover:bg-surface-high transition-colors tabular-nums${p.opportunity_id ? " cursor-pointer" : ""}`} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined}>
-                  <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
-                  <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
-                  <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
-                  <ApyCell position={p} />
-                  <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
-                  <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
-                  <td className="px-5 py-3 text-right">
-                    {p.opportunity_id && (
-                      <button onClick={(e) => { e.stopPropagation(); router.push(`/yields/${p.opportunity_id}`); }} className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors">Details</button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
-  }
-
-  // Default: ALL view
-  return (
-    <div className="flex-1 bg-surface">
-      <div className="lg:hidden space-y-2 p-3">
-        {positions.map((p) => (
-          <PositionCard key={p.id} position={p} showProtocol={true} fields={getPositionFields(p, "all")} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined} />
-        ))}
-      </div>
-      <div className="hidden lg:block overflow-x-auto">
-        <table className="w-full text-[0.8rem] font-sans">
-          <thead>
-            <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
-              <th className="text-left px-5 py-2.5 font-medium">Protocol</th>
-              <th className="text-left px-5 py-2.5 font-medium">Type</th>
-              <th className="text-left px-5 py-2.5 font-medium">Token</th>
-              <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
-              <th className="text-right px-5 py-2.5 font-medium">PnL</th>
-              <th className="text-right px-5 py-2.5 font-medium">APY</th>
-              <th className="px-5 py-2.5" />
-            </tr>
-          </thead>
-          <tbody>
-            {positions.map((p) => (
-              <tr key={p.id} className={`hover:bg-surface-high transition-colors tabular-nums${p.opportunity_id ? " cursor-pointer" : ""}`} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined}>
-                <td className="px-5 py-3">
-                  <ProtocolChip slug={p.protocol_slug} />
-                </td>
-                <td className="px-5 py-3 text-foreground-muted">{fmtProductType(p.product_type)}</td>
-                <td className="px-5 py-3 text-foreground">{p.token_symbol ?? "—"}</td>
-                <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
-                <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
-                <ApyCell position={p} />
-                <td className="px-5 py-3 text-right">
-                  {p.opportunity_id && (
-                    <button onClick={(e) => { e.stopPropagation(); router.push(`/yields/${p.opportunity_id}`); }} className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors">Details</button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-interface EventsTableProps {
-  events: UserPositionEventOut[];
-}
-
-function EventsTable({ events }: EventsTableProps) {
-  if (events.length === 0) {
-    return (
-      <div className="bg-surface-low rounded-sm px-6 py-12 text-center">
-        <p className="uppercase text-[0.65rem] tracking-[0.05em] text-foreground-muted font-sans mb-1">No transactions</p>
-        <p className="font-display text-lg tracking-[-0.02em]">No transaction history found</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="bg-surface-low rounded-sm overflow-hidden">
-      {/* Mobile cards */}
-      <div className="lg:hidden space-y-2 p-3">
-        {events.map((e) => (
-          <div key={e.id} className="bg-surface rounded-sm p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="bg-surface-high text-foreground rounded-sm px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.05em]">
-                {e.event_type}
-              </span>
-              <span className="text-[0.7rem] text-foreground-muted font-sans">{fmtDate(e.event_at)}</span>
-            </div>
-            <div className="space-y-1.5">
-              <div className="flex justify-between items-baseline">
-                <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Protocol</span>
-                <ProtocolChip slug={e.protocol_slug} />
-              </div>
-              <div className="flex justify-between items-baseline">
-                <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Amount</span>
-                <span className="text-[0.8rem] font-sans tabular-nums">{e.amount != null ? e.amount.toFixed(4) : "—"}</span>
-              </div>
-              <div className="flex justify-between items-baseline">
-                <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Value (USD)</span>
-                <span className="text-[0.8rem] font-sans tabular-nums">{fmtUsd(e.amount_usd)}</span>
-              </div>
-              {e.tx_signature && (
-                <div className="flex justify-between items-baseline">
-                  <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Tx</span>
-                  <a
-                    href={`https://solscan.io/tx/${e.tx_signature}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-neon text-[0.7rem] hover:underline"
-                  >
-                    {truncateId(e.tx_signature, 8)}
-                  </a>
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-      {/* Desktop table */}
-      <div className="hidden lg:block">
-        <table className="w-full text-[0.8rem] font-sans">
-          <thead>
-            <tr className="text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface">
-              <th className="text-left px-5 py-2.5 font-medium">Date</th>
-              <th className="text-left px-5 py-2.5 font-medium">Protocol</th>
-              <th className="text-left px-5 py-2.5 font-medium">Type</th>
-              <th className="text-right px-5 py-2.5 font-medium">Amount</th>
-              <th className="text-right px-5 py-2.5 font-medium">Value (USD)</th>
-              <th className="text-right px-5 py-2.5 font-medium">Tx</th>
-            </tr>
-          </thead>
-          <tbody>
-            {events.map((e) => (
-              <tr key={e.id} className="hover:bg-surface-high transition-colors tabular-nums">
-                <td className="px-5 py-3 text-foreground-muted">{fmtDate(e.event_at)}</td>
-                <td className="px-5 py-3">
-                  <ProtocolChip slug={e.protocol_slug} />
-                </td>
-                <td className="px-5 py-3">
-                  <span className="bg-surface-high text-foreground rounded-sm px-2 py-0.5 text-[0.65rem] uppercase tracking-[0.05em]">
-                    {e.event_type}
-                  </span>
-                </td>
-                <td className="px-5 py-3 text-right text-foreground">
-                  {e.amount != null ? e.amount.toFixed(4) : "—"}
-                </td>
-                <td className="px-5 py-3 text-right text-foreground">{fmtUsd(e.amount_usd)}</td>
-                <td className="px-5 py-3 text-right">
-                  {e.tx_signature ? (
-                    <a
-                      href={`https://solscan.io/tx/${e.tx_signature}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-neon text-[0.7rem] hover:underline"
-                    >
-                      {truncateId(e.tx_signature, 8)}
-                    </a>
-                  ) : (
-                    <span className="text-foreground-muted">—</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
 export default function Portfolio() {
-  const [selectedAccount] = useSelectedWalletAccount();
-  const walletAddress = selectedAccount?.address ?? null;
-  const [activeTab, setActiveTab] = useState<"positions" | "history">("positions");
-  const [activeType, setActiveType] = useState("all");
-  const [chartPeriod, setChartPeriod] = useState<"7d" | "30d" | "90d">("7d");
-  const hasFetchedOnce = useRef(false);
-
-  // Fire-and-forget track on mount
-  useEffect(() => {
-    if (walletAddress) api.trackWallet(walletAddress);
-  }, [walletAddress]);
-
-  const statusQuery = useQuery({
-    queryKey: ["walletStatus", walletAddress],
-    queryFn: () => api.getWalletStatus(walletAddress!),
-    enabled: !!walletAddress,
-    refetchInterval: (query) => {
-      return query.state.data?.fetch_status === "fetching" ? 2000 : false;
-    },
-  });
-
-  const positionsQuery = useQuery({
-    queryKey: ["positions", walletAddress],
-    queryFn: () => api.getPositions(walletAddress!),
-    enabled: !!walletAddress,
-    refetchInterval: 60_000,
-  });
-
-  const historyQuery = useQuery({
-    queryKey: ["positionHistory", walletAddress, chartPeriod],
-    queryFn: () => api.getPositionHistory(walletAddress!, chartPeriod),
-    enabled: !!walletAddress,
-  });
-
-  const eventsQuery = useQuery({
-    queryKey: ["positionEvents", walletAddress],
-    queryFn: () => api.getPositionEvents(walletAddress!),
-    enabled: !!walletAddress && activeTab === "history",
-  });
-
-  const prevFetchStatus = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    const status = statusQuery.data?.fetch_status;
-    if (prevFetchStatus.current !== "ready" && status === "ready") {
-      positionsQuery.refetch();
-      historyQuery.refetch();
-    }
-    prevFetchStatus.current = status;
-  }, [statusQuery.data?.fetch_status]);
-
-  if (positionsQuery.isSuccess) hasFetchedOnce.current = true;
-
-  const positions = positionsQuery.data ?? [];
-
-  const byType = useMemo(() => {
-    const result: Record<string, UserPositionOut[]> = {};
-    for (const p of positions) {
-      if (!result[p.product_type]) result[p.product_type] = [];
-      result[p.product_type].push(p);
-    }
-    return result;
-  }, [positions]);
-
-  const visiblePositions = activeType === "all" ? positions : (byType[activeType] ?? []);
-
-  const summary = useMemo(() => {
-    const totalValue = positions.reduce((sum, p) => sum + (p.deposit_amount_usd ?? 0), 0);
-    const totalPnlUsd = positions.reduce((sum, p) => sum + (p.pnl_usd ?? 0), 0);
-    const totalInitialDeposit = positions.reduce((sum, p) => sum + (p.initial_deposit_usd ?? 0), 0);
-    const roi = totalInitialDeposit > 0 ? (totalPnlUsd / totalInitialDeposit) * 100 : 0;
-    const weightedApy = totalValue > 0
-      ? positions.reduce((sum, p) => sum + (p.apy ?? 0) * (p.deposit_amount_usd ?? 0), 0) / totalValue
-      : 0;
-    return { totalValue, totalPnlUsd, roi, weightedApy, count: positions.length };
-  }, [positions]);
-
-  const chartData: ChartPoint[] = useMemo(() => {
-    if (!historyQuery.data) return [];
-    return historyQuery.data.map((pt) => ({
-      date: fmtDate(pt.snapshot_at).split(" · ")[0],
-      value: pt.deposit_amount_usd,
-      pnl: pt.pnl_usd,
-    }));
-  }, [historyQuery.data]);
-
-  const showSyncing = positionsQuery.isSuccess && positions.length === 0 && !hasFetchedOnce.current;
-
-  const shortAddr = walletAddress
-    ? `${walletAddress.slice(0, 8)}...${walletAddress.slice(-4)}`
-    : "";
+  const {
+    walletAddress,
+    activeTab,
+    setActiveTab,
+    activeType,
+    setActiveType,
+    chartPeriod,
+    setChartPeriod,
+    positionsQuery,
+    historyQuery,
+    eventsQuery,
+    positions,
+    byType,
+    visiblePositions,
+    summary,
+    chartData,
+    showSyncing,
+    shortAddr,
+  } = usePortfolioData();
 
   return (
     <main className="max-w-[1200px] mx-auto px-4 sm:px-8 lg:px-[3.5rem] py-[2.25rem]">
@@ -860,17 +116,34 @@ export default function Portfolio() {
 
       {walletAddress && positionsQuery.isSuccess && (
         <>
-          <div className="mb-[2.25rem]">
-            <h1 className="font-display text-2xl tracking-[-0.02em]">Portfolio</h1>
-            <p className="text-foreground-muted font-sans text-[0.8rem] mt-1">{shortAddr}</p>
+          <div className="flex items-center gap-3 mb-[2.25rem]">
+            <div>
+              <h1 className="font-display text-2xl tracking-[-0.02em]">Portfolio</h1>
+              <p className="text-foreground-muted font-sans text-[0.8rem] mt-1">{shortAddr}</p>
+            </div>
+            {walletAddress && (
+              <RefreshButton
+                queryKeys={[
+                  queryKeys.positions.list(walletAddress),
+                  ["positionHistory", walletAddress],
+                  queryKeys.positions.events(walletAddress),
+                  queryKeys.wallet.status(walletAddress),
+                ]}
+                className="ml-auto"
+              />
+            )}
           </div>
 
-          <StatsRow
-            totalValue={summary.totalValue}
-            totalPnlUsd={summary.totalPnlUsd}
-            roi={summary.roi}
-            weightedApy={summary.weightedApy}
-            count={summary.count}
+          <StatsGrid
+            stats={[
+              { label: "Net Value", value: fmtUsd(summary.totalValue) },
+              { label: "PnL ($)", value: fmtUsd(summary.totalPnlUsd), colorClass: pnlColor(summary.totalPnlUsd) },
+              { label: "ROI", value: fmtPct(summary.roi), colorClass: pnlColor(summary.roi) },
+              { label: "Avg APY", value: fmtApy(summary.weightedApy), colorClass: "text-neon" },
+              { label: "Positions", value: `${summary.count}` },
+            ]}
+            size="lg"
+            className="mb-[2.25rem]"
           />
 
           <ChartCard
@@ -881,21 +154,15 @@ export default function Portfolio() {
           />
 
           {/* Tab bar */}
-          <div className="flex gap-[1px] bg-outline-ghost rounded-sm overflow-hidden mb-[2.25rem]">
-            {(["positions", "history"] as const).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`flex-1 py-2.5 text-[0.75rem] uppercase tracking-[0.05em] font-sans transition-colors ${
-                  activeTab === tab
-                    ? "bg-surface-high text-foreground"
-                    : "bg-surface-low text-foreground-muted hover:text-foreground"
-                }`}
-              >
-                {tab === "positions" ? "Positions Overview" : "Transaction History"}
-              </button>
-            ))}
-          </div>
+          <TabBar
+            tabs={[
+              { key: "positions", label: "Positions Overview" },
+              { key: "history", label: "Transaction History" },
+            ]}
+            activeKey={activeTab}
+            onChange={(k) => setActiveTab(k as "positions" | "history")}
+            className="mb-[2.25rem]"
+          />
 
           {showSyncing && <SyncingState />}
 
@@ -907,7 +174,7 @@ export default function Portfolio() {
                 activeType={activeType}
                 onSelect={setActiveType}
               />
-              <PositionsPanel positions={visiblePositions} activeType={activeType} />
+              <PositionTable columns={getColumnsForType(activeType)} positions={visiblePositions} activeType={activeType} />
             </div>
           )}
 

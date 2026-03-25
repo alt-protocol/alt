@@ -103,61 +103,45 @@ def get_portfolio(request: Request, wallet_address: str):
 # User Position Monitoring endpoints
 # ---------------------------------------------------------------------------
 
+def _latest_positions(db: Session, wallet_address: str, protocol: str | None = None, product_type: str | None = None):
+    """Return the latest snapshot of UserPositions per protocol for a wallet."""
+    latest_per_protocol = (
+        db.query(
+            UserPosition.protocol_slug,
+            func.max(UserPosition.snapshot_at).label("latest_at"),
+        )
+        .filter(UserPosition.wallet_address == wallet_address)
+        .group_by(UserPosition.protocol_slug)
+        .subquery()
+    )
+    query = (
+        db.query(UserPosition)
+        .join(
+            latest_per_protocol,
+            (UserPosition.protocol_slug == latest_per_protocol.c.protocol_slug)
+            & (UserPosition.snapshot_at == latest_per_protocol.c.latest_at)
+            & (UserPosition.wallet_address == wallet_address),
+        )
+    )
+    if protocol:
+        query = query.filter(UserPosition.protocol_slug == protocol)
+    if product_type:
+        query = query.filter(UserPosition.product_type == product_type)
+    return query.all()
+
+
 def _store_positions(db: Session, positions: list[dict], now: datetime):
     """Store a list of position dicts as UserPosition rows."""
-    for pos_data in positions:
-        position = UserPosition(
-            wallet_address=pos_data["wallet_address"],
-            protocol_slug=pos_data["protocol_slug"],
-            product_type=pos_data["product_type"],
-            external_id=pos_data["external_id"],
-            opportunity_id=pos_data.get("opportunity_id"),
-            deposit_amount=pos_data.get("deposit_amount"),
-            deposit_amount_usd=pos_data.get("deposit_amount_usd"),
-            pnl_usd=pos_data.get("pnl_usd"),
-            pnl_pct=pos_data.get("pnl_pct"),
-            initial_deposit_usd=pos_data.get("initial_deposit_usd"),
-            opened_at=pos_data.get("opened_at"),
-            held_days=pos_data.get("held_days"),
-            apy=pos_data.get("apy"),
-            is_closed=pos_data.get("is_closed"),
-            closed_at=pos_data.get("closed_at"),
-            close_value_usd=pos_data.get("close_value_usd"),
-            token_symbol=pos_data.get("token_symbol"),
-            extra_data=pos_data.get("extra_data"),
-            snapshot_at=now,
-        )
-        db.add(position)
+    from app.services.utils import store_position_rows
+    store_position_rows(db, positions, now)
 
 
-def _fetch_kamino(wallet_address: str) -> list[dict] | None:
+def _fetch_protocol(name: str, fetch_fn, wallet_address: str) -> list[dict] | None:
     db_local = SessionLocal()
     try:
-        return fetch_wallet_positions(wallet_address, db_local)["positions"]
+        return fetch_fn(wallet_address, db_local)["positions"]
     except Exception as exc:
-        logger.warning("Kamino fetch failed for %s: %s", wallet_address[:8], exc)
-        return None
-    finally:
-        db_local.close()
-
-
-def _fetch_drift(wallet_address: str) -> list[dict] | None:
-    db_local = SessionLocal()
-    try:
-        return fetch_drift_positions(wallet_address, db_local)["positions"]
-    except Exception as exc:
-        logger.warning("Drift fetch failed for %s: %s", wallet_address[:8], exc)
-        return None
-    finally:
-        db_local.close()
-
-
-def _fetch_jupiter(wallet_address: str) -> list[dict] | None:
-    db_local = SessionLocal()
-    try:
-        return fetch_jupiter_positions(wallet_address, db_local)["positions"]
-    except Exception as exc:
-        logger.warning("Jupiter fetch failed for %s: %s", wallet_address[:8], exc)
+        logger.warning("%s fetch failed for %s: %s", name, wallet_address[:8], exc)
         return None
     finally:
         db_local.close()
@@ -182,9 +166,9 @@ def _background_fetch_and_store(wallet_address: str):
 
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = [
-                executor.submit(_fetch_kamino, wallet_address),
-                executor.submit(_fetch_drift, wallet_address),
-                executor.submit(_fetch_jupiter, wallet_address),
+                executor.submit(_fetch_protocol, "Kamino", fetch_wallet_positions, wallet_address),
+                executor.submit(_fetch_protocol, "Drift", fetch_drift_positions, wallet_address),
+                executor.submit(_fetch_protocol, "Jupiter", fetch_jupiter_positions, wallet_address),
             ]
             for future in as_completed(futures):
                 result = future.result()
@@ -254,25 +238,7 @@ def track_wallet(
     )
     if has_positions:
         # Return cached positions (latest per protocol), refresh in background
-        latest_per_protocol = (
-            db.query(
-                UserPosition.protocol_slug,
-                func.max(UserPosition.snapshot_at).label("latest_at"),
-            )
-            .filter(UserPosition.wallet_address == wallet_address)
-            .group_by(UserPosition.protocol_slug)
-            .subquery()
-        )
-        positions = (
-            db.query(UserPosition)
-            .join(
-                latest_per_protocol,
-                (UserPosition.protocol_slug == latest_per_protocol.c.protocol_slug)
-                & (UserPosition.snapshot_at == latest_per_protocol.c.latest_at)
-                & (UserPosition.wallet_address == wallet_address),
-            )
-            .all()
-        )
+        positions = _latest_positions(db, wallet_address)
         position_dicts = [
             {
                 "wallet_address": p.wallet_address,
@@ -332,7 +298,8 @@ def track_wallet(
 
 
 @router.get("/portfolio/{wallet_address}/status", response_model=WalletStatusOut)
-def get_wallet_status(wallet_address: str, db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+def get_wallet_status(request: Request, wallet_address: str, db: Session = Depends(get_db)):
     """Return fetch status for a tracked wallet (for frontend polling)."""
     _validate_wallet(wallet_address)
     tracked = (
@@ -346,7 +313,9 @@ def get_wallet_status(wallet_address: str, db: Session = Depends(get_db)):
 
 
 @router.get("/portfolio/{wallet_address}/positions", response_model=list[UserPositionOut])
+@limiter.limit("60/minute")
 def get_positions(
+    request: Request,
     wallet_address: str,
     protocol: Optional[str] = Query(None),
     product_type: Optional[str] = Query(None),
@@ -354,37 +323,13 @@ def get_positions(
 ):
     """Return the latest snapshot of positions from DB."""
     _validate_wallet(wallet_address)
-
-    # Get the latest snapshot_at for each protocol
-    latest_per_protocol = (
-        db.query(
-            UserPosition.protocol_slug,
-            func.max(UserPosition.snapshot_at).label("latest_at"),
-        )
-        .filter(UserPosition.wallet_address == wallet_address)
-        .group_by(UserPosition.protocol_slug)
-        .subquery()
-    )
-
-    query = (
-        db.query(UserPosition)
-        .join(
-            latest_per_protocol,
-            (UserPosition.protocol_slug == latest_per_protocol.c.protocol_slug)
-            & (UserPosition.snapshot_at == latest_per_protocol.c.latest_at)
-            & (UserPosition.wallet_address == wallet_address),
-        )
-    )
-    if protocol:
-        query = query.filter(UserPosition.protocol_slug == protocol)
-    if product_type:
-        query = query.filter(UserPosition.product_type == product_type)
-
-    return query.all()
+    return _latest_positions(db, wallet_address, protocol, product_type)
 
 
 @router.get("/portfolio/{wallet_address}/positions/history")
+@limiter.limit("60/minute")
 def get_position_history(
+    request: Request,
     wallet_address: str,
     period: str = Query("7d", pattern="^(7d|30d|90d)$"),
     external_id: Optional[str] = Query(None),
@@ -468,7 +413,9 @@ def get_position_history(
 
 
 @router.get("/portfolio/{wallet_address}/events", response_model=list[UserPositionEventOut])
+@limiter.limit("60/minute")
 def get_events(
+    request: Request,
     wallet_address: str,
     protocol: Optional[str] = Query(None),
     product_type: Optional[str] = Query(None),

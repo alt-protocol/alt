@@ -8,7 +8,6 @@ Drift API endpoints used (base: https://data.api.drift.trade):
   - GET /authority/{wallet}/snapshots/vaults?days={1,100} — strategy vault snapshots (multi-window)
 """
 import logging
-import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -17,55 +16,22 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.models.base import SessionLocal
-from app.models.user_position import TrackedWallet, UserPosition, UserPositionEvent
+from app.models.user_position import TrackedWallet, UserPositionEvent
 from app.models.yield_opportunity import YieldOpportunity
+from app.services.utils import safe_float, get_or_none, cached, parse_timestamp
 
 logger = logging.getLogger(__name__)
 
 DRIFT_API = "https://data.api.drift.trade"
 
-# ---------------------------------------------------------------------------
-# Simple TTL cache
-# ---------------------------------------------------------------------------
-_cache: dict[str, tuple[float, Any]] = {}
-
-
-def _cached(key: str, ttl: float, fn):
-    now = time.monotonic()
-    if key in _cache and (now - _cache[key][0]) < ttl:
-        return _cache[key][1]
-    result = fn()
-    if result is not None:
-        _cache[key] = (now, result)
-    return result
-
 
 def _get(path: str, client: httpx.Client) -> Optional[dict | list]:
-    try:
-        r = client.get(f"{DRIFT_API}{path}", timeout=30)
-        r.raise_for_status()
-        return r.json()
-    except Exception as exc:
-        logger.warning("Drift API %s failed: %s", path, exc)
-        return None
+    return get_or_none(f"{DRIFT_API}{path}", client, log_label="Drift API")
 
 
-def _float(val) -> Optional[float]:
-    try:
-        return float(val) if val is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _parse_timestamp(ts) -> Optional[datetime]:
-    if ts is None:
-        return None
-    try:
-        if isinstance(ts, (int, float)):
-            return datetime.fromtimestamp(ts, tz=timezone.utc)
-        return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-    except (ValueError, OSError):
-        return None
+_float = safe_float
+_cached = cached
+_parse_timestamp = parse_timestamp
 
 
 # ---------------------------------------------------------------------------
@@ -508,30 +474,8 @@ def snapshot_all_wallets_drift(db: Session, snapshot_at: datetime | None = None)
                 )
                 all_positions = if_positions + vault_positions
 
-                for pos_data in all_positions:
-                    position = UserPosition(
-                        wallet_address=pos_data["wallet_address"],
-                        protocol_slug=pos_data["protocol_slug"],
-                        product_type=pos_data["product_type"],
-                        external_id=pos_data["external_id"],
-                        opportunity_id=pos_data.get("opportunity_id"),
-                        deposit_amount=pos_data.get("deposit_amount"),
-                        deposit_amount_usd=pos_data.get("deposit_amount_usd"),
-                        pnl_usd=pos_data.get("pnl_usd"),
-                        pnl_pct=pos_data.get("pnl_pct"),
-                        initial_deposit_usd=pos_data.get("initial_deposit_usd"),
-                        opened_at=pos_data.get("opened_at"),
-                        held_days=pos_data.get("held_days"),
-                        apy=pos_data.get("apy"),
-                        is_closed=pos_data.get("is_closed"),
-                        closed_at=pos_data.get("closed_at"),
-                        close_value_usd=pos_data.get("close_value_usd"),
-                        token_symbol=pos_data.get("token_symbol"),
-                        extra_data=pos_data.get("extra_data"),
-                        snapshot_at=now,
-                    )
-                    db.add(position)
-                    total_snapshots += 1
+                from app.services.utils import store_position_rows
+                total_snapshots += store_position_rows(db, all_positions, now)
 
                 # Store IF events (deduplicate by tx_signature)
                 for evt in if_events:

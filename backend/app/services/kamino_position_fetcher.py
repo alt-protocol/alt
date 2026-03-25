@@ -8,37 +8,20 @@ Kamino API endpoints used:
   - GET /v2/kamino-market/{market}/users/{wallet}/transactions — Obligation tx history
 """
 import logging
-import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Optional
 
 import httpx
 from sqlalchemy.orm import Session
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from app.models.base import SessionLocal
-from app.models.user_position import TrackedWallet, UserPosition, UserPositionEvent
+from app.models.user_position import TrackedWallet, UserPositionEvent
 from app.models.yield_opportunity import YieldOpportunity
+from app.services.utils import safe_float, get_with_retry, get_or_none, cached, parse_timestamp
 
 logger = logging.getLogger(__name__)
 
 KAMINO_API = "https://api.kamino.finance"
-
-# ---------------------------------------------------------------------------
-# Simple TTL cache for expensive, slowly-changing API data
-# ---------------------------------------------------------------------------
-_cache: dict[str, tuple[float, Any]] = {}
-
-
-def _cached(key: str, ttl: float, fn):
-    """Return cached result if fresh, otherwise call fn() and store."""
-    now = time.monotonic()
-    if key in _cache and (now - _cache[key][0]) < ttl:
-        return _cache[key][1]
-    result = fn()
-    if result is not None:
-        _cache[key] = (now, result)
-    return result
 
 # Well-known Solana token mints → symbols (fallback when API omits tokenSymbol)
 _KNOWN_MINTS: dict[str, str] = {
@@ -52,43 +35,13 @@ _KNOWN_MINTS: dict[str, str] = {
 }
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadTimeout)),
-    reraise=True,
-)
-def _get_with_retry(path: str, client: httpx.Client):
-    r = client.get(f"{KAMINO_API}{path}", timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-
 def _get(path: str, client: httpx.Client) -> Optional[dict | list]:
-    try:
-        return _get_with_retry(path, client)
-    except Exception as exc:
-        logger.warning("Kamino API %s failed after retries: %s", path, exc)
-        return None
+    return get_or_none(f"{KAMINO_API}{path}", client, log_label="Kamino API")
 
 
-def _float(val) -> Optional[float]:
-    try:
-        return float(val) if val is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _parse_timestamp(ts) -> Optional[datetime]:
-    """Parse a timestamp from Kamino API (ISO string or epoch)."""
-    if ts is None:
-        return None
-    try:
-        if isinstance(ts, (int, float)):
-            return datetime.fromtimestamp(ts, tz=timezone.utc)
-        return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-    except (ValueError, OSError):
-        return None
+_float = safe_float
+_parse_timestamp = parse_timestamp
+_cached = cached
 
 
 def _load_opportunity_map(db: Session) -> dict[str, dict]:
@@ -206,18 +159,51 @@ def _fetch_obligation_transactions(
     return {}
 
 
-def _compute_obligation_pnl(txs: list[dict], current_net_value: float, now: datetime) -> dict:
-    """Compute PnL, APY, and metadata from obligation transaction history.
+_TX_TYPE_MAP = {
+    "deposit": "deposit",
+    "create": "deposit",
+    "withdraw": "withdraw",
+    "borrow": "borrow",
+    "repay": "repay",
+    "depositandborrow": "deposit",
+    "withdrawandrepay": "withdraw",
+    "leverageanddeposit": "leverage",
+    "deleverageandwithdraw": "deleverage",
+}
 
-    Uses the Modified Dietz method to properly weight cash flows by time:
-      R = (V_end - Σ CF_i) / Σ(CF_i × w_i)
-    where w_i = (T - t_i) / T  (fraction of period each cash flow was invested).
 
-    Cash flow sign convention (from investor/equity perspective):
-      deposit  → positive CF (money investor commits)
-      withdraw → negative CF (money investor receives back)
-      borrow   → negative CF (protocol-provided funds, offsets deposit)
-      repay    → positive CF (returning protocol funds, offsets withdraw)
+def _find_lifecycle_start(txs: list[dict]) -> list[dict]:
+    """Detect full-withdrawal resets and return txs from the current lifecycle only.
+
+    If the running equity balance drops to ~$0 at any point, the user closed and
+    re-opened under the same obligation address. Only deposit/withdraw are tracked
+    — borrow/repay are leverage mechanics that would cause false resets.
+    """
+    reset_idx = None
+    running = 0.0
+    seen_deposit = False
+    for i, tx in enumerate(txs):
+        display_name = (tx.get("transactionDisplayName") or "").lower()
+        usd_val = _float(tx.get("liquidityUsdValue")) or 0.0
+        category = _TX_TYPE_MAP.get(display_name)
+        if category == "deposit":
+            running += usd_val
+            if usd_val > 0:
+                seen_deposit = True
+        elif category == "withdraw":
+            running -= usd_val
+        if seen_deposit and running < 0.01 and i < len(txs) - 1:
+            reset_idx = i + 1
+            running = 0.0
+            seen_deposit = False
+    return txs[reset_idx:] if reset_idx is not None else txs
+
+
+def _accumulate_cash_flows(txs: list[dict]) -> dict:
+    """Sum deposits/withdraws/borrows/repays and build time-weighted cash flows.
+
+    Returns dict with sum_deposit, sum_withdraw, sum_borrow, sum_repay,
+    cash_flows, token_symbol, opened_at.
     """
     sum_deposit = 0.0
     sum_withdraw = 0.0
@@ -226,61 +212,13 @@ def _compute_obligation_pnl(txs: list[dict], current_net_value: float, now: date
     cash_flows: list[tuple[datetime, float]] = []
     token_symbol = None
     opened_at = None
-    closed_at = None
-
-    tx_type_map = {
-        "deposit": "deposit",
-        "create": "deposit",
-        "withdraw": "withdraw",
-        "borrow": "borrow",
-        "repay": "repay",
-        # User-initiated compound operations (actual equity flow)
-        "depositandborrow": "deposit",
-        "withdrawandrepay": "withdraw",
-        # Leverage mechanics — NOT user equity flow, exclude from cash flows
-        "leverageanddeposit": "leverage",
-        "deleverageandwithdraw": "deleverage",
-    }
-
-    # --- Lifecycle reset detection ---
-    # If the running balance drops to ~$0 at any point (full withdrawal),
-    # the user closed and re-opened under the same obligation address.
-    # Discard all transactions before the last reset so PnL/held_days
-    # reflect only the current lifecycle.
-    # Only track deposit/withdraw — borrow/repay are leverage mechanics
-    # that don't reflect user equity and would cause false resets on
-    # multiply positions.
-    reset_idx = None
-    running = 0.0
-    seen_deposit = False
-    for i, tx in enumerate(txs):
-        display_name = (tx.get("transactionDisplayName") or "").lower()
-        usd_val = _float(tx.get("liquidityUsdValue")) or 0.0
-        category = tx_type_map.get(display_name)
-        if category == "deposit":
-            running += usd_val
-            if usd_val > 0:
-                seen_deposit = True
-        elif category == "withdraw":
-            running -= usd_val
-        # borrow/repay/leverage/deleverage excluded — not equity flow
-        # Balance dropped near zero and there are more txs after → lifecycle reset
-        # Only check after first deposit — running=0 before any deposit is the
-        # initial state, not a closed position (borrows can precede deposits).
-        if seen_deposit and running < 0.01 and i < len(txs) - 1:
-            reset_idx = i + 1
-            running = 0.0  # restart tracking from new lifecycle
-            seen_deposit = False
-
-    if reset_idx is not None:
-        txs = txs[reset_idx:]
 
     for tx in txs:
         display_name = (tx.get("transactionDisplayName") or "").lower()
         usd_val = _float(tx.get("liquidityUsdValue")) or 0.0
         tx_time = _parse_timestamp(tx.get("createdOn"))
+        category = _TX_TYPE_MAP.get(display_name)
 
-        category = tx_type_map.get(display_name)
         if category == "deposit":
             sum_deposit += usd_val
             if tx_time and usd_val > 0:
@@ -291,55 +229,46 @@ def _compute_obligation_pnl(txs: list[dict], current_net_value: float, now: date
                 cash_flows.append((tx_time, -usd_val))
         elif category == "borrow":
             sum_borrow += usd_val
-            # Borrow offsets deposit — protocol-provided funds, not user equity
             if tx_time and usd_val > 0:
                 cash_flows.append((tx_time, -usd_val))
         elif category == "repay":
             sum_repay += usd_val
-            # Repay offsets withdraw — returning protocol funds, not user outflow
             if tx_time and usd_val > 0:
                 cash_flows.append((tx_time, usd_val))
-        elif category in ("leverage", "deleverage"):
-            # Flash-loan-based leverage adjustment — not user equity
-            pass
 
-        # Track first deposit as opened_at
         if category == "deposit" and opened_at is None and tx_time:
             opened_at = tx_time
-
-        # Track token symbol from first collateral deposit
         if token_symbol is None and tx.get("liquidityToken"):
             token_symbol = tx["liquidityToken"]
 
-    # Debug: log raw tx type breakdown for Multiply positions
-    logger.info(
-        "obligation tx breakdown: deposit=%.2f withdraw=%.2f borrow=%.2f repay=%.2f "
-        "net_value=%.2f | tx_types=%s",
-        sum_deposit, sum_withdraw, sum_borrow, sum_repay, current_net_value,
-        [tx.get("transactionDisplayName", "?") for tx in txs],
-    )
+    return {
+        "sum_deposit": sum_deposit, "sum_withdraw": sum_withdraw,
+        "sum_borrow": sum_borrow, "sum_repay": sum_repay,
+        "cash_flows": cash_flows, "token_symbol": token_symbol,
+        "opened_at": opened_at,
+    }
 
-    # net_equity = what the user actually put in (their own capital)
+
+def _compute_modified_dietz(
+    cf: dict, current_net_value: float, now: datetime,
+) -> dict:
+    """Compute PnL, APY, and position metadata using Modified Dietz method."""
+    sum_deposit = cf["sum_deposit"]
+    sum_withdraw = cf["sum_withdraw"]
+    sum_borrow = cf["sum_borrow"]
+    sum_repay = cf["sum_repay"]
+    cash_flows = cf["cash_flows"]
+    opened_at = cf["opened_at"]
+
     net_equity = sum_deposit - sum_withdraw - sum_borrow + sum_repay
     initial_deposit_usd = net_equity if net_equity > 0 else sum_deposit
-
-    # Determine if closed: use absolute threshold.
-    # Relative thresholds break for "recycled" obligations where a user
-    # withdrew everything and re-deposited a small amount under the same
-    # obligation address (e.g., withdrew JITOSOL, deposited $1 USDC).
     is_closed = current_net_value < 0.01
 
-    # close_value for informational purposes on closed positions
+    closed_at = None
     close_value_usd = None
     if is_closed:
         close_value_usd = sum_withdraw + sum_repay - sum_borrow
-        for tx in reversed(txs):
-            t = _parse_timestamp(tx.get("createdOn"))
-            if t:
-                closed_at = t
-                break
 
-    # Compute held_days
     held_days = None
     T = None
     if opened_at:
@@ -347,13 +276,12 @@ def _compute_obligation_pnl(txs: list[dict], current_net_value: float, now: date
         T = (end_time - opened_at).total_seconds() / 86400.0
         held_days = T
 
-    # Modified Dietz PnL, return %, and APY
     pnl_usd = None
     pnl_pct = None
     realized_apy = None
 
     if T and T > 0 and cash_flows:
-        total_net_cf = sum(cf for _, cf in cash_flows)
+        total_net_cf = sum(c for _, c in cash_flows)
         weighted_capital = 0.0
         for cf_time, cf_amount in cash_flows:
             days_from_start = (cf_time - opened_at).total_seconds() / 86400.0
@@ -375,11 +303,37 @@ def _compute_obligation_pnl(txs: list[dict], current_net_value: float, now: date
         "realized_apy": round(realized_apy, 4) if realized_apy is not None else None,
         "opened_at": opened_at,
         "held_days": round(held_days, 4) if held_days is not None else None,
-        "token_symbol": token_symbol,
+        "token_symbol": cf["token_symbol"],
         "is_closed": is_closed,
         "closed_at": closed_at if is_closed else None,
         "close_value_usd": round(close_value_usd, 2) if is_closed and close_value_usd is not None else None,
     }
+
+
+def _compute_obligation_pnl(txs: list[dict], current_net_value: float, now: datetime) -> dict:
+    """Compute PnL, APY, and metadata from obligation transaction history."""
+    txs = _find_lifecycle_start(txs)
+    cf = _accumulate_cash_flows(txs)
+
+    logger.info(
+        "obligation tx breakdown: deposit=%.2f withdraw=%.2f borrow=%.2f repay=%.2f "
+        "net_value=%.2f | tx_types=%s",
+        cf["sum_deposit"], cf["sum_withdraw"], cf["sum_borrow"], cf["sum_repay"],
+        current_net_value,
+        [tx.get("transactionDisplayName", "?") for tx in txs],
+    )
+
+    result = _compute_modified_dietz(cf, current_net_value, now)
+
+    # Find closed_at from last tx timestamp for closed positions
+    if result["is_closed"]:
+        for tx in reversed(txs):
+            t = _parse_timestamp(tx.get("createdOn"))
+            if t:
+                result["closed_at"] = t
+                break
+
+    return result
 
 
 def _obligation_txs_to_events(
@@ -560,6 +514,31 @@ def _fetch_earn_positions(
 # Lending + Multiply obligations
 # ---------------------------------------------------------------------------
 
+def _resolve_forward_apy(
+    product_type: str, market_pk: str,
+    collateral_reserves: list[str], borrow_reserves: list[str],
+    leverage: Optional[float], reserve_map: dict, opp_map: dict,
+) -> Optional[float]:
+    """Resolve forward-looking APY (what Kamino UI shows — current market rates)."""
+    forward_apy = None
+    if product_type == "multiply" and collateral_reserves and borrow_reserves:
+        mul_ext_id = f"kmul-{market_pk[:8]}-{collateral_reserves[0][:6]}-{borrow_reserves[0][:6]}"
+        forward_apy = _lookup_opportunity_apy(mul_ext_id, opp_map)
+    if forward_apy is None and collateral_reserves:
+        forward_apy = _lookup_opportunity_apy(collateral_reserves[0], opp_map)
+    if forward_apy is None and collateral_reserves and product_type == "lending":
+        supply_apy = reserve_map.get(collateral_reserves[0], {}).get("supply_apy")
+        if supply_apy is not None:
+            forward_apy = supply_apy * 100
+    if (forward_apy is None and product_type == "multiply"
+            and collateral_reserves and borrow_reserves and leverage and leverage > 1):
+        coll_supply = reserve_map.get(collateral_reserves[0], {}).get("supply_apy")
+        debt_borrow = reserve_map.get(borrow_reserves[0], {}).get("borrow_apy")
+        if coll_supply is not None and debt_borrow is not None:
+            forward_apy = (coll_supply * leverage - debt_borrow * (leverage - 1)) * 100
+    return forward_apy
+
+
 def _fetch_obligation_positions(
     wallet: str, client: httpx.Client, db: Session, now: datetime,
     all_markets: list[dict] | None = None,
@@ -700,31 +679,10 @@ def _fetch_obligation_positions(
                 opened_at = None
                 held_days = None
 
-            # Forward-looking APY (what Kamino UI shows — current market rates)
-            forward_apy = None
-            if product_type == "multiply" and collateral_reserves and borrow_reserves:
-                # For multiply, match by constructed external_id to get the
-                # correct net APY for this specific collateral+debt pair.
-                mul_ext_id = f"kmul-{market_pk[:8]}-{collateral_reserves[0][:6]}-{borrow_reserves[0][:6]}"
-                forward_apy = _lookup_opportunity_apy(mul_ext_id, _omap)
-            if forward_apy is None and collateral_reserves:
-                forward_apy = _lookup_opportunity_apy(collateral_reserves[0], _omap)
-            if forward_apy is None and collateral_reserves and product_type == "lending":
-                reserve_data = reserve_map.get(collateral_reserves[0], {})
-                supply_apy = reserve_data.get("supply_apy")
-                if supply_apy is not None:
-                    forward_apy = supply_apy * 100  # decimal → percentage
-            if forward_apy is None and product_type == "multiply" and collateral_reserves and borrow_reserves and leverage and leverage > 1:
-                coll_data = reserve_map.get(collateral_reserves[0], {})
-                debt_data = reserve_map.get(borrow_reserves[0], {})
-                coll_supply = coll_data.get("supply_apy")
-                debt_borrow = debt_data.get("borrow_apy")
-                if coll_supply is not None and debt_borrow is not None:
-                    forward_apy = (coll_supply * leverage - debt_borrow * (leverage - 1)) * 100
-
-            # APY logic: forward APY (current market rate) is primary — matches
-            # what the Kamino UI displays.  Realized APY stored in extra_data.
-            apy = forward_apy
+            apy = _resolve_forward_apy(
+                product_type, market_pk, collateral_reserves, borrow_reserves,
+                leverage, reserve_map, _omap,
+            )
 
             # Use current collateral symbol (always prefer live state over tx history)
             if current_collateral_sym:
@@ -928,30 +886,8 @@ def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> in
                     if ob_evts:
                         collected_obligation_events = ob_evts
 
-                for pos_data in all_positions:
-                    position = UserPosition(
-                        wallet_address=pos_data["wallet_address"],
-                        protocol_slug=pos_data["protocol_slug"],
-                        product_type=pos_data["product_type"],
-                        external_id=pos_data["external_id"],
-                        opportunity_id=pos_data.get("opportunity_id"),
-                        deposit_amount=pos_data.get("deposit_amount"),
-                        deposit_amount_usd=pos_data.get("deposit_amount_usd"),
-                        pnl_usd=pos_data.get("pnl_usd"),
-                        pnl_pct=pos_data.get("pnl_pct"),
-                        initial_deposit_usd=pos_data.get("initial_deposit_usd"),
-                        opened_at=pos_data.get("opened_at"),
-                        held_days=pos_data.get("held_days"),
-                        apy=pos_data.get("apy"),
-                        is_closed=pos_data.get("is_closed"),
-                        closed_at=pos_data.get("closed_at"),
-                        close_value_usd=pos_data.get("close_value_usd"),
-                        token_symbol=pos_data.get("token_symbol"),
-                        extra_data=pos_data.get("extra_data"),
-                        snapshot_at=now,
-                    )
-                    db.add(position)
-                    total_snapshots += 1
+                from app.services.utils import store_position_rows
+                total_snapshots += store_position_rows(db, all_positions, now)
 
                 # Fetch events — reuse obligation events from position fetch
                 events_raw = fetch_wallet_events(

@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createSolanaRpc, address } from "@solana/kit";
 import { HELIUS_RPC_URL, TOKEN_MINTS } from "../constants";
+import { queryKeys } from "@/lib/queryKeys";
 
 let _rpc: ReturnType<typeof createSolanaRpc> | null = null;
 function getRpc() {
@@ -55,7 +56,7 @@ async function fetchBalance(walletAddress: string, tokenSymbol: string): Promise
 
 export function useTokenBalance(walletAddress: string | undefined, tokenSymbol: string) {
   return useQuery({
-    queryKey: ["tokenBalance", walletAddress, tokenSymbol],
+    queryKey: queryKeys.wallet.tokenBalance(walletAddress!, tokenSymbol),
     queryFn: () => fetchBalance(walletAddress!, tokenSymbol),
     enabled: !!walletAddress && !!tokenSymbol,
     refetchInterval: 30_000,
