@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useState, useMemo, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useSelectedWalletAccount } from "@solana/react";
 import { api, UserPositionOut, UserPositionEventOut } from "@/lib/api";
@@ -71,9 +72,9 @@ interface PositionCardField {
   colorClass?: string;
 }
 
-function PositionCard({ position, showProtocol, fields }: { position: UserPositionOut; showProtocol: boolean; fields: PositionCardField[] }) {
+function PositionCard({ position, showProtocol, fields, onClick }: { position: UserPositionOut; showProtocol: boolean; fields: PositionCardField[]; onClick?: () => void }) {
   return (
-    <div className="bg-surface-low rounded-sm p-4 space-y-3">
+    <div className={`bg-surface-low rounded-sm p-4 space-y-3${onClick ? " cursor-pointer" : ""}`} onClick={onClick}>
       <div className="flex items-center justify-between">
         <span className="font-display text-sm tracking-[-0.02em]">{position.token_symbol ?? "—"}</span>
         {showProtocol && <ProtocolChip slug={position.protocol_slug} />}
@@ -366,6 +367,7 @@ interface PositionsPanelProps {
 }
 
 function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
+  const router = useRouter();
   if (positions.length === 0) {
     const typeLabel = SIDEBAR_TYPES.find((t) => t.key === activeType)?.label ?? activeType.toUpperCase();
     return (
@@ -385,7 +387,7 @@ function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
       <div className="flex-1 bg-surface">
         <div className="lg:hidden space-y-2 p-3">
           {positions.map((p) => (
-            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "lending")} />
+            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "lending")} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined} />
           ))}
         </div>
         <div className="hidden lg:block overflow-x-auto">
@@ -398,17 +400,23 @@ function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
                 <th className="text-right px-5 py-2.5 font-medium">Supply APY</th>
                 <th className="text-right px-5 py-2.5 font-medium">Interest Earned</th>
                 <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
+                <th className="px-5 py-2.5" />
               </tr>
             </thead>
             <tbody>
               {positions.map((p) => (
-                <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
+                <tr key={p.id} className={`hover:bg-surface-high transition-colors tabular-nums${p.opportunity_id ? " cursor-pointer" : ""}`} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined}>
                   <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
                   <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
                   <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
                   <ApyCell position={p} />
                   <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
                   <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
+                  <td className="px-5 py-3 text-right">
+                    {p.opportunity_id && (
+                      <button onClick={(e) => { e.stopPropagation(); router.push(`/yields/${p.opportunity_id}`); }} className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors">Details</button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -423,7 +431,7 @@ function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
       <div className="flex-1 bg-surface">
         <div className="lg:hidden space-y-2 p-3">
           {positions.map((p) => (
-            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "multiply")} />
+            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "multiply")} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined} />
           ))}
         </div>
         <div className="hidden lg:block overflow-x-auto">
@@ -437,11 +445,12 @@ function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
                 <th className="text-right px-5 py-2.5 font-medium">PnL ($)</th>
                 <th className="text-right px-5 py-2.5 font-medium">PnL (%)</th>
                 <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
+                <th className="px-5 py-2.5" />
               </tr>
             </thead>
             <tbody>
               {positions.map((p) => (
-                <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
+                <tr key={p.id} className={`hover:bg-surface-high transition-colors tabular-nums${p.opportunity_id ? " cursor-pointer" : ""}`} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined}>
                   <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
                   <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
                   <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
@@ -449,6 +458,11 @@ function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
                   <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
                   <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_pct)}`}>{fmtPct(p.pnl_pct)}</td>
                   <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
+                  <td className="px-5 py-3 text-right">
+                    {p.opportunity_id && (
+                      <button onClick={(e) => { e.stopPropagation(); router.push(`/yields/${p.opportunity_id}`); }} className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors">Details</button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -463,7 +477,7 @@ function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
       <div className="flex-1 bg-surface">
         <div className="lg:hidden space-y-2 p-3">
           {positions.map((p) => (
-            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "earn_vault")} />
+            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "earn_vault")} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined} />
           ))}
         </div>
         <div className="hidden lg:block overflow-x-auto">
@@ -476,17 +490,23 @@ function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
                 <th className="text-right px-5 py-2.5 font-medium">APY</th>
                 <th className="text-right px-5 py-2.5 font-medium">Interest Earned</th>
                 <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
+                <th className="px-5 py-2.5" />
               </tr>
             </thead>
             <tbody>
               {positions.map((p) => (
-                <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
+                <tr key={p.id} className={`hover:bg-surface-high transition-colors tabular-nums${p.opportunity_id ? " cursor-pointer" : ""}`} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined}>
                   <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
                   <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
                   <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
                   <ApyCell position={p} />
                   <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
                   <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
+                  <td className="px-5 py-3 text-right">
+                    {p.opportunity_id && (
+                      <button onClick={(e) => { e.stopPropagation(); router.push(`/yields/${p.opportunity_id}`); }} className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors">Details</button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -501,7 +521,7 @@ function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
       <div className="flex-1 bg-surface">
         <div className="lg:hidden space-y-2 p-3">
           {positions.map((p) => (
-            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "insurance_fund")} />
+            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "insurance_fund")} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined} />
           ))}
         </div>
         <div className="hidden lg:block overflow-x-auto">
@@ -514,17 +534,23 @@ function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
                 <th className="text-right px-5 py-2.5 font-medium">APY</th>
                 <th className="text-right px-5 py-2.5 font-medium">PnL</th>
                 <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
+                <th className="px-5 py-2.5" />
               </tr>
             </thead>
             <tbody>
               {positions.map((p) => (
-                <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
+                <tr key={p.id} className={`hover:bg-surface-high transition-colors tabular-nums${p.opportunity_id ? " cursor-pointer" : ""}`} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined}>
                   <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
                   <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
                   <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
                   <ApyCell position={p} />
                   <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
                   <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
+                  <td className="px-5 py-3 text-right">
+                    {p.opportunity_id && (
+                      <button onClick={(e) => { e.stopPropagation(); router.push(`/yields/${p.opportunity_id}`); }} className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors">Details</button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -539,7 +565,7 @@ function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
       <div className="flex-1 bg-surface">
         <div className="lg:hidden space-y-2 p-3">
           {positions.map((p) => (
-            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "earn")} />
+            <PositionCard key={p.id} position={p} showProtocol={false} fields={getPositionFields(p, "earn")} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined} />
           ))}
         </div>
         <div className="hidden lg:block overflow-x-auto">
@@ -552,17 +578,23 @@ function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
                 <th className="text-right px-5 py-2.5 font-medium">APY</th>
                 <th className="text-right px-5 py-2.5 font-medium">Interest Earned</th>
                 <th className="text-right px-5 py-2.5 font-medium">Days Held</th>
+                <th className="px-5 py-2.5" />
               </tr>
             </thead>
             <tbody>
               {positions.map((p) => (
-                <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
+                <tr key={p.id} className={`hover:bg-surface-high transition-colors tabular-nums${p.opportunity_id ? " cursor-pointer" : ""}`} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined}>
                   <td className="px-5 py-3 text-foreground">{truncateId(p.external_id)}</td>
                   <td className="px-5 py-3 text-foreground-muted">{p.token_symbol ?? "—"}</td>
                   <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
                   <ApyCell position={p} />
                   <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
                   <td className="px-5 py-3 text-right text-foreground-muted">{fmtDays(p.held_days)}</td>
+                  <td className="px-5 py-3 text-right">
+                    {p.opportunity_id && (
+                      <button onClick={(e) => { e.stopPropagation(); router.push(`/yields/${p.opportunity_id}`); }} className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors">Details</button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -577,7 +609,7 @@ function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
     <div className="flex-1 bg-surface">
       <div className="lg:hidden space-y-2 p-3">
         {positions.map((p) => (
-          <PositionCard key={p.id} position={p} showProtocol={true} fields={getPositionFields(p, "all")} />
+          <PositionCard key={p.id} position={p} showProtocol={true} fields={getPositionFields(p, "all")} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined} />
         ))}
       </div>
       <div className="hidden lg:block overflow-x-auto">
@@ -590,11 +622,12 @@ function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
               <th className="text-right px-5 py-2.5 font-medium">Net Value</th>
               <th className="text-right px-5 py-2.5 font-medium">PnL</th>
               <th className="text-right px-5 py-2.5 font-medium">APY</th>
+              <th className="px-5 py-2.5" />
             </tr>
           </thead>
           <tbody>
             {positions.map((p) => (
-              <tr key={p.id} className="hover:bg-surface-high transition-colors tabular-nums">
+              <tr key={p.id} className={`hover:bg-surface-high transition-colors tabular-nums${p.opportunity_id ? " cursor-pointer" : ""}`} onClick={p.opportunity_id ? () => router.push(`/yields/${p.opportunity_id}`) : undefined}>
                 <td className="px-5 py-3">
                   <ProtocolChip slug={p.protocol_slug} />
                 </td>
@@ -603,6 +636,11 @@ function PositionsPanel({ positions, activeType }: PositionsPanelProps) {
                 <td className="px-5 py-3 text-right">{fmtUsd(p.deposit_amount_usd)}</td>
                 <td className={`px-5 py-3 text-right ${pnlColor(p.pnl_usd)}`}>{fmtUsd(p.pnl_usd)}</td>
                 <ApyCell position={p} />
+                <td className="px-5 py-3 text-right">
+                  {p.opportunity_id && (
+                    <button onClick={(e) => { e.stopPropagation(); router.push(`/yields/${p.opportunity_id}`); }} className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors">Details</button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

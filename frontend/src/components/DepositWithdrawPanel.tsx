@@ -31,7 +31,8 @@ export default function DepositWithdrawPanel({ yield_, protocolSlug }: Props) {
   const { execute, status, error, txSignature, reset } = useVaultTransaction(signer);
 
   const numAmount = parseFloat(amount) || 0;
-  const isValid = numAmount > 0 && (balance == null || numAmount <= balance);
+  const meetsMinimum = tab === "withdraw" || !yield_.min_deposit || numAmount >= yield_.min_deposit;
+  const isValid = numAmount > 0 && (balance == null || numAmount <= balance) && meetsMinimum;
   const isBusy = status === "building" || status === "signing" || status === "confirming";
 
   function handleAmountChange(value: string) {
@@ -158,6 +159,11 @@ export default function DepositWithdrawPanel({ yield_, protocolSlug }: Props) {
           {numAmount > 0 && balance != null && numAmount > balance && (
             <p className="text-red-400 text-[0.65rem] font-sans mb-2">
               Insufficient {primaryToken} balance
+            </p>
+          )}
+          {tab === "deposit" && numAmount > 0 && !meetsMinimum && (
+            <p className="text-red-400 text-[0.65rem] font-sans mb-2">
+              Minimum deposit: ${yield_.min_deposit}
             </p>
           )}
 

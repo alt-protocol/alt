@@ -7,19 +7,24 @@ import {
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
   appendTransactionMessageInstructions,
+  compressTransactionMessageUsingAddressLookupTables,
+  fetchAddressesForLookupTables,
   signAndSendTransactionMessageWithSigners,
   createSolanaRpc,
   getBase58Decoder,
   signature,
+  address,
 } from "@solana/kit";
 import type { Instruction } from "@solana/kit";
 import type { TransactionSendingSigner } from "@solana/signers";
+import type { BuildTxResult } from "../protocols/types";
+import { isBuildTxResultWithLookups } from "../protocols/types";
 import { HELIUS_RPC_URL } from "../constants";
 
 export type TxStatus = "idle" | "building" | "signing" | "confirming" | "success" | "error";
 
 interface UseVaultTransactionReturn {
-  execute: (buildIxs: () => Promise<Instruction[]>) => Promise<void>;
+  execute: (buildIxs: () => Promise<BuildTxResult>) => Promise<void>;
   status: TxStatus;
   error: string | null;
   txSignature: string | null;
@@ -40,7 +45,7 @@ export function useVaultTransaction(
   }, []);
 
   const execute = useCallback(
-    async (buildIxs: () => Promise<Instruction[]>) => {
+    async (buildIxs: () => Promise<BuildTxResult>) => {
       if (!signer) {
         setError("Wallet not connected");
         setStatus("error");
@@ -52,19 +57,36 @@ export function useVaultTransaction(
         setError(null);
         setTxSignature(null);
 
-        const instructions = await buildIxs();
+        const result = await buildIxs();
+
+        let instructions: Instruction[];
+        let lookupTableAddresses: string[] = [];
+
+        if (isBuildTxResultWithLookups(result)) {
+          instructions = result.instructions;
+          lookupTableAddresses = result.lookupTableAddresses;
+        } else {
+          instructions = result;
+        }
 
         const rpc = createSolanaRpc(HELIUS_RPC_URL);
         const { value: latestBlockhash } = await rpc.getLatestBlockhash().send();
 
         setStatus("signing");
 
-        const message = pipe(
+        let message = pipe(
           createTransactionMessage({ version: 0 }),
           (m) => setTransactionMessageFeePayerSigner(signer, m),
           (m) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, m),
           (m) => appendTransactionMessageInstructions(instructions, m),
         );
+
+        // Compress with address lookup tables if provided (e.g. Multiply)
+        if (lookupTableAddresses.length > 0) {
+          const altAddresses = lookupTableAddresses.map((a) => address(a));
+          const lookups = await fetchAddressesForLookupTables(altAddresses, rpc);
+          message = compressTransactionMessageUsingAddressLookupTables(message, lookups) as typeof message;
+        }
 
         const signatureBytes = await signAndSendTransactionMessageWithSigners(message);
 
@@ -82,8 +104,10 @@ export function useVaultTransaction(
       } catch (err) {
         const msg =
           err instanceof Error ? err.message : "Transaction failed";
-        if (msg.includes("User rejected") || msg.includes("rejected")) {
+        if (msg.includes("User rejected") || msg.includes("user reject")) {
           setError("Transaction rejected by wallet");
+        } else if (msg.includes("Simulation") || msg.includes("simulation") || msg.includes("SimulationError")) {
+          setError("Transaction simulation failed — check amount and balance");
         } else {
           setError(msg);
         }

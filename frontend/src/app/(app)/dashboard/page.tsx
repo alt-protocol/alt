@@ -23,7 +23,7 @@ function fmtCategory(s: string) {
   return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-type SortField = "apy" | "tvl" | "apy30d";
+type SortField = "apy" | "tvl" | "apy30d" | "liquidity";
 type SortDir = "asc" | "desc";
 
 interface Filters {
@@ -36,9 +36,11 @@ interface Filters {
   apy30dMax: string;
   tvlMin: string;
   tvlMax: string;
+  liquidityMin: string;
+  liquidityMax: string;
 }
 
-const EMPTY_FILTERS: Filters = { protocol: "", category: "", token: "", apyMin: "", apyMax: "", apy30dMin: "", apy30dMax: "", tvlMin: "", tvlMax: "" };
+const EMPTY_FILTERS: Filters = { protocol: "", category: "", token: "", apyMin: "", apyMax: "", apy30dMin: "", apy30dMax: "", tvlMin: "", tvlMax: "", liquidityMin: "", liquidityMax: "" };
 const CATEGORIES = ["", "lending", "multiply", "insurance_fund", "vault"];
 const QUICK_TOKENS = ["USDC"];
 
@@ -64,12 +66,14 @@ function DashboardContent() {
     apy30dMax: searchParams.get("apy30dMax") ?? "",
     tvlMin: searchParams.get("tvlMin") ?? "",
     tvlMax: searchParams.get("tvlMax") ?? "",
+    liquidityMin: searchParams.get("liquidityMin") ?? "",
+    liquidityMax: searchParams.get("liquidityMax") ?? "",
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), []);
 
   const initialSortField = useMemo<SortField>(() => {
     const s = searchParams.get("sort");
-    return s === "tvl" || s === "apy30d" ? s : "apy";
+    return s === "tvl" || s === "apy30d" || s === "liquidity" ? s : "apy";
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -87,7 +91,7 @@ function DashboardContent() {
   const panelRef = useRef<HTMLDivElement>(null);
 
   // 30d sort is client-side only; for apy/tvl we use backend sort
-  const backendSort = sortField === "apy30d" ? "apy_desc" : `${sortField}_${sortDir}`;
+  const backendSort = sortField === "apy30d" || sortField === "liquidity" ? "apy_desc" : `${sortField}_${sortDir}`;
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["yields", backendSort, filters.category],
@@ -117,11 +121,22 @@ function DashboardContent() {
     if (apy30dMax != null) result = result.filter((y) => (y.apy_30d_avg ?? 0) <= apy30dMax);
     if (tvlMin != null) result = result.filter((y) => (y.tvl_usd ?? 0) >= tvlMin);
     if (tvlMax != null) result = result.filter((y) => (y.tvl_usd ?? 0) <= tvlMax);
-    // Client-side sort for 30d
+    const liqMin = filters.liquidityMin ? parseFloat(filters.liquidityMin) : null;
+    const liqMax = filters.liquidityMax ? parseFloat(filters.liquidityMax) : null;
+    if (liqMin != null) result = result.filter((y) => (y.liquidity_available_usd ?? 0) >= liqMin);
+    if (liqMax != null) result = result.filter((y) => (y.liquidity_available_usd ?? 0) <= liqMax);
+    // Client-side sort for 30d and liquidity
     if (sortField === "apy30d") {
       result = [...result].sort((a, b) => {
         const av = a.apy_30d_avg ?? 0;
         const bv = b.apy_30d_avg ?? 0;
+        return sortDir === "desc" ? bv - av : av - bv;
+      });
+    }
+    if (sortField === "liquidity") {
+      result = [...result].sort((a, b) => {
+        const av = a.liquidity_available_usd ?? 0;
+        const bv = b.liquidity_available_usd ?? 0;
         return sortDir === "desc" ? bv - av : av - bv;
       });
     }
@@ -194,7 +209,7 @@ function DashboardContent() {
     syncToUrl(EMPTY_FILTERS, sortField, sortDir);
   }
 
-  const activeFilterCount = [filters.protocol, filters.category, filters.token, filters.apyMin, filters.apyMax, filters.apy30dMin, filters.apy30dMax, filters.tvlMin, filters.tvlMax].filter(Boolean).length;
+  const activeFilterCount = [filters.protocol, filters.category, filters.token, filters.apyMin, filters.apyMax, filters.apy30dMin, filters.apy30dMax, filters.tvlMin, filters.tvlMax, filters.liquidityMin, filters.liquidityMax].filter(Boolean).length;
 
   const protocolOptions = [{ value: "", label: "All Protocols" }, ...sources.map((s) => ({ value: s, label: s }))];
   const tokenOptions = [{ value: "", label: "All Tokens" }, ...allTokens.map((t) => ({ value: t, label: t }))];
@@ -293,6 +308,12 @@ function DashboardContent() {
               <span className="flex items-center gap-1.5 bg-surface-high text-foreground text-[0.7rem] font-sans rounded-sm px-2.5 py-1 hover:bg-secondary hover:text-secondary-text transition-colors cursor-default">
                 TVL: ${filters.tvlMin || "0"} – ${filters.tvlMax || "\u221e"}
                 <button onClick={() => updateFilters({ ...filters, tvlMin: "", tvlMax: "" })} className="text-foreground-muted hover:text-foreground transition-colors leading-none">&times;</button>
+              </span>
+            )}
+            {(filters.liquidityMin || filters.liquidityMax) && (
+              <span className="flex items-center gap-1.5 bg-surface-high text-foreground text-[0.7rem] font-sans rounded-sm px-2.5 py-1 hover:bg-secondary hover:text-secondary-text transition-colors cursor-default">
+                Liq: ${filters.liquidityMin || "0"} – ${filters.liquidityMax || "\u221e"}
+                <button onClick={() => updateFilters({ ...filters, liquidityMin: "", liquidityMax: "" })} className="text-foreground-muted hover:text-foreground transition-colors leading-none">&times;</button>
               </span>
             )}
             {activeFilterCount > 0 && (
@@ -438,6 +459,28 @@ function DashboardContent() {
                       />
                     </div>
                   </div>
+
+                  {/* Available Liquidity range */}
+                  <div className="flex items-center justify-between gap-4">
+                    <label className="text-[0.8rem] text-foreground-muted font-sans shrink-0 w-24">Avail. Liq. ($)</label>
+                    <div className="flex items-center gap-2 flex-1">
+                      <input
+                        type="number"
+                        placeholder="Min"
+                        value={draftFilters.liquidityMin}
+                        onChange={(e) => setDraftFilters({ ...draftFilters, liquidityMin: e.target.value })}
+                        className={inputClass}
+                      />
+                      <span className="text-foreground-muted text-[0.75rem]">&ndash;</span>
+                      <input
+                        type="number"
+                        placeholder="Max"
+                        value={draftFilters.liquidityMax}
+                        onChange={(e) => setDraftFilters({ ...draftFilters, liquidityMax: e.target.value })}
+                        className={inputClass}
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 {/* Footer */}
@@ -523,7 +566,7 @@ function DashboardContent() {
                         <span className="text-[0.8rem] font-sans tabular-nums text-foreground-muted">{fmtTvl(y.tvl_usd)}</span>
                       </div>
                       <div className="flex justify-between items-baseline">
-                        <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Liquidity</span>
+                        <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Available Liquidity</span>
                         <span className="text-[0.8rem] font-sans tabular-nums text-foreground-muted">{y.liquidity_available_usd != null ? fmtTvl(y.liquidity_available_usd) : "\u2014"}</span>
                       </div>
                       <div className="flex justify-between items-baseline">
@@ -559,7 +602,12 @@ function DashboardContent() {
                     >
                       TVL<SortArrow field="tvl" />
                     </th>
-                    <th className="text-right px-5 py-2.5 font-medium whitespace-nowrap">Liquidity</th>
+                    <th
+                      className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
+                      onClick={() => toggleSort("liquidity")}
+                    >
+                      Available Liquidity<SortArrow field="liquidity" />
+                    </th>
                     <th
                       className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
                       onClick={() => toggleSort("apy")}

@@ -29,7 +29,7 @@ cd frontend
 npm install
 npm run dev
 ```
-Requires `frontend/.env.local` with Helius RPC URL.
+Requires `frontend/.env.local` with Helius RPC URL. `NEXT_PUBLIC_API_URL` defaults to `http://localhost:8000` if not set (see `lib/constants.ts`).
 
 ### Alembic migrations (run from `backend/`)
 ```bash
@@ -44,8 +44,13 @@ python scripts/seed_protocols.py
 ```
 
 ### Deployment
-- Dockerfiles in `backend/` and `frontend/` are used by Railway and Vercel for production builds
+- **Backend** is live on Railway (Dockerfile-based, auto-runs `alembic upgrade head` on deploy)
+- **Frontend** is live on Vercel (auto-detected Next.js)
 - `docker-compose.yml` is for local development only (Postgres)
+
+**Required Railway env vars:** `DATABASE_URL` (Railway Postgres), `HELIUS_API_KEY`, `HELIUS_RPC_URL`, `JUPITER_API_KEY`, `CORS_ORIGINS` (Vercel domain), `PORT` (set by Railway)
+
+**Required Vercel env vars:** `NEXT_PUBLIC_API_URL` (Railway backend URL), `NEXT_PUBLIC_HELIUS_RPC_URL`
 
 ## Architecture
 
@@ -58,7 +63,7 @@ The backend **never** handles private keys or signs transactions. All deposit/wi
 The backend is only used for: serving yield data, reading public on-chain positions, and storing historical yield snapshots.
 
 ### Backend (`backend/app/`)
-- `main.py` — FastAPI app with CORS (localhost:3000 allowed)
+- `main.py` — FastAPI app with CORS (localhost:3000 default, production via CORS_ORIGINS env var)
 - `routers/` — `yields.py`, `protocols.py`, `portfolio.py` mounted under `/api`
 - `models/` — SQLAlchemy models: `Protocol`, `YieldOpportunity`, `YieldSnapshot`
 - `schemas/` — Pydantic schemas (empty, to be filled)
