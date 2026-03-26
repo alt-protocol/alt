@@ -67,7 +67,7 @@ The backend **never** handles private keys or signs transactions. All deposit/wi
 
 ### Frontend (`frontend/src/`)
 - Uses `(app)` route group layout — see `frontend/CLAUDE.md` for details
-- `lib/categories/` — Category registry: `registry.tsx` (types + map), `definitions/` (one file per category), `extra-data.ts` (typed extractors), `index.ts` (re-exports). Drives detail page layout, portfolio table columns, filter dropdowns — adding a new category is a single-file operation.
+- `lib/categories/` — Category registry: `registry.ts` (types + map), `definitions/` (one `.ts` file per category), `extra-data.ts` (typed extractors), `index.ts` (re-exports). Drives detail page layout, filter dropdowns, sidebar labels. Position table columns are in `PositionTable.tsx`.
 - `lib/protocols/` — Adapter pattern: `kamino.ts`, `drift.ts`, `jupiter.ts` implement `ProtocolAdapter` interface from `types.ts`; `index.ts` is the registry. Adding a new protocol to an existing category requires zero UI changes.
 - `components/` — `CategoryDetailView` (shared detail page shell), `DepositWithdrawPanel`, `MultiplyPanel`, `ApyChart`, `PortfolioChart`, `WalletButton`, etc.
 - State: TanStack Query, no global store

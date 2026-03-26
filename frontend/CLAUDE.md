@@ -15,11 +15,11 @@ Requires `.env.local` with `NEXT_PUBLIC_HELIUS_RPC_URL`. `NEXT_PUBLIC_API_URL` d
 Uses `(app)` route group layout in `src/app/(app)/` for dashboard, portfolio, and yield detail pages. Landing page at `src/app/page.tsx` outside the group.
 
 ### Category Registry (`src/lib/categories/`)
-- `registry.tsx` — `CategoryDefinition` interface + `getCategoryDef(slug)`, `getAllCategories()`, `getCategorySlugs()`
-- `definitions/` — One file per category (lending, multiply, vault, insurance-fund, earn) exporting `CategoryDefinition`
+- `registry.ts` — `CategoryDefinition` interface (stats, detail fields, labels, action panel type) + `getCategoryDef(slug)`, `getAllCategories()`, `getCategorySlugs()`
+- `definitions/` — One `.ts` file per category (lending, multiply, vault, insurance-fund, earn) exporting `CategoryDefinition`
 - `extra-data.ts` — Typed extra_data extractors per category (replaces ad-hoc casts)
 - `index.ts` — Re-exports + registers all built-in categories
-- Adding a new category = 1 definition file + register in index.ts. UI auto-adapts (filters, sidebar, detail page, position table).
+- Adding a new category = 1 definition file + register in index.ts + add columns to `PositionTable.getColumnsForType()`. Filters, sidebar, and detail pages auto-adapt.
 
 ### Protocol Adapters (`src/lib/protocols/`)
 - `types.ts` — `ProtocolAdapter` interface: `buildDepositTx`, `buildWithdrawTx`, optional `getBalance`
@@ -60,9 +60,9 @@ All UI must follow `DESIGN.md`. See root `CLAUDE.md` for key constraints summary
 Always check these before creating new functions — most common utilities already exist.
 
 ### Categories (`src/lib/categories/`)
-- `registry.tsx` — `CategoryDefinition` type, `getCategoryDef()`, `getAllCategories()`, `getCategorySlugs()`, `getAllOverviewColumns()`, `getAllOverviewCardFields()`
+- `registry.ts` — `CategoryDefinition` type, `getCategoryDef()`, `getAllCategories()`, `getCategorySlugs()`
 - `extra-data.ts` — `getMultiplyExtra()`, `getLendingExtra()` — typed extraction from `extra_data`
-- `definitions/` — `lending.tsx`, `multiply.tsx`, `vault.tsx`, `insurance-fund.tsx`, `earn.tsx`
+- `definitions/` — `lending.ts`, `multiply.ts`, `vault.ts`, `insurance-fund.ts`, `earn.ts`
 
 ### Utilities (`src/lib/`)
 - `format.ts` — all formatting: `fmtNum`, `fmtApy`, `fmtTvl`, `fmtUsd`, `fmtPct`, `fmtDays`, `fmtDate`, `fmtDateShort`, `fmtCategory`, `fmtProductType`, `truncateId`, `pnlColor`
@@ -82,14 +82,13 @@ Always check these before creating new functions — most common utilities alrea
 - `useTokenBalance.ts` — fetch SPL token balance for connected wallet
 - `useTransaction.ts` — unified transaction lifecycle for all categories: `"idle" | "preparing" | "building" | "signing" | "confirming" | "success" | "error"`. Handles setup txs (LUT creation) automatically when present.
 - `usePositionBalance.ts` — protocol-agnostic balance hook, delegates to `adapter.getBalance()`. Use for withdraw balance display.
-- `useVaultBalance.ts` — legacy Kamino-specific vault balance hook. No active consumers — use `usePositionBalance` for new code.
 - `usePositionForOpportunity.ts` — `usePositionForOpportunity(walletAddress, opportunityId)` returns user's active position for a specific yield opportunity (used by withdraw tab)
 - `useSlippage.ts` — `useSlippage(defaultBps)` — persisted slippage preference in localStorage, used by MultiplyPanel
 - `usePortfolioData.ts` — wallet tracking, position fetching, history, events, summary computations
 
 ### Components (`src/components/`)
 - `CategoryDetailView.tsx` — shared detail page shell driven by category registry. Renders stats, detail fields, action panel, and APY history for any category.
-- `PositionTable.tsx` — data-driven table via `ColumnDef[]`, columns driven by category registry via `getColumnsForType(type)`
+- `PositionTable.tsx` — data-driven table via `ColumnDef[]`. Column definitions live in `getColumnsForType(type)` switch/case (component-local). Uses `getCategoryDef` for sidebar labels only.
 - `FilterPanel.tsx` — reusable filter UI, category options auto-populated from registry
 - `ProtocolChip.tsx` — protocol badge with icon
 - `Dropdown.tsx` — styled dropdown menu
@@ -134,7 +133,7 @@ Always check these before creating new functions — most common utilities alrea
 
 ## Table/List Patterns
 
-- For position tables: use `PositionTable` + `getColumnsForType()` — columns are driven by the category registry
+- For position tables: use `PositionTable` + `getColumnsForType()`. When adding a new category, add a case to this switch in PositionTable.
 - Mobile: every table MUST have a `lg:hidden` card view + `hidden lg:block` table view
 - Table styling: `text-[0.8rem] font-sans`, header: `text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface`
 
