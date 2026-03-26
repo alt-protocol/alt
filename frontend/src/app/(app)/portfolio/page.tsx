@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import dynamic from "next/dynamic";
 import { fmtUsd, fmtPct, fmtApy, pnlColor } from "@/lib/format";
 import PositionTable, { getColumnsForType } from "@/components/PositionTable";
@@ -103,6 +104,8 @@ export default function Portfolio() {
     shortAddr,
   } = usePortfolioData();
 
+  const columns = useMemo(() => getColumnsForType(activeType), [activeType]);
+
   return (
     <main className="max-w-[1200px] mx-auto px-4 sm:px-8 lg:px-[3.5rem] py-[2.25rem]">
       {!walletAddress && <NoWalletState />}
@@ -136,7 +139,8 @@ export default function Portfolio() {
               { label: "Net Value", value: fmtUsd(summary.totalValue) },
               { label: "PnL ($)", value: fmtUsd(summary.totalPnlUsd), colorClass: pnlColor(summary.totalPnlUsd) },
               { label: "ROI", value: fmtPct(summary.roi), colorClass: pnlColor(summary.roi) },
-              { label: "Avg APY", value: fmtApy(summary.weightedApy), colorClass: "text-neon" },
+              { label: "Current APY", value: fmtApy(summary.weightedApy), colorClass: "text-neon" },
+              { label: "Real APY", value: fmtApy(summary.weightedApyRealized), colorClass: pnlColor(summary.weightedApyRealized) },
               { label: "Positions", value: `${summary.count}` },
             ]}
             size="lg"
@@ -171,7 +175,7 @@ export default function Portfolio() {
                 activeType={activeType}
                 onSelect={setActiveType}
               />
-              <PositionTable columns={getColumnsForType(activeType)} positions={visiblePositions} activeType={activeType} />
+              <PositionTable columns={columns} positions={visiblePositions} activeType={activeType} />
             </div>
           )}
 

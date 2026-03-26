@@ -1,14 +1,14 @@
 import type { Address, Instruction } from "@solana/kit";
-import { createSolanaRpc, createSolanaRpcSubscriptions } from "@solana/kit";
-import { HELIUS_RPC_URL } from "./constants";
+import { getRpc, getRpcSubscriptions } from "./rpc";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
- * KSwap swap provider utilities for klend-sdk multiply/leverage operations.
+ * KSwap swap provider for klend-sdk multiply/leverage operations.
  *
- * Routes through multiple DEXes and selects routes by smallest transaction
- * size (critical for Solana's 1232-byte limit).
+ * The SDK expects SwapQuoteProvider and SwapIxsProvider callbacks.
+ * KSwap routes through multiple DEXes and is compatible with klend-sdk's
+ * flash loan flow (unlike Jupiter V6 which uses incompatible accounts).
  */
 
 const KSWAP_API_URL = "https://api.kamino.finance/kswap";
@@ -30,35 +30,16 @@ async function loadModules() {
   };
 }
 
-/** Get or create a singleton KswapSdk instance. */
+/** Singleton KswapSdk instance using shared RPC. */
 export async function getKswapSdkInstance(): Promise<any> {
   if (_kswapSdk) return _kswapSdk;
   const { KswapSdk } = await loadModules();
-  const rpc = createSolanaRpc(HELIUS_RPC_URL);
-  const wsUrl = HELIUS_RPC_URL.replace("https://", "wss://");
-  const rpcSubscriptions = createSolanaRpcSubscriptions(wsUrl);
-  _kswapSdk = new KswapSdk(KSWAP_API_URL, rpc as any, rpcSubscriptions as any);
+  _kswapSdk = new KswapSdk(KSWAP_API_URL, getRpc() as any, getRpcSubscriptions() as any);
   return _kswapSdk;
 }
 
-/** Get debt-to-collateral price via Jupiter Price API (through KSwap). */
-export async function getTokenPrice(inputMint: Address, outputMint: Address): Promise<number> {
-  const kswapSdk = await getKswapSdkInstance();
-  const res = await kswapSdk.getJupiterPriceWithFallback({
-    ids: inputMint.toString(),
-    vsToken: outputMint.toString(),
-  });
-  return Number(res?.[inputMint.toString()]?.usdPrice || 0);
-}
-
 /** Build route params shared by quoter and swapper. */
-function buildRouteParams(
-  executor: Address,
-  inputs: any,
-  slippageBps: number,
-  BN: any,
-  amountStr: string,
-) {
+function buildRouteParams(executor: Address, inputs: any, slippageBps: number, BN: any, amountStr: string) {
   return {
     executor,
     tokenIn: inputs.inputMint,
@@ -78,7 +59,6 @@ function buildRouteParams(
   };
 }
 
-/** Build RouterContext from reserve mint info. */
 function buildRouterContext(RouterContext: any, inputReserve: any, outputReserve: any) {
   return new RouterContext(
     { tokenProgramId: inputReserve.getLiquidityTokenProgram(), decimals: inputReserve.stats.decimals },
@@ -86,7 +66,6 @@ function buildRouterContext(RouterContext: any, inputReserve: any, outputReserve
   );
 }
 
-/** Compute price from route amounts. */
 function routePrice(route: any, inFactor: any, outFactor: any, Decimal: any) {
   const inAmt = new Decimal(route.amountsExactIn.amountIn.toString()).div(inFactor);
   const outAmt = new Decimal(route.amountsExactIn.amountOutGuaranteed.toString()).div(outFactor);

@@ -82,7 +82,10 @@ export function usePortfolioData() {
     const weightedApy = totalValue > 0
       ? positions.reduce((sum, p) => sum + (p.apy ?? 0) * (p.deposit_amount_usd ?? 0), 0) / totalValue
       : 0;
-    return { totalValue, totalPnlUsd, roi, weightedApy, count: positions.length };
+    const weightedApyRealized = totalValue > 0
+      ? positions.reduce((sum, p) => sum + (p.apy_realized ?? 0) * (p.deposit_amount_usd ?? 0), 0) / totalValue
+      : 0;
+    return { totalValue, totalPnlUsd, roi, weightedApy, weightedApyRealized, count: positions.length };
   }, [positions]);
 
   const chartData: ChartPoint[] = useMemo(() => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useSelectedWalletAccount } from "@solana/react";
 import { useWalletAccountTransactionSendingSigner } from "@solana/react";
 import type { UiWalletAccount } from "@wallet-standard/react";
@@ -12,6 +12,7 @@ import { useTokenBalance } from "@/lib/hooks/useTokenBalance";
 import { useTransaction } from "@/lib/hooks/useTransaction";
 import { usePositionForOpportunity } from "@/lib/hooks/usePositionForOpportunity";
 import { useSlippage } from "@/lib/hooks/useSlippage";
+import { useMultiplySetup } from "@/lib/hooks/useMultiplySetup";
 import type { LeverageEntry } from "@/lib/multiply-utils";
 import { parseLeverageTable, interpolateApy, getMultiplyStatusLabel } from "@/lib/multiply-utils";
 import WalletButton from "./WalletButton";
@@ -101,6 +102,10 @@ function ConnectedMultiplyPanel({
   );
 
   const { execute, status, error, txSignature, reset } = useTransaction(signer);
+  const { needsSetup, isChecking, isSettingUp, isVerifying, error: setupError, runSetup } = useMultiplySetup(signer, yield_);
+
+  // Reset transaction state when tab changes
+  useEffect(() => { reset(); }, [tab, reset]);
 
   const projectedApy = useMemo(() => interpolateApy(leverageEntries, leverage), [leverageEntries, leverage]);
   const numAmount = parseFloat(amount) || 0;
@@ -223,23 +228,42 @@ function ConnectedMultiplyPanel({
         <p className="text-red-400 text-[0.65rem] font-sans mb-2">Insufficient {collSymbol} balance</p>
       )}
 
-      <button
-        onClick={handleSubmit}
-        disabled={!isValid || isBusy}
-        className="bg-neon text-on-neon rounded-sm px-6 py-3 text-sm font-semibold font-sans w-full mt-3 hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
-      >
-        {isBusy ? statusLabel : tab === "open" ? `Open ${leverage.toFixed(1)}x ${collSymbol}/${debtSymbol}` : tab === "withdraw" ? `Withdraw ${collSymbol}` : "Close Position"}
-      </button>
+      {/* Setup Account or Action button */}
+      {needsSetup && !isChecking ? (
+        <>
+          <button
+            onClick={runSetup}
+            disabled={isSettingUp}
+            className="bg-neon text-on-neon rounded-sm px-6 py-3 text-sm font-semibold font-sans w-full mt-3 hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {isVerifying ? "Verifying setup..." : isSettingUp ? "Setting up account..." : "Setup Account"}
+          </button>
+          <p className="text-foreground-muted text-[0.6rem] font-sans mt-2 text-center">
+            One-time account setup required before opening a position
+          </p>
+          {setupError && <p className="mt-2 text-red-400 text-[0.7rem] font-sans text-center">{setupError}</p>}
+        </>
+      ) : (
+        <>
+          <button
+            onClick={handleSubmit}
+            disabled={!isValid || isBusy || isChecking}
+            className="bg-neon text-on-neon rounded-sm px-6 py-3 text-sm font-semibold font-sans w-full mt-3 hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {isChecking ? "Checking account..." : isBusy ? statusLabel : tab === "open" ? `Open ${leverage.toFixed(1)}x ${collSymbol}/${debtSymbol}` : tab === "withdraw" ? `Withdraw ${collSymbol}` : "Close Position"}
+          </button>
 
-      {status === "success" && txSignature && (
-        <div className="mt-3 text-center">
-          <p className="text-neon text-[0.75rem] font-sans mb-1">Transaction confirmed</p>
-          <a href={`https://solscan.io/tx/${txSignature}`} target="_blank" rel="noopener noreferrer" className="text-foreground-muted text-[0.65rem] font-sans hover:text-foreground underline">View on Solscan</a>
-        </div>
-      )}
+          {status === "success" && txSignature && (
+            <div className="mt-3 text-center">
+              <p className="text-neon text-[0.75rem] font-sans mb-1">Transaction confirmed</p>
+              <a href={`https://solscan.io/tx/${txSignature}`} target="_blank" rel="noopener noreferrer" className="text-foreground-muted text-[0.65rem] font-sans hover:text-foreground underline">View on Solscan</a>
+            </div>
+          )}
 
-      {status === "error" && error && (
-        <p className="mt-3 text-red-400 text-[0.7rem] font-sans text-center">{error}</p>
+          {status === "error" && error && (
+            <p className="mt-3 text-red-400 text-[0.7rem] font-sans text-center">{error}</p>
+          )}
+        </>
       )}
 
       {/* Transaction Settings */}
@@ -322,7 +346,6 @@ export default function MultiplyPanel({ yield_, protocolSlug }: Props) {
         </div>
       ) : (
         <ConnectedMultiplyPanel
-          key={tab}
           selectedAccount={selectedAccount}
           tab={tab}
           amount={amount}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useSelectedWalletAccount } from "@solana/react";
 import { useWalletAccountTransactionSendingSigner } from "@solana/react";
 import type { UiWalletAccount } from "@wallet-standard/react";
@@ -10,6 +10,7 @@ import { getAdapter } from "@/lib/protocols";
 import { fmtNum, fmtUsd, fmtPct, pnlColor } from "@/lib/format";
 import { useTokenBalance } from "@/lib/hooks/useTokenBalance";
 import { usePositionBalance } from "@/lib/hooks/usePositionBalance";
+import { useWithdrawState } from "@/lib/hooks/useWithdrawState";
 import { useTransaction } from "@/lib/hooks/useTransaction";
 import { usePositionForOpportunity } from "@/lib/hooks/usePositionForOpportunity";
 import { useInvalidateAfterTransaction } from "@/lib/hooks/useInvalidateAfterTransaction";
@@ -59,13 +60,25 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
     selectedAccount.address,
     yield_.id,
   );
+  const { data: withdrawState } = useWithdrawState(
+    selectedAccount.address,
+    tab === "withdraw" ? protocolSlug : undefined,
+    tab === "withdraw" ? yield_.deposit_address ?? undefined : undefined,
+    tab === "withdraw" ? yield_.category : undefined,
+    yield_.extra_data ?? undefined,
+  );
 
   const { execute, status, error, txSignature, reset } = useTransaction(signer);
+
+  // Reset transaction state when tab changes
+  useEffect(() => { reset(); }, [tab, reset]);
 
   const effectiveBalance = tab === "deposit" ? (balance ?? null) : (vaultBalance ?? null);
   const numAmount = parseFloat(amount) || 0;
   const meetsMinimum = tab === "withdraw" || !yield_.min_deposit || numAmount >= yield_.min_deposit;
-  const isValid = numAmount > 0 && (effectiveBalance == null || numAmount <= effectiveBalance) && meetsMinimum;
+  const isRedeemable = withdrawState?.status === "redeemable";
+  const isPendingWithdraw = withdrawState?.status === "pending";
+  const isValid = isRedeemable || (numAmount > 0 && (effectiveBalance == null || numAmount <= effectiveBalance) && meetsMinimum);
   const isBusy = status === "building" || status === "signing" || status === "confirming";
 
   function handleAmountChange(value: string) {
@@ -138,7 +151,14 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
         />
       )}
 
-      {tab === "withdraw" && vaultBalance != null && vaultBalance > 0 && (
+      {tab === "withdraw" && vaultBalanceLoading && (
+        <div className="flex justify-between items-center mb-4 animate-pulse">
+          <span className="h-3 w-16 bg-surface-high rounded-sm" />
+          <span className="h-3 w-24 bg-surface-high rounded-sm" />
+        </div>
+      )}
+
+      {tab === "withdraw" && !vaultBalanceLoading && vaultBalance != null && vaultBalance > 0 && (
         <>
           <BalanceRow
             label="Deposited"
@@ -158,7 +178,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
         </>
       )}
 
-      {tab === "withdraw" && (vaultBalance == null || vaultBalance <= 0) && !vaultBalanceLoading && (
+      {tab === "withdraw" && !vaultBalanceLoading && (vaultBalance == null || vaultBalance <= 0) && (
         <div className="flex-1 flex flex-col items-center justify-center gap-2">
           <p className="text-foreground-muted font-sans text-[0.75rem]">
             No active position
@@ -169,8 +189,26 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
         </div>
       )}
 
-      {/* Amount input + actions (hidden when withdraw has no balance) */}
-      {(tab === "deposit" || (vaultBalance != null && vaultBalance > 0)) && (
+      {tab === "withdraw" && withdrawState?.requestedAmount != null && withdrawState.requestedAmount > 0 && (
+        <BalanceRow
+          label="Requested"
+          className="mb-3"
+          value={<>{fmtNum(withdrawState.requestedAmount, 6)} {primaryToken}</>}
+        />
+      )}
+
+      {tab === "withdraw" && withdrawState?.message && (
+        <div className={`rounded-sm px-3 py-2 mb-3 text-[0.7rem] font-sans ${
+          isPendingWithdraw
+            ? "bg-yellow-500/10 text-yellow-400"
+            : "bg-neon/10 text-neon"
+        }`}>
+          {withdrawState.message}
+        </div>
+      )}
+
+      {/* Amount input + actions (hidden when withdraw has no balance or redeemable) */}
+      {(tab === "deposit" || (vaultBalance != null && vaultBalance > 0 && !isRedeemable && !isPendingWithdraw)) && (
         <>
           <div className="bg-surface-high rounded-sm px-4 py-3 mb-2 focus-within:shadow-[0_2px_0_0_var(--neon-primary)] transition-shadow">
             <div className="flex items-center justify-between mb-1">
@@ -213,16 +251,28 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
               Minimum deposit: ${yield_.min_deposit}
             </p>
           )}
+        </>
+      )}
 
-          {/* Submit button */}
+      {/* Submit button — shown for deposit, withdraw with balance, or redeemable state */}
+      {(tab === "deposit" || (vaultBalance != null && vaultBalance > 0) || isRedeemable) && (
+        <>
           <button
             onClick={handleSubmit}
-            disabled={!isValid || isBusy}
+            disabled={!isValid || isBusy || isPendingWithdraw}
             className="bg-neon text-on-neon rounded-sm px-6 py-3 text-sm font-semibold font-sans w-full mt-3 hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {isBusy
               ? statusLabel
-              : `${tab === "deposit" ? "Deposit" : "Withdraw"} ${primaryToken}`}
+              : isPendingWithdraw
+                ? "Withdrawal Pending"
+                : tab === "deposit"
+                  ? `Deposit ${primaryToken}`
+                  : isRedeemable
+                    ? `Complete Withdraw ${primaryToken}`
+                    : withdrawState != null
+                      ? `Request Withdraw ${primaryToken}`
+                      : `Withdraw ${primaryToken}`}
           </button>
 
           {/* Status feedback */}
@@ -288,7 +338,6 @@ export default function DepositWithdrawPanel({ yield_, protocolSlug }: Props) {
         </div>
       ) : (
         <ConnectedDepositWithdrawPanel
-          key={tab}
           selectedAccount={selectedAccount}
           tab={tab}
           amount={amount}

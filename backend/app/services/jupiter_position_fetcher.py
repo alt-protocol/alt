@@ -26,6 +26,7 @@ from app.models.base import SessionLocal
 from app.models.user_position import TrackedWallet
 from app.services.utils import (
     safe_float, get_or_none, cached, compute_realized_apy, load_opportunity_map,
+    compute_held_days, build_position_dict, batch_earliest_snapshots,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,8 @@ _ATA_PROGRAM   = Pubkey.from_string("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe8bX
 
 _float = safe_float
 _cached = cached
+_held_days = compute_held_days
+_pos = build_position_dict
 
 
 def _build_headers() -> dict[str, str]:
@@ -95,6 +98,7 @@ def _first_deposit_ts(
 
     block_time = _cached(f"jup_opened_{wallet[:8]}_{mint[:8]}", 3600, _fetch)
     return datetime.fromtimestamp(block_time, tz=timezone.utc) if block_time else None
+
 
 
 def _get_earn_tokens(client: httpx.Client) -> list[dict]:
@@ -202,6 +206,7 @@ def _fetch_earn_positions(
                     earnings_map[addr] = parsed
 
     _omap = opp_map if opp_map is not None else load_opportunity_map(db)
+    earliest_map = batch_earliest_snapshots(db, wallet)
     results = []
     for asset_address, pos in positions_by_asset.items():
         token_info = token_map.get(asset_address, {})
@@ -234,34 +239,25 @@ def _fetch_earn_positions(
                 apy = rate_bps / 100
 
         opened_at = _first_deposit_ts(wallet, asset_address, helius_url, client) if helius_url else None
-        held_days = round((now - opened_at).total_seconds() / 86400.0, 4) if opened_at else None
+        if opened_at is None:
+            opened_at = earliest_map.get(asset_address)
+        held_days = _held_days(opened_at, now)
 
-        results.append({
-            "wallet_address": wallet,
-            "protocol_slug": "jupiter",
-            "product_type": "earn",
-            "external_id": asset_address,
-            "opportunity_id": opportunity_id,
-            "deposit_amount": underlying_amount,
-            "deposit_amount_usd": round(deposit_amount_usd, 2) if deposit_amount_usd else None,
-            "pnl_usd": round(pnl_usd, 2) if pnl_usd is not None else None,
-            "pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
-            "initial_deposit_usd": round(initial_deposit_usd, 2) if initial_deposit_usd else None,
-            "opened_at": opened_at,
-            "held_days": held_days,
-            "apy": round(apy, 4) if apy is not None else None,
-            "apy_realized": compute_realized_apy(pnl_usd, initial_deposit_usd, held_days),
-            "is_closed": False,
-            "closed_at": None,
-            "close_value_usd": None,
-            "token_symbol": token_info.get("symbol", ""),
-            "extra_data": {
+        results.append(_pos(
+            wallet_address=wallet, protocol_slug="jupiter",
+            product_type="earn", external_id=asset_address,
+            snapshot_at=now, opportunity_id=opportunity_id,
+            deposit_amount=underlying_amount, deposit_amount_usd=deposit_amount_usd,
+            pnl_usd=pnl_usd, pnl_pct=pnl_pct,
+            initial_deposit_usd=initial_deposit_usd,
+            opened_at=opened_at, held_days=held_days, apy=apy,
+            token_symbol=token_info.get("symbol", ""),
+            extra_data={
                 "shares": _float(pos.get("shares")),
                 "underlying_amount": underlying_amount,
-                "mint": asset_address,
-                "source": "jupiter_api",
+                "mint": asset_address, "source": "jupiter_api",
             },
-        })
+        ))
 
     return results
 
@@ -366,15 +362,3 @@ def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> in
     return total_snapshots
 
 
-def snapshot_all_wallets_job():
-    """APScheduler entry point — creates its own DB session."""
-    logger.info("Starting Jupiter position snapshot job")
-    db: Session = SessionLocal()
-    try:
-        count = snapshot_all_wallets(db)
-        logger.info("Jupiter position snapshot job complete: %d snapshots", count)
-    except Exception as exc:
-        db.rollback()
-        logger.error("Jupiter position snapshot job failed: %s", exc)
-    finally:
-        db.close()

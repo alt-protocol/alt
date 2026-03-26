@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { useRouter } from "next/navigation";
 import type { UserPositionOut } from "@/lib/api";
 import { fmtUsd, fmtApy, fmtPct, fmtDays, fmtProductType, truncateId, pnlColor } from "@/lib/format";
@@ -12,21 +13,6 @@ export interface ColumnDef {
   render: (position: UserPositionOut) => React.ReactNode;
 }
 
-export function ApyCell({ position }: { position: UserPositionOut }) {
-  const forwardApy = (position.extra_data as Record<string, unknown> | null)?.forward_apy as number | null | undefined;
-  const showBoth = forwardApy != null && position.apy !== forwardApy;
-  return (
-    <>
-      <span className="text-neon">{fmtApy(position.apy)}</span>
-      {showBoth && (
-        <div className="text-xs text-foreground-muted mt-0.5">
-          {fmtApy(forwardApy)} mkt
-        </div>
-      )}
-    </>
-  );
-}
-
 export interface PositionCardField {
   label: string;
   value: string;
@@ -34,23 +20,20 @@ export interface PositionCardField {
 }
 
 function getCardFields(position: UserPositionOut, type: string): PositionCardField[] {
-  const forwardApy = (position.extra_data as Record<string, unknown> | null)?.forward_apy as number | null | undefined;
-  const apyStr = forwardApy != null && position.apy !== forwardApy
-    ? `${fmtApy(position.apy)} (${fmtApy(forwardApy)} mkt)`
-    : fmtApy(position.apy);
-
   switch (type) {
     case "lending":
       return [
         { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
-        { label: "Supply APY", value: apyStr, colorClass: "text-neon" },
+        { label: "APY Current", value: fmtApy(position.apy), colorClass: "text-neon" },
+        { label: "APY Realized", value: fmtApy(position.apy_realized), colorClass: pnlColor(position.apy_realized) },
         { label: "Interest Earned", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
         { label: "Days Held", value: fmtDays(position.held_days) },
       ];
     case "multiply":
       return [
         { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
-        { label: "Net APY", value: apyStr, colorClass: "text-neon" },
+        { label: "APY Current", value: fmtApy(position.apy), colorClass: "text-neon" },
+        { label: "APY Realized", value: fmtApy(position.apy_realized), colorClass: pnlColor(position.apy_realized) },
         { label: "PnL ($)", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
         { label: "PnL (%)", value: fmtPct(position.pnl_pct), colorClass: pnlColor(position.pnl_pct) },
         { label: "Days Held", value: fmtDays(position.held_days) },
@@ -59,14 +42,16 @@ function getCardFields(position: UserPositionOut, type: string): PositionCardFie
     case "earn":
       return [
         { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
-        { label: "APY", value: apyStr, colorClass: "text-neon" },
+        { label: "APY Current", value: fmtApy(position.apy), colorClass: "text-neon" },
+        { label: "APY Realized", value: fmtApy(position.apy_realized), colorClass: pnlColor(position.apy_realized) },
         { label: "Interest Earned", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
         { label: "Days Held", value: fmtDays(position.held_days) },
       ];
     case "insurance_fund":
       return [
         { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
-        { label: "APY", value: apyStr, colorClass: "text-neon" },
+        { label: "APY Current", value: fmtApy(position.apy), colorClass: "text-neon" },
+        { label: "APY Realized", value: fmtApy(position.apy_realized), colorClass: pnlColor(position.apy_realized) },
         { label: "PnL", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
         { label: "Days Held", value: fmtDays(position.held_days) },
       ];
@@ -74,7 +59,8 @@ function getCardFields(position: UserPositionOut, type: string): PositionCardFie
       return [
         { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
         { label: "PnL", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
-        { label: "APY", value: apyStr, colorClass: "text-neon" },
+        { label: "APY Current", value: fmtApy(position.apy), colorClass: "text-neon" },
+        { label: "APY Realized", value: fmtApy(position.apy_realized), colorClass: pnlColor(position.apy_realized) },
       ];
   }
 }
@@ -112,13 +98,17 @@ export function getColumnsForType(type: string): ColumnDef[] {
     ) : null,
   };
 
+  const apyCurrent: ColumnDef = { header: "APY Current", align: "right", render: (p) => <span className="text-neon">{fmtApy(p.apy)}</span> };
+  const apyRealized: ColumnDef = { header: "APY Realized", align: "right", render: (p) => <span className={pnlColor(p.apy_realized)}>{fmtApy(p.apy_realized)}</span> };
+
   switch (type) {
     case "lending":
       return [
         { header: "Market", align: "left", render: (p) => <span className="text-foreground">{truncateId(p.external_id)}</span> },
         { header: "Token", align: "left", render: (p) => <span className="text-foreground-muted">{p.token_symbol ?? "\u2014"}</span> },
         { header: "Net Value", align: "right", render: (p) => fmtUsd(p.deposit_amount_usd) },
-        { header: "Supply APY", align: "right", render: (p) => <ApyCell position={p} /> },
+        apyCurrent,
+        apyRealized,
         { header: "Interest Earned", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtUsd(p.pnl_usd)}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
         detailsAction,
@@ -128,7 +118,8 @@ export function getColumnsForType(type: string): ColumnDef[] {
         { header: "Strategy", align: "left", render: (p) => <span className="text-foreground">{truncateId(p.external_id)}</span> },
         { header: "Token", align: "left", render: (p) => <span className="text-foreground-muted">{p.token_symbol ?? "\u2014"}</span> },
         { header: "Net Value", align: "right", render: (p) => fmtUsd(p.deposit_amount_usd) },
-        { header: "Net APY", align: "right", render: (p) => <ApyCell position={p} /> },
+        apyCurrent,
+        apyRealized,
         { header: "PnL ($)", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtUsd(p.pnl_usd)}</span> },
         { header: "PnL (%)", align: "right", render: (p) => <span className={pnlColor(p.pnl_pct)}>{fmtPct(p.pnl_pct)}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
@@ -139,7 +130,8 @@ export function getColumnsForType(type: string): ColumnDef[] {
         { header: "Vault", align: "left", render: (p) => <span className="text-foreground">{truncateId(p.external_id)}</span> },
         { header: "Token", align: "left", render: (p) => <span className="text-foreground-muted">{p.token_symbol ?? "\u2014"}</span> },
         { header: "Net Value", align: "right", render: (p) => fmtUsd(p.deposit_amount_usd) },
-        { header: "APY", align: "right", render: (p) => <ApyCell position={p} /> },
+        apyCurrent,
+        apyRealized,
         { header: "Interest Earned", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtUsd(p.pnl_usd)}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
         detailsAction,
@@ -149,7 +141,8 @@ export function getColumnsForType(type: string): ColumnDef[] {
         { header: "Fund", align: "left", render: (p) => <span className="text-foreground">{truncateId(p.external_id)}</span> },
         { header: "Token", align: "left", render: (p) => <span className="text-foreground-muted">{p.token_symbol ?? "\u2014"}</span> },
         { header: "Net Value", align: "right", render: (p) => fmtUsd(p.deposit_amount_usd) },
-        { header: "APY", align: "right", render: (p) => <ApyCell position={p} /> },
+        apyCurrent,
+        apyRealized,
         { header: "PnL", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtUsd(p.pnl_usd)}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
         detailsAction,
@@ -159,7 +152,8 @@ export function getColumnsForType(type: string): ColumnDef[] {
         { header: "Vault", align: "left", render: (p) => <span className="text-foreground">{truncateId(p.external_id)}</span> },
         { header: "Token", align: "left", render: (p) => <span className="text-foreground-muted">{p.token_symbol ?? "\u2014"}</span> },
         { header: "Net Value", align: "right", render: (p) => fmtUsd(p.deposit_amount_usd) },
-        { header: "APY", align: "right", render: (p) => <ApyCell position={p} /> },
+        apyCurrent,
+        apyRealized,
         { header: "Interest Earned", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtUsd(p.pnl_usd)}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
         detailsAction,
@@ -171,7 +165,8 @@ export function getColumnsForType(type: string): ColumnDef[] {
         { header: "Token", align: "left", render: (p) => <span className="text-foreground">{p.token_symbol ?? "\u2014"}</span> },
         { header: "Net Value", align: "right", render: (p) => fmtUsd(p.deposit_amount_usd) },
         { header: "PnL", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtUsd(p.pnl_usd)}</span> },
-        { header: "APY", align: "right", render: (p) => <ApyCell position={p} /> },
+        apyCurrent,
+        apyRealized,
         detailsAction,
       ];
   }
@@ -183,7 +178,7 @@ interface PositionTableProps {
   activeType: string;
 }
 
-export default function PositionTable({ columns, positions, activeType }: PositionTableProps) {
+function PositionTableInner({ columns, positions, activeType }: PositionTableProps) {
   const router = useRouter();
   const showProtocol = activeType === "all";
 
@@ -261,3 +256,5 @@ export default function PositionTable({ columns, positions, activeType }: Positi
     </div>
   );
 }
+
+export default memo(PositionTableInner);

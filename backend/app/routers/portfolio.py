@@ -254,6 +254,7 @@ def track_wallet(
                 "opened_at": p.opened_at.isoformat() if p.opened_at else None,
                 "held_days": float(p.held_days) if p.held_days else None,
                 "apy": float(p.apy) if p.apy else None,
+                "apy_realized": float(p.apy_realized) if p.apy_realized else None,
                 "is_closed": p.is_closed,
                 "closed_at": p.closed_at.isoformat() if p.closed_at else None,
                 "close_value_usd": float(p.close_value_usd) if p.close_value_usd else None,

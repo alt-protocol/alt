@@ -1,8 +1,8 @@
 import type { Instruction } from "@solana/kit";
 import { address, none } from "@solana/kit";
-import type { ProtocolAdapter, BuildTxParams, BuildTxResult, BuildTxResultWithSetup } from "./types";
+import type { ProtocolAdapter, BuildTxParams, BuildTxResult, BuildTxResultWithLookups } from "./types";
 import { getRpc } from "../rpc";
-import { createJupiterQuoter, createJupiterSwapper } from "../jupiter-swap";
+import { getKswapSdkInstance, createKswapQuoter, createKswapSwapper } from "../kswap";
 import { selectBestRoute, assembleMultiplyLuts } from "../multiply-luts";
 
 // klend-sdk bundles its own @solana/kit@2.x while we use 6.x.
@@ -191,10 +191,6 @@ function isVaultCategory(category: string): boolean {
 // Multiply helpers
 // ---------------------------------------------------------------------------
 
-const DEV = process.env.NODE_ENV === "development";
-function logMultiply(step: string, data?: Record<string, unknown>) {
-  if (DEV) console.log(`[multiply] ${step}`, data ?? "");
-}
 
 /** Parse and validate multiply extraData fields. */
 function parseMultiplyParams(extra: Record<string, unknown> | undefined) {
@@ -229,9 +225,10 @@ async function prepareMultiply(params: BuildTxParams, slippageBps: number) {
   const debtReserve = market.getReserveByMint(debtTokenMint);
   if (!collReserve || !debtReserve) throw new Error("Failed to load reserves");
 
-  // Jupiter V6 quoter/swapper — works better for stable pairs than KSwap
-  const quoter = createJupiterQuoter(slippageBps);
-  const swapper = createJupiterSwapper();
+  // KSwap quoter/swapper — required for klend-sdk flash loan compatibility
+  const kswapSdk = await getKswapSdkInstance();
+  const quoter = await createKswapQuoter(kswapSdk, params.signer.address as any, slippageBps, debtReserve, collReserve);
+  const swapper = await createKswapSwapper(kswapSdk, params.signer.address as any, slippageBps, debtReserve, collReserve);
 
   const currentSlot = await rpc.getSlot().send();
   const computeIxs = getComputeBudgetAndPriorityFeeIxs(1_400_000, new Decimal(500000));
@@ -246,11 +243,10 @@ async function prepareMultiply(params: BuildTxParams, slippageBps: number) {
 /** Select best route and assemble LUTs into final result. */
 async function finalizeMultiplyResult(
   routes: any,
-  opts: { userLut: any; collMint: string; debtMint: string; marketLut?: string; isMultiply: boolean; setupTxsIxs: any[] },
-): Promise<BuildTxResultWithSetup> {
+  opts: { userLut: any; collMint: string; debtMint: string; marketLut?: string; isMultiply: boolean },
+): Promise<BuildTxResultWithLookups> {
   const bestRoute = selectBestRoute(routes);
   const ixCount = bestRoute.ixs?.length ?? 0;
-  logMultiply("finalize:bestRoute", { ixCount, lutCount: bestRoute.lookupTables?.length ?? 0 });
 
   if (ixCount <= 2) {
     throw new Error("Swap routing failed — insufficient liquidity for this pair. Try a different market or increase slippage.");
@@ -269,9 +265,6 @@ async function finalizeMultiplyResult(
   return {
     instructions: bestRoute.ixs as unknown as Instruction[],
     lookupTableAddresses,
-    setupInstructionSets: opts.setupTxsIxs.length > 0
-      ? opts.setupTxsIxs as unknown as Instruction[][]
-      : undefined,
   };
 }
 
@@ -279,7 +272,7 @@ async function finalizeMultiplyResult(
 // Multiply — Open (deposit with leverage)
 // ---------------------------------------------------------------------------
 
-async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWithSetup> {
+async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWithLookups> {
   const userSlippage = (params.extraData?.slippageBps as number) ?? 30;
   const ctx = await prepareMultiply(params, userSlippage);
   const {
@@ -295,7 +288,6 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
 
   const leverage = params.extraData!.leverage as number;
   if (!leverage) throw new Error("Missing leverage for multiply open");
-  logMultiply("open:start", { collMint, debtMint, leverage, amount: params.amount, slippage: userSlippage });
 
   // Scope oracle refresh
   const { Scope } = await loadScope();
@@ -309,7 +301,6 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
   try {
     obligation = await market.getObligationByAddress(obligationAddress);
   } catch { /* first open — no obligation yet */ }
-  logMultiply("open:obligation", { exists: !!obligation });
 
   const scopeRefreshIx = obligation
     ? await getScopeRefreshIxForObligationAndReserves(market, collReserve, debtReserve, obligation, scopeConfig)
@@ -317,10 +308,9 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
 
   // User LUT + setup txs
   const multiplyMints = [{ coll: collTokenMint, debt: debtTokenMint }];
-  const [userLut, setupTxsIxs] = await getUserLutAddressAndSetupIxs(
+  const [userLut] = await getUserLutAddressAndSetupIxs(
     market, params.signer as any, none(), true, multiplyMints, [],
   );
-  logMultiply("open:lut", { userLut, setupTxCount: setupTxsIxs.length });
 
   // Price: fetch both USD prices via Jupiter and compute debt-to-coll ratio
   const priceRes = await fetch(`https://lite-api.jup.ag/price/v3?ids=${debtMint},${collMint}`);
@@ -328,7 +318,6 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
   const priceData = await priceRes.json();
   const debtPriceUsd = Number(priceData?.[debtMint]?.usdPrice || 0);
   const collPriceUsd = Number(priceData?.[collMint]?.usdPrice || 0);
-  logMultiply("open:prices", { debtPriceUsd, collPriceUsd });
 
   if (!debtPriceUsd || !collPriceUsd) {
     throw new Error(`Price unavailable — debt: $${debtPriceUsd}, coll: $${collPriceUsd}`);
@@ -339,7 +328,6 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
   if (priceDebtToColl.isZero() || priceDebtToColl.isNaN()) {
     throw new Error("Invalid price ratio — cannot calculate leverage");
   }
-  logMultiply("open:priceRatio", { priceDebtToColl: priceDebtToColl.toString() });
 
   const routes = await getDepositWithLeverageIxs({
     owner: params.signer as any,
@@ -350,16 +338,15 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
     slippagePct: new Decimal(userSlippage / 100),
     obligation, referrer: none(), currentSlot,
     targetLeverage: new Decimal(leverage),
-    selectedTokenMint: debtTokenMint,
+    selectedTokenMint: collTokenMint,
     obligationTypeTagOverride: ObligationTypeTag.Multiply,
     scopeRefreshIx, budgetAndPriorityFeeIxs: computeIxs,
-    quoteBufferBps: new Decimal(1000),
+    quoteBufferBps: new Decimal(100),
     quoter, swapper, useV2Ixs: true,
   });
-  logMultiply("open:routes", { count: routes.length });
 
   return finalizeMultiplyResult(routes, {
-    userLut, collMint, debtMint, marketLut, isMultiply: true, setupTxsIxs,
+    userLut, collMint, debtMint, marketLut, isMultiply: true,
   });
 }
 
@@ -367,7 +354,7 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
 // Multiply — Withdraw / Close (repay with collateral)
 // ---------------------------------------------------------------------------
 
-async function buildMultiplyClose(params: BuildTxParams): Promise<BuildTxResultWithSetup> {
+async function buildMultiplyClose(params: BuildTxParams): Promise<BuildTxResultWithLookups> {
   const userSlippage = (params.extraData?.slippageBps as number) ?? 50;
   const ctx = await prepareMultiply(params, userSlippage);
   const {
@@ -386,8 +373,8 @@ async function buildMultiplyClose(params: BuildTxParams): Promise<BuildTxResultW
   );
   if (!obligation) throw new Error("No active multiply position found");
 
-  // User LUT + setup txs
-  const [userLut, setupTxsIxs] = await getUserLutAddressAndSetupIxs(
+  // User LUT (setup handled separately by useMultiplySetup)
+  const [userLut] = await getUserLutAddressAndSetupIxs(
     market, params.signer as any, none(), false,
   );
 
@@ -407,7 +394,7 @@ async function buildMultiplyClose(params: BuildTxParams): Promise<BuildTxResultW
   });
 
   return finalizeMultiplyResult(routes, {
-    userLut, collMint, debtMint, marketLut, isMultiply: false, setupTxsIxs,
+    userLut, collMint, debtMint, marketLut, isMultiply: false,
   });
 }
 

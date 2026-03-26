@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import { lazy, Suspense } from "react";
+import type { ComponentType } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import type { YieldOpportunityDetail } from "@/lib/api";
@@ -8,6 +9,7 @@ import { fmtCategory } from "@/lib/format";
 import { queryKeys } from "@/lib/queryKeys";
 import { hasAdapter } from "@/lib/protocols";
 import { getCategoryDef } from "@/lib/categories";
+import type { CategoryDefinition } from "@/lib/categories/registry";
 import { ProtocolChip } from "@/components/ProtocolChip";
 import { DetailRow } from "@/components/DetailRow";
 import StatsGrid from "@/components/StatsGrid";
@@ -19,6 +21,25 @@ const DepositWithdrawPanel = dynamic(
   () => import("@/components/DepositWithdrawPanel"),
   { ssr: false },
 );
+
+interface ActionPanelProps {
+  yield_: YieldOpportunityDetail;
+  protocolSlug: string;
+}
+
+/** Module-level cache: one lazy component per category slug, created once. */
+const panelCache = new Map<string, React.LazyExoticComponent<ComponentType<ActionPanelProps>>>();
+
+function getCustomPanel(def: CategoryDefinition | undefined): React.LazyExoticComponent<ComponentType<ActionPanelProps>> | null {
+  if (def?.actionPanelType !== "custom" || !def.actionPanelComponent) return null;
+  let panel = panelCache.get(def.slug);
+  if (!panel) {
+    const loader = def.actionPanelComponent;
+    panel = lazy(() => loader());
+    panelCache.set(def.slug, panel);
+  }
+  return panel;
+}
 
 interface Props {
   yield_: YieldOpportunityDetail;
@@ -34,13 +55,8 @@ export default function CategoryDetailView({ yield_: y, id }: Props) {
   /* Optional title badge (e.g. vault tag for multiply) */
   const titleBadge = categoryDef?.titleBadge?.(y) ?? null;
 
-  /* Resolve action panel */
-  const CustomPanel = useMemo(() => {
-    if (categoryDef?.actionPanelType === "custom" && categoryDef.actionPanelComponent) {
-      return dynamic(() => categoryDef.actionPanelComponent!(), { ssr: false });
-    }
-    return null;
-  }, [categoryDef]);
+  // eslint-disable-next-line react-hooks/static-components -- stable: getCustomPanel returns a module-level cached lazy component per category slug
+  const CustomPanel = getCustomPanel(categoryDef);
 
   const hasPanel = y.protocol?.slug && hasAdapter(y.protocol.slug) && y.deposit_address;
 
@@ -94,8 +110,11 @@ export default function CategoryDetailView({ yield_: y, id }: Props) {
 
         {/* Action panel */}
         {hasPanel ? (
-          categoryDef?.actionPanelType === "custom" && CustomPanel ? (
-            <CustomPanel yield_={y} protocolSlug={y.protocol!.slug} />
+          CustomPanel ? (
+            <Suspense fallback={null}>
+              {/* eslint-disable-next-line react-hooks/static-components -- stable: module-level cached lazy component per category slug */}
+              <CustomPanel yield_={y} protocolSlug={y.protocol!.slug} />
+            </Suspense>
           ) : (
             <DepositWithdrawPanel yield_={y} protocolSlug={y.protocol!.slug} />
           )

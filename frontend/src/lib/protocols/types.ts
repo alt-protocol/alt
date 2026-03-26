@@ -40,9 +40,21 @@ export interface GetBalanceParams {
   extraData?: Record<string, unknown>;
 }
 
+/** Withdrawal state for protocols with multi-step withdrawals (e.g. Drift vault redeem period). */
+export interface WithdrawState {
+  /** "none" = no pending request, "pending" = waiting for redeem period, "redeemable" = ready to complete. */
+  status: "none" | "pending" | "redeemable";
+  /** Human-readable message for the user. */
+  message?: string;
+  /** Token-denominated amount locked in pending withdrawal. */
+  requestedAmount?: number;
+}
+
 export interface ProtocolAdapter {
   buildDepositTx(params: BuildTxParams): Promise<BuildTxResult>;
   buildWithdrawTx(params: BuildTxParams): Promise<BuildTxResult>;
   /** Optional: protocol-specific balance fetching (e.g. Kamino vault shares → USD). */
   getBalance?(params: GetBalanceParams): Promise<number | null>;
+  /** Optional: query multi-step withdrawal state (e.g. Drift vault redeem period). */
+  getWithdrawState?(params: GetBalanceParams): Promise<WithdrawState>;
 }

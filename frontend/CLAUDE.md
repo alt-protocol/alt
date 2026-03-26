@@ -69,12 +69,11 @@ Always check these before creating new functions — most common utilities alrea
 - `instruction-converter.ts` — `convertLegacyInstruction`, `convertJupiterApiInstruction` for building transactions from protocol SDKs
 - `api.ts` — `api.getYields()`, `api.getPositions()`, etc. Add new endpoints here, never inline fetch calls. Types (`YieldOpportunity`, `UserPositionOut`, etc.) also live here.
 - `constants.ts` — `API_URL`, `HELIUS_RPC_URL`, `TOKEN_MINTS`
-- `rpc.ts` — shared lazy-initialized Solana RPC singleton (`getRpc()`)
-- `jupiter-swap.ts` — Jupiter swap integration (V6 API quoter/swapper for klend-sdk)
-- `kswap.ts` — KSwap swap provider for Kamino Multiply: `createKswapQuoter`, `createKswapSwapper`, `getTokenPrice`, `getKswapSdkInstance`. Routes through multiple DEXes, optimizes for tx size.
-- `multiply-luts.ts` — LUT (Address Lookup Table) management for Multiply txs: `fetchCdnLuts`, `resolveMissingLuts`, `selectBestRoute`, `assembleMultiplyLuts`. Handles CDN LUTs, user LUTs, and missing account resolution via Kamino API.
-- `multiply-utils.ts` — `parseLeverageTable(extra)` parses leverage_table from extra_data, `getMultiplyStatusLabel(status)` maps tx status to labels.
-- `transaction-utils.ts` — `buildTransactionMessage(signer, blockhash, instructions)`, `getTxStatusLabel(status)`, and `mapTxError(err)`. Shared by useTransaction hook.
+- `rpc.ts` — shared lazy-initialized Solana RPC singleton (`getRpc()`, `getRpcSubscriptions()`). All RPC calls must use these — never create new instances.
+- `kswap.ts` — KSwap swap provider for Kamino Multiply: `createKswapQuoter`, `createKswapSwapper`, `getKswapSdkInstance`. Required for klend-sdk multiply (Jupiter V6 is incompatible with flash loan flow).
+- `multiply-luts.ts` — LUT management for Multiply txs: `fetchCdnLuts`, `resolveMissingLuts`, `selectBestRoute`, `assembleMultiplyLuts`.
+- `multiply-utils.ts` — `parseLeverageTable(extra)`, `interpolateApy(entries, leverage)`, `getMultiplyStatusLabel(status)`.
+- `transaction-utils.ts` — `buildTransactionMessage(signer, blockhash, instructions)` and `mapTxError(err)`. Shared by useTransaction hook.
 
 ### Hooks (`src/lib/hooks/`)
 - `useClickOutside.ts` — `useClickOutside(ref, isActive, onClickOutside)`
