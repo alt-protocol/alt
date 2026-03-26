@@ -16,11 +16,64 @@ function SortArrow({ field, sortField, sortDir }: { field: SortField; sortField:
   return <span className={`ml-1 inline-block w-3 text-center ${active ? "text-foreground" : "text-transparent"}`}>{arrow}</span>;
 }
 
+function DashboardSkeleton() {
+  return (
+    <>
+      {/* Stats skeleton */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-[1px] bg-outline-ghost rounded-sm overflow-hidden mb-[2.25rem]">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="bg-surface-low px-5 py-4">
+            <div className="bg-surface-high animate-pulse rounded-sm h-3 w-16 mb-2" />
+            <div className="bg-surface-high animate-pulse rounded-sm h-7 w-24" />
+          </div>
+        ))}
+      </div>
+      {/* Table skeleton */}
+      <div className="bg-surface-low rounded-sm overflow-hidden">
+        <div className="px-5 py-3 flex items-center justify-between">
+          <div className="bg-surface-high animate-pulse rounded-sm h-4 w-32" />
+          <div className="bg-surface-high animate-pulse rounded-sm h-8 w-20" />
+        </div>
+        <div className="px-5 py-8 space-y-0">
+          <div className="bg-surface h-10" />
+          {[0, 1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="flex gap-4 px-0 py-3">
+              <div className="bg-surface-high animate-pulse rounded-sm h-4 flex-[2]" />
+              <div className="bg-surface-high animate-pulse rounded-sm h-4 w-20" />
+              <div className="bg-surface-high animate-pulse rounded-sm h-4 w-24" />
+              <div className="bg-surface-high animate-pulse rounded-sm h-4 w-20" />
+              <div className="bg-surface-high animate-pulse rounded-sm h-4 w-16" />
+              <div className="bg-surface-high animate-pulse rounded-sm h-4 w-16" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
 export default function Dashboard() {
   return (
-    <Suspense fallback={<div className="max-w-[1200px] mx-auto px-4 sm:px-8 lg:px-[3.5rem] py-[2.25rem]" />}>
-      <DashboardContent />
-    </Suspense>
+    <main className="max-w-[1200px] mx-auto px-4 sm:px-8 lg:px-[3.5rem] py-[2.25rem]">
+      {/* Hero — renders immediately, no data dependency */}
+      <div className="mb-[2.25rem]">
+        <p className="inline-block bg-neon text-on-neon text-[0.65rem] uppercase tracking-[0.08em] font-semibold rounded-sm px-2.5 py-1 mb-4">
+          Solana Yield Aggregator
+        </p>
+        <h1 className="font-brand text-[2rem] sm:text-[2.75rem] lg:text-[3.5rem] leading-[1.05] tracking-[-0.02em]">
+          DISCOVER<br />
+          <span className="text-neon">YIELD</span>
+        </h1>
+        <p className="text-foreground-muted font-sans text-[0.875rem] mt-4 max-w-lg leading-relaxed">
+          High-fidelity liquidity management and automated yield strategies for
+          institutional-grade DeFi assets. Built on high-throughput architecture.
+        </p>
+      </div>
+
+      <Suspense fallback={<DashboardSkeleton />}>
+        <DashboardContent />
+      </Suspense>
+    </main>
   );
 }
 
@@ -40,22 +93,7 @@ function DashboardContent() {
   const yields = f.filteredYields;
 
   return (
-    <main className="max-w-[1200px] mx-auto px-4 sm:px-8 lg:px-[3.5rem] py-[2.25rem]">
-      {/* Hero */}
-      <div className="mb-[2.25rem]">
-        <p className="inline-block bg-neon text-on-neon text-[0.65rem] uppercase tracking-[0.08em] font-semibold rounded-sm px-2.5 py-1 mb-4">
-          Solana Yield Aggregator
-        </p>
-        <h1 className="font-brand text-[2rem] sm:text-[2.75rem] lg:text-[3.5rem] leading-[1.05] tracking-[-0.02em]">
-          DISCOVER<br />
-          <span className="text-neon">YIELD</span>
-        </h1>
-        <p className="text-foreground-muted font-sans text-[0.875rem] mt-4 max-w-lg leading-relaxed">
-          High-fidelity liquidity management and automated yield strategies for
-          institutional-grade DeFi assets. Built on high-throughput architecture.
-        </p>
-      </div>
-
+    <>
       {/* Stats Bar */}
       <StatsGrid
         stats={[
@@ -263,6 +301,6 @@ function DashboardContent() {
           </>
         )}
       </div>
-    </main>
+    </>
   );
 }
