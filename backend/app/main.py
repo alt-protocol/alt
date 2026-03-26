@@ -24,7 +24,7 @@ from app.services.kamino_fetcher import fetch_kamino_yields  # noqa: E402
 from app.services.drift_fetcher import fetch_drift_yields  # noqa: E402
 from app.services.jupiter_fetcher import fetch_jupiter_yields  # noqa: E402
 from app.services.kamino_position_fetcher import snapshot_all_wallets as snapshot_all_wallets_kamino  # noqa: E402
-from app.services.drift_position_fetcher import snapshot_all_wallets_drift  # noqa: E402
+from app.services.drift_position_fetcher import snapshot_all_wallets as snapshot_all_wallets_drift  # noqa: E402
 from app.services.jupiter_position_fetcher import snapshot_all_wallets as snapshot_all_wallets_jupiter  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)

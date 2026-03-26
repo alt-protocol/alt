@@ -33,8 +33,8 @@ Uses `(app)` route group layout in `src/app/(app)/` for dashboard, portfolio, an
 3. `useTransaction` hook handles both simple and multi-step flows (setup txs + main tx)
 4. Backend is never involved in signing
 
-### Wallet
-Uses `@solana/kit` + `@solana/react` (Wallet Standard) — NOT legacy `@solana/wallet-adapter-*`. Providers in `SolanaProviders.tsx`.
+### Wallet & Chain
+Currently Solana-only: `@solana/kit` + `@solana/react` (Wallet Standard) — NOT legacy `@solana/wallet-adapter-*`. Providers in `SolanaProviders.tsx`. Multi-chain support is designed (Chain Registry pattern in `src/lib/chains/`) but not yet implemented. See root `CLAUDE.md` for the architecture plan.
 
 ### State Management
 TanStack Query for all server state. No global store (Redux, Zustand, etc.).
@@ -81,10 +81,8 @@ Always check these before creating new functions — most common utilities alrea
 - `useYieldFilters.ts` — `useYieldFilters(yields)` returns filter/sort state + filtered results
 - `useTokenBalance.ts` — fetch SPL token balance for connected wallet
 - `useTransaction.ts` — unified transaction lifecycle for all categories: `"idle" | "preparing" | "building" | "signing" | "confirming" | "success" | "error"`. Handles setup txs (LUT creation) automatically when present.
-- `usePositionBalance.ts` — protocol-agnostic balance hook, delegates to `adapter.getBalance()`. Replaces Kamino-specific `useVaultBalance`.
-- `useVaultBalance.ts` — **deprecated**, kept for backwards compat. Use `usePositionBalance` for new code.
-- `useVaultTransaction.ts` — **deprecated** re-export of `useTransaction`. Use `useTransaction` for new code.
-- `useMultiplyTransaction.ts` — **deprecated** re-export of `useTransaction`. Use `useTransaction` for new code.
+- `usePositionBalance.ts` — protocol-agnostic balance hook, delegates to `adapter.getBalance()`. Use for withdraw balance display.
+- `useVaultBalance.ts` — legacy Kamino-specific vault balance hook. No active consumers — use `usePositionBalance` for new code.
 - `usePositionForOpportunity.ts` — `usePositionForOpportunity(walletAddress, opportunityId)` returns user's active position for a specific yield opportunity (used by withdraw tab)
 - `useSlippage.ts` — `useSlippage(defaultBps)` — persisted slippage preference in localStorage, used by MultiplyPanel
 - `usePortfolioData.ts` — wallet tracking, position fetching, history, events, summary computations

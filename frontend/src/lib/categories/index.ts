@@ -3,8 +3,6 @@ export {
   getCategoryDef,
   getAllCategories,
   getCategorySlugs,
-  getAllOverviewColumns,
-  getAllOverviewCardFields,
 } from "./registry";
 export type {
   CategoryDefinition,

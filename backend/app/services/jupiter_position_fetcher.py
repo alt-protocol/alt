@@ -20,10 +20,13 @@ import httpx
 from solders.pubkey import Pubkey
 from sqlalchemy.orm import Session
 
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
 from app.models.base import SessionLocal
 from app.models.user_position import TrackedWallet
-from app.models.yield_opportunity import YieldOpportunity
-from app.services.utils import safe_float, cached, compute_realized_apy
+from app.services.utils import (
+    safe_float, get_or_none, cached, compute_realized_apy, load_opportunity_map,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,30 +100,39 @@ def _first_deposit_ts(
 def _get_earn_tokens(client: httpx.Client) -> list[dict]:
     """Fetch earn token metadata (cached 3 min)."""
     def _fetch():
-        try:
-            r = client.get(f"{JUPITER_LEND_API}/earn/tokens", timeout=30)
-            r.raise_for_status()
-            data = r.json()
-            return data if isinstance(data, list) else []
-        except Exception as exc:
-            logger.warning("Jupiter /earn/tokens failed: %s", exc)
-            return []
+        data = get_or_none(f"{JUPITER_LEND_API}/earn/tokens", client, log_label="Jupiter Lend API")
+        return data if isinstance(data, list) else []
     return _cached("jup_earn_tokens", 180, _fetch)
 
 
-def _match_opportunity(deposit_address: str, db: Session) -> tuple[Optional[int], Optional[float]]:
-    """Returns (opportunity_id, apy_current) for the active opportunity at deposit_address."""
-    opp = (
-        db.query(YieldOpportunity.id, YieldOpportunity.apy_current)
-        .filter(
-            YieldOpportunity.deposit_address == deposit_address,
-            YieldOpportunity.is_active.is_(True),
-        )
-        .first()
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadTimeout)),
+    reraise=False,
+)
+def _get_earn_positions(client: httpx.Client, wallet: str):
+    """GET /earn/positions for one wallet with tenacity retry."""
+    r = client.get(f"{JUPITER_LEND_API}/earn/positions", params={"users": wallet}, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadTimeout)),
+    reraise=False,
+)
+def _get_earn_earnings(client: httpx.Client, wallet: str, position_ids: list[str]):
+    """GET /earn/earnings for a set of position IDs with tenacity retry."""
+    r = client.get(
+        f"{JUPITER_LEND_API}/earn/earnings",
+        params={"user": wallet, "positions": ",".join(position_ids)},
+        timeout=30,
     )
-    if opp:
-        return opp.id, float(opp.apy_current) if opp.apy_current is not None else None
-    return None, None
+    r.raise_for_status()
+    return r.json()
 
 
 # ---------------------------------------------------------------------------
@@ -130,17 +142,16 @@ def _match_opportunity(deposit_address: str, db: Session) -> tuple[Optional[int]
 def _fetch_earn_positions(
     wallet: str, client: httpx.Client, db: Session, now: datetime,
     helius_url: str = "",
+    opp_map: dict | None = None,
 ) -> list[dict]:
     """Fetch Jupiter Lend earn positions for a wallet.
 
-    1. GET /earn/tokens → token metadata (prices, symbols)
+    1. GET /earn/tokens → token metadata (prices, symbols) — cached 3 min
     2. GET /earn/positions?users={wallet} → share balances + underlying
     3. GET /earn/earnings?user={wallet}&positions={...} → PnL
     4. Helius RPC getSignaturesForAddress → first deposit timestamp (if HELIUS_RPC_URL set)
     """
-    # Step 1: token metadata (cached)
     tokens_list = _get_earn_tokens(client)
-    # Build lookup: asset_address → token info
     token_map: dict[str, dict] = {}
     for token in tokens_list:
         asset_address = token.get("assetAddress", "")
@@ -154,83 +165,53 @@ def _fetch_earn_positions(
             "total_rate_bps": _float(token.get("totalRate")),
         }
 
-    # Step 2: positions
-    try:
-        r = client.get(
-            f"{JUPITER_LEND_API}/earn/positions",
-            params={"users": wallet},
-            timeout=30,
-        )
-        r.raise_for_status()
-        positions_data = r.json()
-    except Exception as exc:
-        logger.warning("Jupiter /earn/positions failed for %s: %s", wallet[:8], exc)
-        return []
-
+    positions_data = _get_earn_positions(client, wallet)
     if not isinstance(positions_data, list) or not positions_data:
+        if positions_data is None:
+            logger.warning("Jupiter /earn/positions failed for %s", wallet[:8])
         return []
 
-    # Step 3: earnings — collect position IDs for the earnings call
-    # The positions response contains objects with assetAddress and position data
     position_ids = []
     positions_by_asset: dict[str, dict] = {}
     for pos in positions_data:
-        token_obj = pos.get("token", {})
-        asset_address = token_obj.get("assetAddress", "")
+        asset_address = pos.get("token", {}).get("assetAddress", "")
         if not asset_address:
             continue
         shares = _float(pos.get("shares"))
         if not shares or shares <= 0:
-            continue  # skip zero-balance positions
+            continue
         positions_by_asset[asset_address] = pos
         position_ids.append(asset_address)
 
     earnings_map: dict[str, float] = {}
     if position_ids:
-        try:
-            r = client.get(
-                f"{JUPITER_LEND_API}/earn/earnings",
-                params={
-                    "user": wallet,
-                    "positions": ",".join(position_ids),
-                },
-                timeout=30,
-            )
-            r.raise_for_status()
-            earnings_data = r.json()
-            # Response may be a list of {assetAddress, earnings} or a dict
-            if isinstance(earnings_data, list):
-                for e in earnings_data:
-                    addr = e.get("address", e.get("assetAddress", ""))
-                    raw = e.get("earningsUsd") if e.get("earningsUsd") is not None else e.get("earnings")
-                    val = _float(raw)
-                    if addr and val is not None:
-                        earnings_map[addr] = val
-            elif isinstance(earnings_data, dict):
-                for addr, val in earnings_data.items():
-                    parsed = _float(val) if not isinstance(val, dict) else _float(val.get("usd", val.get("earnings")))
-                    if parsed is not None:
-                        earnings_map[addr] = parsed
-        except Exception as exc:
-            logger.warning("Jupiter /earn/earnings failed for %s: %s", wallet[:8], exc)
+        earnings_data = _get_earn_earnings(client, wallet, position_ids)
+        if earnings_data is None:
+            logger.warning("Jupiter /earn/earnings failed for %s", wallet[:8])
+        elif isinstance(earnings_data, list):
+            for e in earnings_data:
+                addr = e.get("address", e.get("assetAddress", ""))
+                raw = e.get("earningsUsd") if e.get("earningsUsd") is not None else e.get("earnings")
+                val = _float(raw)
+                if addr and val is not None:
+                    earnings_map[addr] = val
+        elif isinstance(earnings_data, dict):
+            for addr, val in earnings_data.items():
+                parsed = _float(val) if not isinstance(val, dict) else _float(val.get("usd", val.get("earnings")))
+                if parsed is not None:
+                    earnings_map[addr] = parsed
 
-    # Build position dicts
+    _omap = opp_map if opp_map is not None else load_opportunity_map(db)
     results = []
     for asset_address, pos in positions_by_asset.items():
         token_info = token_map.get(asset_address, {})
-        symbol = token_info.get("symbol", "")
         decimals = token_info.get("decimals", 6)
         price = token_info.get("price")
 
-        # Extract amounts from position
         underlying_raw = _float(pos.get("underlyingAssets"))
         if underlying_raw is None or underlying_raw <= 0:
             continue
         underlying_amount = underlying_raw / 10**decimals
-        shares = _float(pos.get("shares"))
-
-        if underlying_amount is None or underlying_amount <= 0:
-            continue
 
         deposit_amount_usd = underlying_amount * price if price else None
         if deposit_amount_usd is None or deposit_amount_usd < 0.01:
@@ -244,7 +225,9 @@ def _fetch_earn_positions(
             if initial_deposit_usd > 0:
                 pnl_pct = (pnl_usd / initial_deposit_usd) * 100
 
-        opportunity_id, apy = _match_opportunity(asset_address, db)
+        entry = _omap.get(asset_address)
+        opportunity_id = entry["id"] if entry else None
+        apy = entry["apy_current"] if entry else None
         if apy is None:
             rate_bps = token_info.get("total_rate_bps")
             if rate_bps is not None:
@@ -271,9 +254,9 @@ def _fetch_earn_positions(
             "is_closed": False,
             "closed_at": None,
             "close_value_usd": None,
-            "token_symbol": symbol,
+            "token_symbol": token_info.get("symbol", ""),
             "extra_data": {
-                "shares": shares,
+                "shares": _float(pos.get("shares")),
                 "underlying_amount": underlying_amount,
                 "mint": asset_address,
                 "source": "jupiter_api",
@@ -309,9 +292,12 @@ def fetch_wallet_positions(wallet_address: str, db: Session) -> dict:
     now = datetime.now(timezone.utc)
     headers = _build_headers()
     helius_url = os.getenv("HELIUS_RPC_URL", "")
+    opp_map = load_opportunity_map(db)
 
     with httpx.Client(headers=headers) as client:
-        earn_positions = _fetch_earn_positions(wallet_address, client, db, now, helius_url=helius_url)
+        earn_positions = _fetch_earn_positions(
+            wallet_address, client, db, now, helius_url=helius_url, opp_map=opp_map,
+        )
         multiply_positions = _fetch_multiply_positions(wallet_address, client, db, now)
 
     all_positions = earn_positions + multiply_positions
@@ -349,12 +335,14 @@ def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> in
     total_snapshots = 0
     headers = _build_headers()
     helius_url = os.getenv("HELIUS_RPC_URL", "")
+    opp_map = load_opportunity_map(db)
 
     with httpx.Client(headers=headers) as client:
         for wallet in wallets:
             try:
                 earn_positions = _fetch_earn_positions(
-                    wallet.wallet_address, client, db, now, helius_url=helius_url,
+                    wallet.wallet_address, client, db, now,
+                    helius_url=helius_url, opp_map=opp_map,
                 )
                 from app.services.utils import store_position_rows
                 total_snapshots += store_position_rows(db, earn_positions, now)

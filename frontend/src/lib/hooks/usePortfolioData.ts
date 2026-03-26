@@ -18,8 +18,6 @@ export function usePortfolioData() {
   const [activeTab, setActiveTab] = useState<"positions" | "history">("positions");
   const [activeType, setActiveType] = useState("all");
   const [chartPeriod, setChartPeriod] = useState<"7d" | "30d" | "90d">("7d");
-  const hasFetchedOnce = useRef(false);
-
   // Fire-and-forget track on mount
   useEffect(() => {
     if (walletAddress) api.trackWallet(walletAddress);
@@ -63,8 +61,6 @@ export function usePortfolioData() {
     prevFetchStatus.current = status;
   }, [statusQuery.data?.fetch_status]);
 
-  if (positionsQuery.isSuccess) hasFetchedOnce.current = true;
-
   const positions = positionsQuery.data ?? [];
 
   const byType = useMemo(() => {
@@ -98,7 +94,7 @@ export function usePortfolioData() {
     }));
   }, [historyQuery.data]);
 
-  const showSyncing = positionsQuery.isSuccess && positions.length === 0 && !hasFetchedOnce.current;
+  const showSyncing = positionsQuery.isSuccess && positions.length === 0 && statusQuery.data?.fetch_status === "fetching";
 
   const shortAddr = walletAddress
     ? `${walletAddress.slice(0, 8)}...${walletAddress.slice(-4)}`

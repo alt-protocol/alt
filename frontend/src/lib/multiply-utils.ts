@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { MultiplyTxStatus } from "./hooks/useMultiplyTransaction";
+import type { TxStatus } from "./hooks/useTransaction";
 
 export interface LeverageEntry {
   key: string;
@@ -53,9 +53,9 @@ export function interpolateApy(entries: LeverageEntry[], leverage: number): numb
 }
 
 /**
- * Map MultiplyTxStatus to a user-facing status label.
+ * Map TxStatus to a user-facing status label (multiply-specific wording).
  */
-export function getMultiplyStatusLabel(status: MultiplyTxStatus): string | null {
+export function getMultiplyStatusLabel(status: TxStatus): string | null {
   switch (status) {
     case "preparing": return "Setting up lookup tables...";
     case "building": return "Building transaction...";

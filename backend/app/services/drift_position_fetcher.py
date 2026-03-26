@@ -17,8 +17,9 @@ from sqlalchemy.orm import Session
 
 from app.models.base import SessionLocal
 from app.models.user_position import TrackedWallet, UserPositionEvent
-from app.models.yield_opportunity import YieldOpportunity
-from app.services.utils import safe_float, get_or_none, cached, parse_timestamp, compute_realized_apy
+from app.services.utils import (
+    safe_float, get_or_none, cached, parse_timestamp, compute_realized_apy, load_opportunity_map,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,41 +33,6 @@ def _get(path: str, client: httpx.Client) -> Optional[dict | list]:
 _float = safe_float
 _cached = cached
 _parse_timestamp = parse_timestamp
-
-
-# ---------------------------------------------------------------------------
-# DB helpers
-# ---------------------------------------------------------------------------
-
-def _match_opportunity_by_external(external_id: str, db: Session) -> Optional[tuple[int, float | None]]:
-    """Find YieldOpportunity by external_id. Returns (id, apy) or None."""
-    opp = (
-        db.query(YieldOpportunity.id, YieldOpportunity.apy_current)
-        .filter(
-            YieldOpportunity.external_id == external_id,
-            YieldOpportunity.is_active.is_(True),
-        )
-        .first()
-    )
-    if opp:
-        return opp.id, float(opp.apy_current) if opp.apy_current is not None else None
-    return None
-
-
-def _match_opportunity_by_deposit_address(deposit_address: str, db: Session) -> Optional[tuple[int, float | None, str | None]]:
-    """Find YieldOpportunity by deposit_address. Returns (id, apy, first_token) or None."""
-    opp = (
-        db.query(YieldOpportunity.id, YieldOpportunity.apy_current, YieldOpportunity.tokens)
-        .filter(
-            YieldOpportunity.deposit_address == deposit_address,
-            YieldOpportunity.is_active.is_(True),
-        )
-        .first()
-    )
-    if opp:
-        first_token = opp.tokens[0] if opp.tokens else None
-        return opp.id, float(opp.apy_current) if opp.apy_current is not None else None, first_token
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -121,11 +87,9 @@ def _fetch_if_events(
 
 def _fetch_if_positions(
     wallet: str, client: httpx.Client, db: Session, now: datetime,
+    opp_map: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
-    """Fetch Insurance Fund staking positions.
-
-    Returns (positions, events).
-    """
+    """Fetch Insurance Fund staking positions. Returns (positions, events)."""
     events = _fetch_if_events(wallet, client)
     if not events:
         return [], []
@@ -187,12 +151,11 @@ def _fetch_if_positions(
 
         apy = if_apys.get(market_index)
 
-        opportunity_id = None
-        match = _match_opportunity_by_external(external_id, db)
-        if match:
-            opportunity_id, db_apy = match
-            if apy is None and db_apy is not None:
-                apy = db_apy
+        _omap = opp_map if opp_map is not None else load_opportunity_map(db)
+        entry = _omap.get(external_id)
+        opportunity_id = entry["id"] if entry else None
+        if apy is None and entry:
+            apy = entry["apy_current"]
 
         positions.append({
             "wallet_address": wallet,
@@ -258,6 +221,7 @@ def _if_event_to_record(evt: dict, wallet: str) -> dict:
 
 def _fetch_vault_positions(
     wallet: str, client: httpx.Client, db: Session, now: datetime,
+    opp_map: dict | None = None,
 ) -> list[dict]:
     """Fetch Strategy Vault positions from daily snapshots.
 
@@ -312,19 +276,12 @@ def _fetch_vault_positions(
 
         external_id = f"drift-vault-{vault_pubkey}"
 
-        # Match to YieldOpportunity by deposit_address or external_id
-        opportunity_id = None
-        apy = None
-        token_symbol = None
-        match = _match_opportunity_by_deposit_address(vault_pubkey, db)
-        if match:
-            opportunity_id, apy, token_symbol = match
-        if not opportunity_id:
-            ext_match = _match_opportunity_by_external(external_id, db)
-            if ext_match:
-                opportunity_id, apy = ext_match
+        _omap = opp_map if opp_map is not None else load_opportunity_map(db)
+        entry = _omap.get(vault_pubkey) or _omap.get(external_id)
+        opportunity_id = entry["id"] if entry else None
+        apy = entry["apy_current"] if entry else None
+        token_symbol = entry["first_token"] if entry else None
 
-        # Fallback token symbol from marketIndex
         if not token_symbol:
             token_symbol = f"MARKET-{market_index}" if market_index is not None else None
 
@@ -373,10 +330,11 @@ def _fetch_vault_positions(
 def fetch_wallet_positions(wallet_address: str, db: Session) -> dict:
     """Fetch all Drift positions for a wallet. Returns dict with positions list."""
     now = datetime.now(timezone.utc)
+    opp_map = load_opportunity_map(db)
 
     with httpx.Client() as client:
-        if_positions, if_events = _fetch_if_positions(wallet_address, client, db, now)
-        vault_positions = _fetch_vault_positions(wallet_address, client, db, now)
+        if_positions, if_events = _fetch_if_positions(wallet_address, client, db, now, opp_map=opp_map)
+        vault_positions = _fetch_vault_positions(wallet_address, client, db, now, opp_map=opp_map)
 
     all_positions = if_positions + vault_positions
 
@@ -407,7 +365,7 @@ def fetch_wallet_events(wallet_address: str) -> list[dict]:
 # Background job: snapshot all tracked wallets
 # ---------------------------------------------------------------------------
 
-def snapshot_all_wallets_drift(db: Session, snapshot_at: datetime | None = None) -> int:
+def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> int:
     """Iterate all active TrackedWallets, fetch Drift positions, store snapshots."""
     wallets = (
         db.query(TrackedWallet)
@@ -421,6 +379,7 @@ def snapshot_all_wallets_drift(db: Session, snapshot_at: datetime | None = None)
     logger.info("Snapshotting Drift positions for %d wallets", len(wallets))
     now = snapshot_at or datetime.now(timezone.utc)
     total_snapshots = 0
+    opp_map = load_opportunity_map(db)
 
     with httpx.Client() as client:
         _get_if_pool_apys(client)
@@ -428,10 +387,10 @@ def snapshot_all_wallets_drift(db: Session, snapshot_at: datetime | None = None)
         for wallet in wallets:
             try:
                 if_positions, if_events = _fetch_if_positions(
-                    wallet.wallet_address, client, db, now,
+                    wallet.wallet_address, client, db, now, opp_map=opp_map,
                 )
                 vault_positions = _fetch_vault_positions(
-                    wallet.wallet_address, client, db, now,
+                    wallet.wallet_address, client, db, now, opp_map=opp_map,
                 )
                 all_positions = if_positions + vault_positions
 
@@ -485,12 +444,12 @@ def snapshot_all_wallets_drift(db: Session, snapshot_at: datetime | None = None)
     return total_snapshots
 
 
-def snapshot_all_wallets_drift_job():
+def snapshot_all_wallets_job():
     """APScheduler entry point — creates its own DB session."""
     logger.info("Starting Drift position snapshot job")
     db: Session = SessionLocal()
     try:
-        count = snapshot_all_wallets_drift(db)
+        count = snapshot_all_wallets(db)
         logger.info("Drift position snapshot job complete: %d snapshots", count)
     except Exception as exc:
         db.rollback()

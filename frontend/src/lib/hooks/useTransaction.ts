@@ -4,12 +4,12 @@ import { useState, useCallback } from "react";
 import {
   compressTransactionMessageUsingAddressLookupTables,
   signAndSendTransactionMessageWithSigners,
+  fetchAddressesForLookupTables,
   createSolanaRpc,
   getBase58Decoder,
   signature,
   address,
 } from "@solana/kit";
-import { fetchAllAddressLookupTable } from "@solana-program/address-lookup-table";
 import type { Instruction } from "@solana/kit";
 import type { TransactionSendingSigner } from "@solana/signers";
 import type { BuildTxResult } from "../protocols/types";
@@ -113,24 +113,15 @@ export function useTransaction(
 
         if (lookupTableAddresses.length > 0) {
           const altAddresses = lookupTableAddresses.map((a) => address(a));
-          const lutAccounts = await fetchAllAddressLookupTable(rpc, altAddresses);
-
-          const lutsByAddress: Record<string, readonly string[]> = {};
-          for (const acc of lutAccounts) {
-            lutsByAddress[acc.address as string] = acc.data.addresses as unknown as string[];
-          }
-
-          message = compressTransactionMessageUsingAddressLookupTables(
-            message,
-            lutsByAddress as any,
-          ) as typeof message;
+          const lookups = await fetchAddressesForLookupTables(altAddresses, rpc);
+          message = compressTransactionMessageUsingAddressLookupTables(message, lookups) as typeof message;
         }
 
         const signatureBytes = await signAndSendTransactionMessageWithSigners(message);
 
         setStatus("confirming");
 
-        const sig = getBase58Decoder().decode(signatureBytes);
+        const sig: string = getBase58Decoder().decode(signatureBytes);
         setTxSignature(sig);
 
         await rpc.getSignatureStatuses([signature(sig)]).send();

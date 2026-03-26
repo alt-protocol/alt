@@ -69,6 +69,39 @@ def compute_realized_apy(
     return round((pnl_usd / initial_deposit_usd) * (365.0 / held_days) * 100, 4)
 
 
+def load_opportunity_map(db) -> dict[str, dict]:
+    """Batch-load all active opportunities keyed by deposit_address and external_id.
+
+    Returns {key: {"id": int, "apy_current": float|None, "first_token": str|None}}.
+    Both keys indexed for O(1) lookup — call once per snapshot, not per position.
+    """
+    from app.models.yield_opportunity import YieldOpportunity
+
+    rows = (
+        db.query(
+            YieldOpportunity.id,
+            YieldOpportunity.deposit_address,
+            YieldOpportunity.external_id,
+            YieldOpportunity.apy_current,
+            YieldOpportunity.tokens,
+        )
+        .filter(YieldOpportunity.is_active.is_(True))
+        .all()
+    )
+    result: dict[str, dict] = {}
+    for row in rows:
+        entry = {
+            "id": row.id,
+            "apy_current": float(row.apy_current) if row.apy_current is not None else None,
+            "first_token": row.tokens[0] if row.tokens else None,
+        }
+        if row.deposit_address:
+            result[row.deposit_address] = entry
+        if row.external_id:
+            result[row.external_id] = entry
+    return result
+
+
 def store_position_rows(db, positions: list[dict], snapshot_at: datetime) -> int:
     """Store a list of position dicts as UserPosition rows. Returns count."""
     from app.models.user_position import UserPosition

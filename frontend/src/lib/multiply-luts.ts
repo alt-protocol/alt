@@ -108,7 +108,7 @@ function estimateIxsSize(ixs: Instruction[]): number {
  * Assemble all LUT addresses needed for a multiply transaction.
  *
  * Collects: user LUT + CDN LUTs + market LUT + route LUTs + resolved missing LUTs.
- * Returns string addresses for use with useMultiplyTransaction hook.
+ * Returns string addresses for use with useTransaction hook.
  */
 export async function assembleMultiplyLuts(params: {
   userLut: Address;

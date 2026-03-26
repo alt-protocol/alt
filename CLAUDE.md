@@ -80,6 +80,9 @@ The backend **never** handles private keys or signs transactions. All deposit/wi
 | Drift | drift_fetcher | drift.ts | Full (deposit/withdraw) |
 | Jupiter | jupiter_fetcher | jupiter.ts | Full (deposit/withdraw) |
 
+### Chain Support
+Currently Solana-only. Multi-chain support is designed but not yet implemented. The architecture will use a **Chain Registry** pattern (`src/lib/chains/`) mirroring the category registry — each chain defines its RPC, tx executor, and explorer URL. Protocol adapters will gain a `chain` field. When adding non-Solana protocols, this abstraction layer must be built first (see plan in `TODO_ARCHITECTURE.md`).
+
 ### Design System
 All frontend work MUST follow `DESIGN.md`. Key constraints: dark-only, no 1px borders, no large border-radius (`rounded-sm` or `rounded-none`), no bouncy animations, high-density layouts, Orbitron for brand only, Space Grotesk for headlines, Manrope for body.
 

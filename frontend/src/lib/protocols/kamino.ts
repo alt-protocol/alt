@@ -2,7 +2,7 @@ import type { Instruction } from "@solana/kit";
 import { address, none } from "@solana/kit";
 import type { ProtocolAdapter, BuildTxParams, BuildTxResult, BuildTxResultWithSetup } from "./types";
 import { getRpc } from "../rpc";
-import { getKswapSdkInstance, createKswapQuoter, createKswapSwapper } from "../kswap";
+import { createJupiterQuoter, createJupiterSwapper } from "../jupiter-swap";
 import { selectBestRoute, assembleMultiplyLuts } from "../multiply-luts";
 
 // klend-sdk bundles its own @solana/kit@2.x while we use 6.x.
@@ -212,7 +212,7 @@ function parseMultiplyParams(extra: Record<string, unknown> | undefined) {
   return { marketAddress, collMint, debtMint, marketLut };
 }
 
-/** Load market, reserves, and KSwap routing for a multiply operation. */
+/** Load market, reserves, and Jupiter swap routing for a multiply operation. */
 async function prepareMultiply(params: BuildTxParams, slippageBps: number) {
   const sdk = await loadSdk();
   const { KaminoMarket, DEFAULT_RECENT_SLOT_DURATION_MS, Decimal, getComputeBudgetAndPriorityFeeIxs } = sdk;
@@ -229,15 +229,15 @@ async function prepareMultiply(params: BuildTxParams, slippageBps: number) {
   const debtReserve = market.getReserveByMint(debtTokenMint);
   if (!collReserve || !debtReserve) throw new Error("Failed to load reserves");
 
-  const kswapSdk = await getKswapSdkInstance();
-  const quoter = await createKswapQuoter(kswapSdk, params.signer.address as any, slippageBps, debtReserve, collReserve);
-  const swapper = await createKswapSwapper(kswapSdk, params.signer.address as any, slippageBps, debtReserve, collReserve);
+  // Jupiter V6 quoter/swapper — works better for stable pairs than KSwap
+  const quoter = createJupiterQuoter(slippageBps);
+  const swapper = createJupiterSwapper();
 
   const currentSlot = await rpc.getSlot().send();
   const computeIxs = getComputeBudgetAndPriorityFeeIxs(1_400_000, new Decimal(500000));
 
   return {
-    sdk, rpc, market, collReserve, debtReserve, kswapSdk,
+    sdk, rpc, market, collReserve, debtReserve,
     collTokenMint, debtTokenMint, collMint, debtMint, marketLut,
     quoter, swapper, currentSlot, computeIxs, Decimal,
   };
@@ -249,6 +249,12 @@ async function finalizeMultiplyResult(
   opts: { userLut: any; collMint: string; debtMint: string; marketLut?: string; isMultiply: boolean; setupTxsIxs: any[] },
 ): Promise<BuildTxResultWithSetup> {
   const bestRoute = selectBestRoute(routes);
+  const ixCount = bestRoute.ixs?.length ?? 0;
+  logMultiply("finalize:bestRoute", { ixCount, lutCount: bestRoute.lookupTables?.length ?? 0 });
+
+  if (ixCount <= 2) {
+    throw new Error("Swap routing failed — insufficient liquidity for this pair. Try a different market or increase slippage.");
+  }
 
   const lookupTableAddresses = await assembleMultiplyLuts({
     userLut: opts.userLut,
@@ -277,7 +283,7 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
   const userSlippage = (params.extraData?.slippageBps as number) ?? 30;
   const ctx = await prepareMultiply(params, userSlippage);
   const {
-    sdk, rpc, market, collReserve, debtReserve, kswapSdk,
+    sdk, rpc, market, collReserve, debtReserve,
     collTokenMint, debtTokenMint, collMint, debtMint, marketLut,
     quoter, swapper, currentSlot, computeIxs, Decimal,
   } = ctx;
@@ -316,13 +322,12 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
   );
   logMultiply("open:lut", { userLut, setupTxCount: setupTxsIxs.length });
 
-  // Price: fetch both USD prices and compute debt-to-coll ratio
-  const [debtPriceRes, collPriceRes] = await Promise.all([
-    kswapSdk.getJupiterPriceWithFallback({ ids: debtMint }),
-    kswapSdk.getJupiterPriceWithFallback({ ids: collMint }),
-  ]);
-  const debtPriceUsd = Number(debtPriceRes?.[debtMint]?.usdPrice || 0);
-  const collPriceUsd = Number(collPriceRes?.[collMint]?.usdPrice || 0);
+  // Price: fetch both USD prices via Jupiter and compute debt-to-coll ratio
+  const priceRes = await fetch(`https://lite-api.jup.ag/price/v3?ids=${debtMint},${collMint}`);
+  if (!priceRes.ok) throw new Error(`Jupiter price fetch failed: ${priceRes.status}`);
+  const priceData = await priceRes.json();
+  const debtPriceUsd = Number(priceData?.[debtMint]?.usdPrice || 0);
+  const collPriceUsd = Number(priceData?.[collMint]?.usdPrice || 0);
   logMultiply("open:prices", { debtPriceUsd, collPriceUsd });
 
   if (!debtPriceUsd || !collPriceUsd) {
@@ -345,7 +350,7 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
     slippagePct: new Decimal(userSlippage / 100),
     obligation, referrer: none(), currentSlot,
     targetLeverage: new Decimal(leverage),
-    selectedTokenMint: collTokenMint,
+    selectedTokenMint: debtTokenMint,
     obligationTypeTagOverride: ObligationTypeTag.Multiply,
     scopeRefreshIx, budgetAndPriorityFeeIxs: computeIxs,
     quoteBufferBps: new Decimal(1000),

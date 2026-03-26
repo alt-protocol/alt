@@ -57,6 +57,8 @@ All fetchers import from this module. **Never redefine these patterns locally.**
 | `get_or_none(url, client, log_label)` | GET with retry, returns `None` on failure |
 | `cached(key, ttl, fn)` | TTL cache for expensive, slowly-changing API data |
 | `parse_timestamp(ts)` | Parse ISO string or epoch to `Optional[datetime]` (UTC) |
+| `compute_realized_apy(pnl_usd, initial_deposit_usd, held_days)` | Annualized return from actual PnL; returns `None` if < 1 day held |
+| `load_opportunity_map(db)` | Batch-load all active opportunities → `{key: {"id", "apy_current", "first_token"}}` keyed by both `deposit_address` and `external_id`; call once per snapshot |
 | `store_position_rows(db, positions, snapshot_at)` | Bulk-insert `UserPosition` rows from position dicts |
 | `upsert_opportunity(db, protocol, ...)` | Create-or-update `YieldOpportunity` + record `YieldSnapshot` |
 
@@ -66,7 +68,7 @@ All fetchers import from this module. **Never redefine these patterns locally.**
 2. **Local aliases for frequently-called imports** — `_float = safe_float`, `_cached = cached`, `_parse_timestamp = parse_timestamp`. Keeps call sites dense.
 3. **Each fetcher gets a private `_get()` wrapper** — calls `get_or_none(f"{BASE_URL}{path}", client, log_label="Protocol API")`. This keeps the base URL in one place.
 4. **Fetcher isolation** — one file per protocol, shared logic only via `utils.py`. Exception: `jupiter_fetcher` imports `_batch_snapshot_avg` and `_classify_multiply_pair` from `kamino_fetcher` (cross-protocol data classification).
-5. **Position fetcher contract** — must expose `snapshot_all_wallets(db, snapshot_at)` → `int` and `fetch_wallet_positions(wallet, db)` → `dict`. Registered in `main.py` `snapshot_all_positions_job()`.
+5. **Position fetcher contract** — must expose `snapshot_all_wallets(db, snapshot_at)` → `int` and `fetch_wallet_positions(wallet, db)` → `dict`. Registered in `main.py` `snapshot_all_positions_job()`. Each position dict must include: `wallet_address`, `protocol_slug`, `product_type`, `external_id`, `opportunity_id`, `deposit_amount`, `deposit_amount_usd`, `pnl_usd`, `pnl_pct`, `initial_deposit_usd`, `opened_at`, `held_days`, `apy`, `apy_realized`, `is_closed`, `closed_at`, `close_value_usd`, `token_symbol`, `extra_data`.
 6. **Router pattern** — `Depends(get_db)`, Pydantic `response_model`, `@limiter.limit()` on mutation endpoints, private `_validate_wallet()`.
 7. **Background jobs own their DB session** — `SessionLocal()`, try/finally close. Never share sessions across threads.
 8. **Timestamps always UTC** — `datetime.now(timezone.utc)`, never `.utcnow()`.

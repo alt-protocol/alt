@@ -16,8 +16,10 @@ from sqlalchemy.orm import Session
 
 from app.models.base import SessionLocal
 from app.models.user_position import TrackedWallet, UserPositionEvent
-from app.models.yield_opportunity import YieldOpportunity
-from app.services.utils import safe_float, get_with_retry, get_or_none, cached, parse_timestamp, compute_realized_apy
+from app.services.utils import (
+    safe_float, get_with_retry, get_or_none, cached,
+    parse_timestamp, compute_realized_apy, load_opportunity_map,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,37 +44,6 @@ def _get(path: str, client: httpx.Client) -> Optional[dict | list]:
 _float = safe_float
 _parse_timestamp = parse_timestamp
 _cached = cached
-
-
-def _load_opportunity_map(db: Session) -> dict[str, dict]:
-    """Batch-load all active opportunities keyed by deposit_address AND external_id.
-
-    Returns {key: {"id": ..., "apy_current": ...}} where key is either
-    deposit_address or external_id.  The external_id index is essential for
-    multiply positions where multiple entries share the same collateral reserve
-    (deposit_address) but differ by debt token.
-    """
-    rows = (
-        db.query(
-            YieldOpportunity.id,
-            YieldOpportunity.deposit_address,
-            YieldOpportunity.external_id,
-            YieldOpportunity.apy_current,
-        )
-        .filter(YieldOpportunity.is_active.is_(True))
-        .all()
-    )
-    result: dict[str, dict] = {}
-    for row in rows:
-        entry = {
-            "id": row.id,
-            "apy_current": float(row.apy_current) if row.apy_current is not None else None,
-        }
-        if row.deposit_address:
-            result[row.deposit_address] = entry
-        if row.external_id:
-            result[row.external_id] = entry
-    return result
 
 
 def _match_opportunity(external_id: str, opp_map: dict[str, dict]) -> Optional[int]:
@@ -367,28 +338,85 @@ def _obligation_txs_to_events(
 # Earn Vault positions
 # ---------------------------------------------------------------------------
 
+def _fetch_vault_metrics(
+    wallet: str, vault_address: str, token_info: dict,
+    now: datetime, client: httpx.Client,
+) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float], Optional[float]]:
+    """Fetch shares + USD value for one vault.
+
+    Returns (total_shares, staked_shares, unstaked_shares, deposit_amount_usd, deposit_amount)
+    or (None, None, None, None, None) to skip (zero shares or API failure).
+    """
+    pos_data = _get(f"/kvaults/users/{wallet}/positions/{vault_address}", client)
+    if not isinstance(pos_data, dict):
+        return None, None, None, None, None
+
+    total_shares = _float(pos_data.get("totalShares"))
+    if not total_shares or total_shares <= 0:
+        return None, None, None, None, None
+
+    staked_shares = _float(pos_data.get("stakedShares"))
+    unstaked_shares = _float(pos_data.get("unstakedShares"))
+
+    start_ts = int((now - timedelta(hours=24)).timestamp())
+    end_ts = int(now.timestamp())
+    metrics_data = _get(
+        f"/kvaults/users/{wallet}/vaults/{vault_address}/metrics/history?start={start_ts}&end={end_ts}",
+        client,
+    )
+    deposit_amount_usd = None
+    deposit_amount = None
+    if isinstance(metrics_data, list) and metrics_data:
+        last_entry = metrics_data[-1]
+        deposit_amount_usd = _float(last_entry.get("totalValueUsd", last_entry.get("totalValue")))
+        deposit_amount = _float(last_entry.get("tokenAmount"))
+
+    if deposit_amount_usd is None:
+        share_price = token_info.get("share_price")
+        token_price = token_info.get("token_price")
+        if share_price and token_price and total_shares:
+            deposit_amount = total_shares * share_price
+            deposit_amount_usd = deposit_amount * token_price
+
+    return total_shares, staked_shares, unstaked_shares, deposit_amount_usd, deposit_amount
+
+
+def _parse_vault_pnl(
+    vault_address: str, wallet: str, client: httpx.Client,
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Fetch and parse PnL for one vault. Returns (pnl_usd, pnl_pct, cost_basis_usd)."""
+    pnl_data = _get(f"/kvaults/{vault_address}/users/{wallet}/pnl", client)
+    if not isinstance(pnl_data, dict):
+        return None, None, None
+
+    total_pnl = pnl_data.get("totalPnl")
+    pnl_usd = _float(total_pnl.get("usd")) if isinstance(total_pnl, dict) else _float(pnl_data.get("pnlUsd"))
+
+    total_cost_basis = pnl_data.get("totalCostBasis")
+    cost_basis_usd = (
+        _float(total_cost_basis.get("usd")) if isinstance(total_cost_basis, dict)
+        else _float(pnl_data.get("costBasisUsd"))
+    )
+
+    pnl_pct = (pnl_usd / cost_basis_usd) * 100 if cost_basis_usd and cost_basis_usd > 0 and pnl_usd is not None else None
+    return pnl_usd, pnl_pct, cost_basis_usd
+
+
 def _fetch_earn_positions(
     wallet: str, client: httpx.Client, db: Session, now: datetime,
     opp_map: dict[str, dict] | None = None,
 ) -> list[dict]:
     """Fetch Earn Vault positions via transaction-history discovery.
 
-    The list endpoint ``/kvaults/users/{wallet}/positions`` returns empty
-    for staked vault positions (Kamino auto-stakes shares into farms).
-    Instead we:
-      1. Fetch ``/kvaults/users/{wallet}/transactions`` → unique vault addresses
-      2. Query each vault directly via ``/kvaults/users/{wallet}/positions/{vault}``
-      3. Skip vaults where ``totalShares == 0`` (fully withdrawn)
-      4. Get USD value from per-vault metrics history
-      5. Get P&L from ``/kvaults/{vault}/users/{wallet}/pnl``
+    Uses /kvaults/users/{wallet}/transactions to find vault addresses (the list
+    endpoint returns empty for auto-staked positions), then queries each vault
+    directly for shares, metrics, and PnL.
     """
-    # Step 1: discover vaults from transaction history
     txs_raw = _get(f"/kvaults/users/{wallet}/transactions", client)
     if not isinstance(txs_raw, list) or not txs_raw:
         return []
 
-    # Build vault → token info and first deposit timestamp from transactions.
-    # Transactions are ordered newest-first; first occurrence has latest prices.
+    # Transactions newest-first; first occurrence of each vault has latest prices.
     vault_token_info: dict[str, dict] = {}
     first_deposit_ts: dict[str, datetime] = {}
     for tx in txs_raw:
@@ -397,10 +425,9 @@ def _fetch_earn_positions(
             continue
         if vault not in vault_token_info:
             mint = tx.get("tokenMint", "")
-            symbol = tx.get("tokenSymbol") or _KNOWN_MINTS.get(mint)
             vault_token_info[vault] = {
                 "token_mint": mint,
-                "token_symbol": symbol,
+                "token_symbol": tx.get("tokenSymbol") or _KNOWN_MINTS.get(mint),
                 "share_price": _float(tx.get("sharePrice")),
                 "token_price": _float(tx.get("tokenPrice")),
             }
@@ -409,75 +436,20 @@ def _fetch_earn_positions(
             if ts and (vault not in first_deposit_ts or ts < first_deposit_ts[vault]):
                 first_deposit_ts[vault] = ts
 
+    _omap = opp_map if opp_map is not None else load_opportunity_map(db)
     results = []
     for vault_address, token_info in vault_token_info.items():
-        # Step 2: get position for this specific vault
-        pos_data = _get(
-            f"/kvaults/users/{wallet}/positions/{vault_address}", client,
+        total_shares, staked_shares, unstaked_shares, deposit_amount_usd, deposit_amount = (
+            _fetch_vault_metrics(wallet, vault_address, token_info, now, client)
         )
-        if not isinstance(pos_data, dict):
+        if total_shares is None:
             continue
 
-        total_shares = _float(pos_data.get("totalShares"))
-        # Step 3: skip if no shares (fully withdrawn)
-        if not total_shares or total_shares <= 0:
-            continue
+        pnl_usd, pnl_pct, cost_basis_usd = _parse_vault_pnl(vault_address, wallet, client)
 
-        staked_shares = _float(pos_data.get("stakedShares"))
-        unstaked_shares = _float(pos_data.get("unstakedShares"))
-
-        # Step 4: get USD value from metrics history
-        start_ts = int((now - timedelta(hours=24)).timestamp())
-        end_ts = int(now.timestamp())
-        metrics_data = _get(
-            f"/kvaults/users/{wallet}/vaults/{vault_address}"
-            f"/metrics/history?start={start_ts}&end={end_ts}",
-            client,
-        )
-        deposit_amount_usd = None
-        deposit_amount = None
-        if isinstance(metrics_data, list) and metrics_data:
-            last_entry = metrics_data[-1]
-            deposit_amount_usd = _float(last_entry.get("totalValueUsd",
-                                        last_entry.get("totalValue")))
-            deposit_amount = _float(last_entry.get("tokenAmount"))
-
-        # Fallback: compute from shares x share_price x token_price
-        if deposit_amount_usd is None:
-            share_price = token_info.get("share_price")
-            token_price = token_info.get("token_price")
-            if share_price and token_price and total_shares:
-                deposit_amount = total_shares * share_price
-                deposit_amount_usd = deposit_amount * token_price
-
-        # Step 5: P&L
-        pnl_data = _get(f"/kvaults/{vault_address}/users/{wallet}/pnl", client)
-        pnl_usd = None
-        pnl_pct = None
-        cost_basis_usd = None
-        if isinstance(pnl_data, dict):
-            # API returns {"totalPnl": {"usd": ...}, "totalCostBasis": {"usd": ...}}
-            total_pnl = pnl_data.get("totalPnl")
-            if isinstance(total_pnl, dict):
-                pnl_usd = _float(total_pnl.get("usd"))
-            else:
-                # Fallback for alternative response shape
-                pnl_usd = _float(pnl_data.get("pnlUsd"))
-
-            total_cost_basis = pnl_data.get("totalCostBasis")
-            if isinstance(total_cost_basis, dict):
-                cost_basis_usd = _float(total_cost_basis.get("usd"))
-            else:
-                cost_basis_usd = _float(pnl_data.get("costBasisUsd"))
-
-            if cost_basis_usd and cost_basis_usd > 0 and pnl_usd is not None:
-                pnl_pct = (pnl_usd / cost_basis_usd) * 100
-
-        _omap = opp_map if opp_map is not None else _load_opportunity_map(db)
-        opportunity_id = _match_opportunity(vault_address, _omap)
-
-        # Earn vault APY: lookup from yield_opportunities table
-        earn_apy = _lookup_opportunity_apy(vault_address, _omap)
+        entry = _omap.get(vault_address)
+        opportunity_id = entry["id"] if entry else None
+        earn_apy = entry["apy_current"] if entry else None
 
         token_sym = token_info.get("token_symbol")
         opened_at = first_deposit_ts.get(vault_address)
@@ -822,7 +794,7 @@ def fetch_wallet_events(
 def fetch_wallet_positions(wallet_address: str, db: Session) -> dict:
     """Fetch current Kamino positions for a wallet. Returns structured data."""
     now = datetime.now(timezone.utc)
-    opp_map = _load_opportunity_map(db)
+    opp_map = load_opportunity_map(db)
 
     with httpx.Client() as client:
         earn_positions = _fetch_earn_positions(wallet_address, client, db, now, opp_map=opp_map)
@@ -870,7 +842,7 @@ def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> in
     with httpx.Client() as client:
         # Fetch shared data once — reused across all wallets
         all_markets = _get_all_markets(client)
-        opp_map = _load_opportunity_map(db)
+        opp_map = load_opportunity_map(db)
 
         for wallet in wallets:
             try:

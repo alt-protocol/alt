@@ -4,11 +4,10 @@ import { useMemo } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import type { YieldOpportunityDetail } from "@/lib/api";
-import { fmtCategory, fmtVaultTag } from "@/lib/format";
+import { fmtCategory } from "@/lib/format";
 import { queryKeys } from "@/lib/queryKeys";
 import { hasAdapter } from "@/lib/protocols";
 import { getCategoryDef } from "@/lib/categories";
-import { getMultiplyExtra } from "@/lib/categories/extra-data";
 import { ProtocolChip } from "@/components/ProtocolChip";
 import { DetailRow } from "@/components/DetailRow";
 import StatsGrid from "@/components/StatsGrid";
@@ -32,10 +31,8 @@ export default function CategoryDetailView({ yield_: y, id }: Props) {
   const detailFields = categoryDef?.detailFields(y) ?? [];
   const title = categoryDef?.titleFormatter?.(y) ?? y.name;
 
-  /* Multiply-specific: vault tag badge */
-  const vaultTag = y.category === "multiply"
-    ? getMultiplyExtra(y.extra_data, y.tokens).vault_tag
-    : null;
+  /* Optional title badge (e.g. vault tag for multiply) */
+  const titleBadge = categoryDef?.titleBadge?.(y) ?? null;
 
   /* Resolve action panel */
   const CustomPanel = useMemo(() => {
@@ -59,13 +56,13 @@ export default function CategoryDetailView({ yield_: y, id }: Props) {
       {/* Title row */}
       <div className="flex items-center gap-3 mb-6">
         <h1 className="font-display text-2xl tracking-[-0.02em]">{title}</h1>
-        {vaultTag && (
+        {titleBadge && (
           <span className="bg-surface-high text-foreground-muted rounded-sm px-2.5 py-0.5 text-[0.65rem] font-sans uppercase tracking-[0.05em]">
-            {fmtVaultTag(vaultTag)}
+            {titleBadge}
           </span>
         )}
         {y.protocol_name && <ProtocolChip slug={y.protocol_name} />}
-        {!vaultTag && (
+        {!titleBadge && (
           <span className="bg-surface-high text-foreground-muted rounded-sm px-2.5 py-0.5 text-[0.65rem] font-sans uppercase tracking-[0.05em]">
             {fmtCategory(y.category)}
           </span>
@@ -86,7 +83,7 @@ export default function CategoryDetailView({ yield_: y, id }: Props) {
       <div className="flex gap-[1px] bg-outline-ghost rounded-sm overflow-hidden mb-[1.5rem]">
         <div className="flex-[2] bg-surface-low px-6 py-5">
           <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-4">
-            {y.category === "multiply" ? "Looping Overview" : "Details"}
+            {categoryDef?.detailSectionLabel ?? "Details"}
           </p>
           <div className="divide-y divide-outline-ghost">
             {detailFields.map((f) => (

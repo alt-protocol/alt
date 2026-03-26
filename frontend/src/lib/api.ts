@@ -141,9 +141,17 @@ export const api = {
   getHealth: () =>
     apiFetch<{ status: string }>("/api/health"),
 
-  trackWallet: (wallet: string) =>
-    fetch(`${API_URL}/api/portfolio/${wallet}/track`, { method: "POST" })
-      .then(r => r.json()).catch(() => {}),
+  trackWallet: (() => {
+    const cache = new Map<string, number>();
+    const THROTTLE_MS = 60_000;
+    return (wallet: string) => {
+      const now = Date.now();
+      if (now - (cache.get(wallet) ?? 0) < THROTTLE_MS) return Promise.resolve();
+      cache.set(wallet, now);
+      return fetch(`${API_URL}/api/portfolio/${wallet}/track`, { method: "POST" })
+        .then(r => r.json()).catch(() => {});
+    };
+  })(),
 
   getPositions: (wallet: string, params?: { protocol?: string; product_type?: string }) => {
     const qs = new URLSearchParams(

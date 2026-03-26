@@ -311,6 +311,7 @@ export const {slug}Adapter: ProtocolAdapter = {
 - Export as `{slug}Adapter`
 - Never sign or submit — only build instructions (non-custodial constraint)
 - Category-specific UI is handled by the category registry — no UI changes needed when adding a protocol to an existing category
+- Currently all protocols are Solana-based. When multi-chain support is added, the adapter will need a `chain` field and chain-specific signer/instruction types
 
 ---
 

@@ -10,6 +10,12 @@ import { queryKeys } from "@/lib/queryKeys";
 import FilterPanel from "@/components/FilterPanel";
 import StatsGrid from "@/components/StatsGrid";
 
+function SortArrow({ field, sortField, sortDir }: { field: SortField; sortField: SortField; sortDir: "asc" | "desc" }) {
+  const active = sortField === field;
+  const arrow = active && sortDir === "asc" ? "\u2191" : "\u2193";
+  return <span className={`ml-1 inline-block w-3 text-center ${active ? "text-foreground" : "text-transparent"}`}>{arrow}</span>;
+}
+
 export default function Dashboard() {
   return (
     <Suspense fallback={<div className="max-w-[1200px] mx-auto px-4 sm:px-8 lg:px-[3.5rem] py-[2.25rem]" />}>
@@ -32,12 +38,6 @@ function DashboardContent() {
   const allYields: YieldOpportunity[] = data?.data ?? [];
   const f = useYieldFilters(allYields);
   const yields = f.filteredYields;
-
-  function SortArrow({ field }: { field: SortField }) {
-    const active = f.sortField === field;
-    const arrow = active && f.sortDir === "asc" ? "\u2191" : "\u2193";
-    return <span className={`ml-1 inline-block w-3 text-center ${active ? "text-foreground" : "text-transparent"}`}>{arrow}</span>;
-  }
 
   return (
     <main className="max-w-[1200px] mx-auto px-4 sm:px-8 lg:px-[3.5rem] py-[2.25rem]">
@@ -181,25 +181,25 @@ function DashboardContent() {
                       className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
                       onClick={() => f.toggleSort("tvl")}
                     >
-                      TVL<SortArrow field="tvl" />
+                      TVL<SortArrow sortField={f.sortField} sortDir={f.sortDir} field="tvl" />
                     </th>
                     <th
                       className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
                       onClick={() => f.toggleSort("liquidity")}
                     >
-                      Available Liquidity<SortArrow field="liquidity" />
+                      Available Liquidity<SortArrow sortField={f.sortField} sortDir={f.sortDir} field="liquidity" />
                     </th>
                     <th
                       className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
                       onClick={() => f.toggleSort("apy")}
                     >
-                      APR<SortArrow field="apy" />
+                      APR<SortArrow sortField={f.sortField} sortDir={f.sortDir} field="apy" />
                     </th>
                     <th
                       className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
                       onClick={() => f.toggleSort("apy30d")}
                     >
-                      30D APR<SortArrow field="apy30d" />
+                      30D APR<SortArrow sortField={f.sortField} sortDir={f.sortDir} field="apy30d" />
                     </th>
                     <th className="text-right px-5 py-2.5 font-medium"></th>
                   </tr>

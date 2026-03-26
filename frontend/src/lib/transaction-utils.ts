@@ -10,7 +10,7 @@ import type { TransactionSendingSigner } from "@solana/signers";
 
 /**
  * Build a v0 transaction message with signer, blockhash, and instructions.
- * Shared by useVaultTransaction and useMultiplyTransaction.
+ * Shared by useTransaction hook.
  */
 export function buildTransactionMessage(
   signer: TransactionSendingSigner,
