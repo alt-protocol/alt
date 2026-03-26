@@ -79,6 +79,7 @@ export interface UserPositionOut {
   opened_at: string | null;
   held_days: number | null;
   apy: number | null;
+  apy_realized: number | null;
   is_closed: boolean | null;
   closed_at: string | null;
   close_value_usd: number | null;

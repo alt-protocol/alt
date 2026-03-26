@@ -5,7 +5,6 @@ import {
   compressTransactionMessageUsingAddressLookupTables,
   signAndSendTransactionMessageWithSigners,
   fetchAddressesForLookupTables,
-  createSolanaRpc,
   getBase58Decoder,
   signature,
   address,
@@ -14,7 +13,7 @@ import type { Instruction } from "@solana/kit";
 import type { TransactionSendingSigner } from "@solana/signers";
 import type { BuildTxResult } from "../protocols/types";
 import { isBuildTxResultWithSetup, isBuildTxResultWithLookups } from "../protocols/types";
-import { HELIUS_RPC_URL } from "../constants";
+import { getRpc } from "../rpc";
 import { buildTransactionMessage, mapTxError } from "../transaction-utils";
 
 export type TxStatus =
@@ -84,13 +83,14 @@ export function useTransaction(
           instructions = result;
         }
 
-        const rpc = createSolanaRpc(HELIUS_RPC_URL);
+        const rpc = getRpc();
 
-        /* Phase 1: Setup transactions (e.g. user LUT creation) */
-        if (setupInstructionSets.length > 0) {
+        /* Phase 1: Setup transactions — skip empty arrays */
+        const nonEmptySetups = setupInstructionSets.filter((ixs) => ixs.length > 0);
+        if (nonEmptySetups.length > 0) {
           setStatus("preparing");
 
-          for (const setupIxs of setupInstructionSets) {
+          for (const setupIxs of nonEmptySetups) {
             const { value: setupBlockhash } = await rpc
               .getLatestBlockhash({ commitment: "finalized" })
               .send();

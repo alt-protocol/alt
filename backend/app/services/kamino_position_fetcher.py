@@ -15,26 +15,19 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.models.base import SessionLocal
-from app.models.user_position import TrackedWallet, UserPositionEvent
+from app.models.user_position import TrackedWallet
 from app.services.utils import (
     safe_float, get_with_retry, get_or_none, cached,
     parse_timestamp, compute_realized_apy, load_opportunity_map,
+    compute_held_days, build_position_dict, store_events_batch,
+    KNOWN_TOKEN_MINTS,
 )
 
 logger = logging.getLogger(__name__)
 
 KAMINO_API = "https://api.kamino.finance"
 
-# Well-known Solana token mints → symbols (fallback when API omits tokenSymbol)
-_KNOWN_MINTS: dict[str, str] = {
-    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
-    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
-    "So11111111111111111111111111111111111111112": "SOL",
-    "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JITOSOL",
-    "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So": "MSOL",
-    "7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj": "stSOL",
-    "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1": "bSOL",
-}
+_KNOWN_MINTS = KNOWN_TOKEN_MINTS
 
 
 def _get(path: str, client: httpx.Client) -> Optional[dict | list]:
@@ -44,6 +37,8 @@ def _get(path: str, client: httpx.Client) -> Optional[dict | list]:
 _float = safe_float
 _parse_timestamp = parse_timestamp
 _cached = cached
+_held_days = compute_held_days
+_pos = build_position_dict
 
 
 def _match_opportunity(external_id: str, opp_map: dict[str, dict]) -> Optional[int]:
@@ -240,12 +235,9 @@ def _compute_modified_dietz(
     if is_closed:
         close_value_usd = sum_withdraw + sum_repay - sum_borrow
 
-    held_days = None
-    T = None
-    if opened_at:
-        end_time = closed_at if is_closed and closed_at else now
-        T = (end_time - opened_at).total_seconds() / 86400.0
-        held_days = T
+    end_time = closed_at if is_closed and closed_at else now
+    held_days = _held_days(opened_at, end_time)
+    T = held_days
 
     pnl_usd = None
     pnl_pct = None
@@ -270,7 +262,7 @@ def _compute_modified_dietz(
         "pnl_usd": round(pnl_usd, 2) if pnl_usd is not None else None,
         "pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
         "opened_at": opened_at,
-        "held_days": round(held_days, 4) if held_days is not None else None,
+        "held_days": held_days,
         "token_symbol": cf["token_symbol"],
         "is_closed": is_closed,
         "closed_at": closed_at if is_closed else None,
@@ -419,6 +411,7 @@ def _fetch_earn_positions(
     # Transactions newest-first; first occurrence of each vault has latest prices.
     vault_token_info: dict[str, dict] = {}
     first_deposit_ts: dict[str, datetime] = {}
+    first_seen_ts: dict[str, datetime] = {}
     for tx in txs_raw:
         vault = tx.get("kvault", "")
         if not vault:
@@ -431,10 +424,13 @@ def _fetch_earn_positions(
                 "share_price": _float(tx.get("sharePrice")),
                 "token_price": _float(tx.get("tokenPrice")),
             }
-        if "deposit" in (tx.get("instruction") or "").lower():
-            ts = _parse_timestamp(tx.get("createdOn"))
-            if ts and (vault not in first_deposit_ts or ts < first_deposit_ts[vault]):
-                first_deposit_ts[vault] = ts
+        ts = _parse_timestamp(tx.get("createdOn"))
+        if ts:
+            if vault not in first_seen_ts or ts < first_seen_ts[vault]:
+                first_seen_ts[vault] = ts
+            if "deposit" in (tx.get("instruction") or "").lower():
+                if vault not in first_deposit_ts or ts < first_deposit_ts[vault]:
+                    first_deposit_ts[vault] = ts
 
     _omap = opp_map if opp_map is not None else load_opportunity_map(db)
     results = []
@@ -452,38 +448,24 @@ def _fetch_earn_positions(
         earn_apy = entry["apy_current"] if entry else None
 
         token_sym = token_info.get("token_symbol")
-        opened_at = first_deposit_ts.get(vault_address)
-        held_days = round((now - opened_at).total_seconds() / 86400.0, 4) if opened_at else None
+        opened_at = first_deposit_ts.get(vault_address) or first_seen_ts.get(vault_address)
+        held_days = _held_days(opened_at, now)
 
-        results.append({
-            "wallet_address": wallet,
-            "protocol_slug": "kamino",
-            "product_type": "earn_vault",
-            "external_id": vault_address,
-            "opportunity_id": opportunity_id,
-            "deposit_amount": deposit_amount,
-            "deposit_amount_usd": deposit_amount_usd,
-            "pnl_usd": pnl_usd,
-            "pnl_pct": pnl_pct,
-            "initial_deposit_usd": cost_basis_usd,
-            "opened_at": opened_at,
-            "held_days": held_days,
-            "apy": earn_apy,
-            "apy_realized": compute_realized_apy(pnl_usd, cost_basis_usd, held_days),
-            "is_closed": False,
-            "closed_at": None,
-            "close_value_usd": None,
-            "token_symbol": token_sym,
-            "extra_data": {
-                "shares": total_shares,
-                "staked_shares": staked_shares,
-                "unstaked_shares": unstaked_shares,
-                "cost_basis_usd": cost_basis_usd,
-                "token_mint": token_info.get("token_mint"),
-                "token_symbol": token_sym,
+        results.append(_pos(
+            wallet_address=wallet, protocol_slug="kamino",
+            product_type="earn_vault", external_id=vault_address,
+            snapshot_at=now, opportunity_id=opportunity_id,
+            deposit_amount=deposit_amount, deposit_amount_usd=deposit_amount_usd,
+            pnl_usd=pnl_usd, pnl_pct=pnl_pct,
+            initial_deposit_usd=cost_basis_usd,
+            opened_at=opened_at, held_days=held_days, apy=earn_apy,
+            token_symbol=token_sym,
+            extra_data={
+                "shares": total_shares, "staked_shares": staked_shares,
+                "unstaked_shares": unstaked_shares, "cost_basis_usd": cost_basis_usd,
+                "token_mint": token_info.get("token_mint"), "token_symbol": token_sym,
             },
-            "snapshot_at": now,
-        })
+        ))
 
     return results
 
@@ -597,7 +579,7 @@ def _fetch_obligation_positions(
             } for r in borrow_reserves]
 
             # Try to match to a YieldOpportunity by first collateral reserve
-            _omap = opp_map if opp_map is not None else _load_opportunity_map(db)
+            _omap = opp_map if opp_map is not None else load_opportunity_map(db)
             opportunity_id = None
             if collateral_reserves:
                 opportunity_id = _match_opportunity(collateral_reserves[0], _omap)
@@ -670,47 +652,36 @@ def _fetch_obligation_positions(
             if (not net_value or net_value <= 0) and not is_closed:
                 continue
 
-            results.append({
-                "wallet_address": wallet,
-                "protocol_slug": "kamino",
-                "product_type": product_type,
-                "external_id": obligation_address,
-                "opportunity_id": opportunity_id,
-                "deposit_amount": total_deposit,
-                "deposit_amount_usd": net_value if not is_closed else 0.0,
-                "pnl_usd": pnl_usd,
-                "pnl_pct": pnl_pct,
-                "initial_deposit_usd": initial_deposit_usd,
-                "opened_at": opened_at,
-                "held_days": held_days,
-                "apy": apy,
-                "apy_realized": compute_realized_apy(pnl_usd, initial_deposit_usd, held_days),
-                "is_closed": is_closed,
-                "closed_at": closed_at,
-                "close_value_usd": close_value_usd,
-                "token_symbol": token_symbol,
-                "extra_data": {
+            pos = _pos(
+                wallet_address=wallet, protocol_slug="kamino",
+                product_type=product_type, external_id=obligation_address,
+                snapshot_at=now, opportunity_id=opportunity_id,
+                deposit_amount=total_deposit,
+                deposit_amount_usd=net_value if not is_closed else 0.0,
+                pnl_usd=pnl_usd, pnl_pct=pnl_pct,
+                initial_deposit_usd=initial_deposit_usd,
+                opened_at=opened_at, held_days=held_days, apy=apy,
+                is_closed=is_closed, closed_at=closed_at,
+                close_value_usd=close_value_usd,
+                token_symbol=token_symbol,
+                extra_data={
                     "obligation_address": obligation_address,
                     "human_tag": obligation.get("humanTag"),
                     "obligation_tag": obligation.get("obligationTag"),
-                    "market": market_pk,
-                    "market_name": market_name,
-                    "collateral": collateral_info,
-                    "debt": debt_info,
+                    "market": market_pk, "market_name": market_name,
+                    "collateral": collateral_info, "debt": debt_info,
                     "total_deposit_usd": total_deposit,
                     "total_borrow_usd": total_borrow,
-                    "net_value_usd": net_value,
-                    "leverage": leverage,
-                    "ltv": ltv,
-                    "liquidation_ltv": liq_ltv,
+                    "net_value_usd": net_value, "leverage": leverage,
+                    "ltv": ltv, "liquidation_ltv": liq_ltv,
                     "health_factor": health_factor,
                     "borrow_limit": _float(stats.get("borrowLimit")),
                     "borrow_utilization": _float(stats.get("borrowUtilization")),
-                    "forward_apy": round(forward_apy, 4) if forward_apy is not None else None,
+                    "forward_apy": round(apy, 4) if apy is not None else None,
                 },
-                "snapshot_at": now,
-                "_obligation_events": all_obligation_events,
-            })
+            )
+            pos["_obligation_events"] = all_obligation_events
+            results.append(pos)
 
     return results
 
@@ -872,30 +843,7 @@ def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> in
                     all_markets=all_markets,
                     obligation_events=collected_obligation_events,
                 )
-                for evt in events_raw:
-                    # Skip if tx_signature already recorded
-                    if evt.get("tx_signature"):
-                        existing = (
-                            db.query(UserPositionEvent.id)
-                            .filter(UserPositionEvent.tx_signature == evt["tx_signature"])
-                            .first()
-                        )
-                        if existing:
-                            continue
-
-                    event = UserPositionEvent(
-                        wallet_address=evt["wallet_address"],
-                        protocol_slug=evt["protocol_slug"],
-                        product_type=evt["product_type"],
-                        external_id=evt["external_id"],
-                        event_type=evt["event_type"],
-                        amount=evt.get("amount"),
-                        amount_usd=evt.get("amount_usd"),
-                        tx_signature=evt.get("tx_signature"),
-                        event_at=evt["event_at"],
-                        extra_data=evt.get("extra_data"),
-                    )
-                    db.add(event)
+                store_events_batch(db, events_raw)
 
                 wallet.last_fetched_at = now
                 db.flush()
@@ -919,15 +867,3 @@ def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> in
     return total_snapshots
 
 
-def snapshot_all_wallets_job():
-    """APScheduler entry point — creates its own DB session."""
-    logger.info("Starting position snapshot job")
-    db: Session = SessionLocal()
-    try:
-        count = snapshot_all_wallets(db)
-        logger.info("Position snapshot job complete: %d snapshots", count)
-    except Exception as exc:
-        db.rollback()
-        logger.error("Position snapshot job failed: %s", exc)
-    finally:
-        db.close()

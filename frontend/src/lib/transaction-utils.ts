@@ -25,17 +25,6 @@ export function buildTransactionMessage(
   );
 }
 
-/** Status label for any transaction status (unified hook). */
-export function getTxStatusLabel(status: string): string | null {
-  switch (status) {
-    case "preparing": return "Setting up...";
-    case "building": return "Building transaction...";
-    case "signing": return "Approve in wallet...";
-    case "confirming": return "Confirming...";
-    default: return null;
-  }
-}
-
 /**
  * Map a caught transaction error to a user-friendly message.
  */

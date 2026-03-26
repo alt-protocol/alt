@@ -16,9 +16,11 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.models.base import SessionLocal
-from app.models.user_position import TrackedWallet, UserPositionEvent
+from app.models.user_position import TrackedWallet
 from app.services.utils import (
-    safe_float, get_or_none, cached, parse_timestamp, compute_realized_apy, load_opportunity_map,
+    safe_float, get_or_none, cached, parse_timestamp, compute_realized_apy,
+    load_opportunity_map, compute_held_days, build_position_dict,
+    store_events_batch,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,8 @@ def _get(path: str, client: httpx.Client) -> Optional[dict | list]:
 _float = safe_float
 _cached = cached
 _parse_timestamp = parse_timestamp
+_held_days = compute_held_days
+_pos = build_position_dict
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +151,7 @@ def _fetch_if_positions(
 
         pnl_usd = (deposit_amount_usd - initial_deposit_usd) if deposit_amount_usd is not None and initial_deposit_usd > 0 else None
         pnl_pct = (pnl_usd / initial_deposit_usd * 100) if pnl_usd is not None else None
-        held_days = (now - opened_at).total_seconds() / 86400.0 if opened_at else None
+        held_days = _held_days(opened_at, now)
 
         apy = if_apys.get(market_index)
 
@@ -157,34 +161,21 @@ def _fetch_if_positions(
         if apy is None and entry:
             apy = entry["apy_current"]
 
-        positions.append({
-            "wallet_address": wallet,
-            "protocol_slug": "drift",
-            "product_type": "insurance_fund",
-            "external_id": external_id,
-            "opportunity_id": opportunity_id,
-            "deposit_amount": shares_after,
-            "deposit_amount_usd": round(deposit_amount_usd, 2) if deposit_amount_usd else None,
-            "pnl_usd": round(pnl_usd, 2) if pnl_usd is not None else None,
-            "pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
-            "initial_deposit_usd": round(initial_deposit_usd, 2) if initial_deposit_usd else None,
-            "opened_at": opened_at,
-            "held_days": round(held_days, 4) if held_days is not None else None,
-            "apy": round(apy, 4) if apy is not None else None,
-            "apy_realized": compute_realized_apy(pnl_usd, initial_deposit_usd, held_days),
-            "is_closed": False,
-            "closed_at": None,
-            "close_value_usd": None,
-            "token_symbol": symbol,
-            "extra_data": {
-                "if_shares": shares_after,
-                "market_index": market_index,
-                "symbol": symbol,
-                "total_staked": total_staked,
+        positions.append(_pos(
+            wallet_address=wallet, protocol_slug="drift",
+            product_type="insurance_fund", external_id=external_id,
+            snapshot_at=now, opportunity_id=opportunity_id,
+            deposit_amount=shares_after, deposit_amount_usd=deposit_amount_usd,
+            pnl_usd=pnl_usd, pnl_pct=pnl_pct,
+            initial_deposit_usd=initial_deposit_usd,
+            opened_at=opened_at, held_days=held_days, apy=apy,
+            token_symbol=symbol,
+            extra_data={
+                "if_shares": shares_after, "market_index": market_index,
+                "symbol": symbol, "total_staked": total_staked,
                 "total_unstaked": total_unstaked,
             },
-            "snapshot_at": now,
-        })
+        ))
 
         for evt in market_events:
             position_events.append(_if_event_to_record(evt, wallet))
@@ -287,38 +278,24 @@ def _fetch_vault_positions(
 
         # Estimate opened_at from earliest snapshot
         opened_at = _parse_timestamp(snapshots[0].get("ts"))
-        held_days = None
-        if opened_at:
-            held_days = (now - opened_at).total_seconds() / 86400.0
+        held_days = _held_days(opened_at, now)
 
-        positions.append({
-            "wallet_address": wallet,
-            "protocol_slug": "drift",
-            "product_type": "earn_vault",
-            "external_id": external_id,
-            "opportunity_id": opportunity_id,
-            "deposit_amount": total_value,
-            "deposit_amount_usd": round(total_value, 2),
-            "pnl_usd": round(pnl_usd, 2),
-            "pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
-            "initial_deposit_usd": round(net_deposits, 2) if net_deposits > 0 else None,
-            "opened_at": opened_at,
-            "held_days": round(held_days, 4) if held_days is not None else None,
-            "apy": round(apy, 4) if apy is not None else None,
-            "apy_realized": compute_realized_apy(pnl_usd, net_deposits, held_days),
-            "is_closed": False,
-            "closed_at": None,
-            "close_value_usd": None,
-            "token_symbol": token_symbol,
-            "extra_data": {
-                "vault_pubkey": vault_pubkey,
-                "market_index": market_index,
+        positions.append(_pos(
+            wallet_address=wallet, protocol_slug="drift",
+            product_type="earn_vault", external_id=external_id,
+            snapshot_at=now, opportunity_id=opportunity_id,
+            deposit_amount=total_value, deposit_amount_usd=total_value,
+            pnl_usd=pnl_usd, pnl_pct=pnl_pct,
+            initial_deposit_usd=net_deposits if net_deposits > 0 else None,
+            opened_at=opened_at, held_days=held_days, apy=apy,
+            token_symbol=token_symbol,
+            extra_data={
+                "vault_pubkey": vault_pubkey, "market_index": market_index,
                 "net_deposits": net_deposits,
                 "total_account_value": total_value,
                 "total_account_base_value": _float(latest.get("totalAccountBaseValue")),
             },
-            "snapshot_at": now,
-        })
+        ))
 
     return positions
 
@@ -397,30 +374,7 @@ def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> in
                 from app.services.utils import store_position_rows
                 total_snapshots += store_position_rows(db, all_positions, now)
 
-                # Store IF events (deduplicate by tx_signature)
-                for evt in if_events:
-                    if evt.get("tx_signature"):
-                        existing = (
-                            db.query(UserPositionEvent.id)
-                            .filter(UserPositionEvent.tx_signature == evt["tx_signature"])
-                            .first()
-                        )
-                        if existing:
-                            continue
-
-                    event = UserPositionEvent(
-                        wallet_address=evt["wallet_address"],
-                        protocol_slug=evt["protocol_slug"],
-                        product_type=evt["product_type"],
-                        external_id=evt["external_id"],
-                        event_type=evt["event_type"],
-                        amount=evt.get("amount"),
-                        amount_usd=evt.get("amount_usd"),
-                        tx_signature=evt.get("tx_signature"),
-                        event_at=evt["event_at"],
-                        extra_data=evt.get("extra_data"),
-                    )
-                    db.add(event)
+                store_events_batch(db, if_events)
 
                 wallet.last_fetched_at = now
                 db.flush()
@@ -444,15 +398,3 @@ def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> in
     return total_snapshots
 
 
-def snapshot_all_wallets_job():
-    """APScheduler entry point — creates its own DB session."""
-    logger.info("Starting Drift position snapshot job")
-    db: Session = SessionLocal()
-    try:
-        count = snapshot_all_wallets(db)
-        logger.info("Drift position snapshot job complete: %d snapshots", count)
-    except Exception as exc:
-        db.rollback()
-        logger.error("Drift position snapshot job failed: %s", exc)
-    finally:
-        db.close()

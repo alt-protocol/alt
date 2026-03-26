@@ -59,6 +59,15 @@ export function useInvalidateAfterTransaction() {
         queryClient.invalidateQueries({
           queryKey: queryKeys.vault.balance(walletAddress, vaultAddress),
         });
+        // Invalidate on-chain position balance + withdrawal state
+        queryClient.invalidateQueries({
+          queryKey: ["positionBalance", walletAddress],
+          exact: false,
+        });
+        queryClient.invalidateQueries({
+          queryKey: ["withdrawState", walletAddress],
+          exact: false,
+        });
       }
 
       // Yield detail TVL may change after large deposits

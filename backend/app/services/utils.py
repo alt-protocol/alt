@@ -226,6 +226,149 @@ def parse_timestamp(ts) -> Optional[datetime]:
     try:
         if isinstance(ts, (int, float)):
             return datetime.fromtimestamp(ts, tz=timezone.utc)
-        return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except (ValueError, OSError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# Shared position-fetcher utilities
+# ---------------------------------------------------------------------------
+
+# Well-known Solana token mints → symbols (fallback when API omits tokenSymbol)
+KNOWN_TOKEN_MINTS: dict[str, str] = {
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
+    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
+    "So11111111111111111111111111111111111111112": "SOL",
+    "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JITOSOL",
+    "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So": "MSOL",
+    "7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj": "stSOL",
+    "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1": "bSOL",
+}
+
+
+def compute_held_days(
+    opened_at: Optional[datetime], now: Optional[datetime] = None,
+) -> Optional[float]:
+    """Days between opened_at and now, rounded to 4 decimals. None if opened_at is None."""
+    if opened_at is None:
+        return None
+    if now is None:
+        now = datetime.now(timezone.utc)
+    return round((now - opened_at).total_seconds() / 86400.0, 4)
+
+
+def build_position_dict(
+    *,
+    wallet_address: str,
+    protocol_slug: str,
+    product_type: str,
+    external_id: str,
+    snapshot_at: datetime,
+    opportunity_id: Optional[int] = None,
+    deposit_amount: Optional[float] = None,
+    deposit_amount_usd: Optional[float] = None,
+    pnl_usd: Optional[float] = None,
+    pnl_pct: Optional[float] = None,
+    initial_deposit_usd: Optional[float] = None,
+    opened_at: Optional[datetime] = None,
+    held_days: Optional[float] = None,
+    apy: Optional[float] = None,
+    is_closed: bool = False,
+    closed_at: Optional[datetime] = None,
+    close_value_usd: Optional[float] = None,
+    token_symbol: Optional[str] = None,
+    extra_data: Optional[dict] = None,
+) -> dict:
+    """Build a standardized position dict with consistent rounding and realized APY."""
+    return {
+        "wallet_address": wallet_address,
+        "protocol_slug": protocol_slug,
+        "product_type": product_type,
+        "external_id": external_id,
+        "opportunity_id": opportunity_id,
+        "deposit_amount": deposit_amount,
+        "deposit_amount_usd": round(deposit_amount_usd, 2) if deposit_amount_usd is not None else None,
+        "pnl_usd": round(pnl_usd, 2) if pnl_usd is not None else None,
+        "pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
+        "initial_deposit_usd": round(initial_deposit_usd, 2) if initial_deposit_usd is not None else None,
+        "opened_at": opened_at,
+        "held_days": held_days,
+        "apy": round(apy, 4) if apy is not None else None,
+        "apy_realized": compute_realized_apy(pnl_usd, initial_deposit_usd, held_days),
+        "is_closed": is_closed,
+        "closed_at": closed_at,
+        "close_value_usd": round(close_value_usd, 2) if close_value_usd is not None else None,
+        "token_symbol": token_symbol,
+        "extra_data": extra_data or {},
+        "snapshot_at": snapshot_at,
+    }
+
+
+def store_events_batch(db, events: list[dict]) -> int:
+    """Deduplicate events by tx_signature (batch lookup) and store new ones. Returns count."""
+    from app.models.user_position import UserPositionEvent
+
+    if not events:
+        return 0
+
+    # Batch-load existing tx_signatures — avoids N+1 queries
+    sigs = [e["tx_signature"] for e in events if e.get("tx_signature")]
+    existing_sigs: set[str] = set()
+    if sigs:
+        for i in range(0, len(sigs), 500):
+            chunk = sigs[i:i + 500]
+            rows = (
+                db.query(UserPositionEvent.tx_signature)
+                .filter(UserPositionEvent.tx_signature.in_(chunk))
+                .all()
+            )
+            existing_sigs.update(r[0] for r in rows)
+
+    count = 0
+    for evt in events:
+        sig = evt.get("tx_signature")
+        if sig and sig in existing_sigs:
+            continue
+        event = UserPositionEvent(
+            wallet_address=evt["wallet_address"],
+            protocol_slug=evt["protocol_slug"],
+            product_type=evt["product_type"],
+            external_id=evt["external_id"],
+            event_type=evt["event_type"],
+            amount=evt.get("amount"),
+            amount_usd=evt.get("amount_usd"),
+            tx_signature=sig,
+            event_at=evt["event_at"],
+            extra_data=evt.get("extra_data"),
+        )
+        db.add(event)
+        count += 1
+    return count
+
+
+def batch_earliest_snapshots(
+    db, wallet_address: str,
+) -> dict[str, datetime]:
+    """Load earliest snapshot_at per external_id for a wallet. Single GROUP BY query."""
+    from app.models.user_position import UserPosition
+    from sqlalchemy import func
+
+    rows = (
+        db.query(
+            UserPosition.external_id,
+            func.min(UserPosition.snapshot_at),
+        )
+        .filter(UserPosition.wallet_address == wallet_address)
+        .group_by(UserPosition.external_id)
+        .all()
+    )
+    result: dict[str, datetime] = {}
+    for ext_id, min_ts in rows:
+        if min_ts is not None:
+            ts = min_ts.replace(tzinfo=timezone.utc) if min_ts.tzinfo is None else min_ts
+            result[ext_id] = ts
+    return result
