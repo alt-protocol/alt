@@ -6,8 +6,9 @@ import { useWalletAccountTransactionSendingSigner } from "@solana/react";
 import type { YieldOpportunityDetail } from "@/lib/api";
 import { api } from "@/lib/api";
 import { getAdapter } from "@/lib/protocols";
-import { fmtUsd, fmtPct, pnlColor } from "@/lib/format";
+import { fmtNum, fmtUsd, fmtPct, pnlColor } from "@/lib/format";
 import { useTokenBalance } from "@/lib/hooks/useTokenBalance";
+import { useVaultBalance } from "@/lib/hooks/useVaultBalance";
 import { useVaultTransaction } from "@/lib/hooks/useVaultTransaction";
 import { usePositionForOpportunity } from "@/lib/hooks/usePositionForOpportunity";
 import { useInvalidateAfterTransaction } from "@/lib/hooks/useInvalidateAfterTransaction";
@@ -43,14 +44,18 @@ export default function DepositWithdrawPanel({ yield_, protocolSlug }: Props) {
   const invalidateAfterTx = useInvalidateAfterTransaction();
   const primaryToken = yield_.tokens[0] ?? "USDC";
   const { data: balance } = useTokenBalance(selectedAccount?.address, primaryToken);
-  const { position, isLoading: positionLoading } = usePositionForOpportunity(
+  const { data: vaultBalance, isLoading: vaultBalanceLoading } = useVaultBalance(
+    selectedAccount?.address,
+    tab === "withdraw" ? yield_.deposit_address ?? undefined : undefined,
+  );
+  const { position } = usePositionForOpportunity(
     selectedAccount?.address,
     yield_.id,
   );
 
   const { execute, status, error, txSignature, reset } = useVaultTransaction(signer);
 
-  const effectiveBalance = tab === "deposit" ? (balance ?? null) : (position?.deposit_amount ?? null);
+  const effectiveBalance = tab === "deposit" ? (balance ?? null) : (vaultBalance ?? null);
   const numAmount = parseFloat(amount) || 0;
   const meetsMinimum = tab === "withdraw" || !yield_.min_deposit || numAmount >= yield_.min_deposit;
   const isValid = numAmount > 0 && (effectiveBalance == null || numAmount <= effectiveBalance) && meetsMinimum;
@@ -100,6 +105,9 @@ export default function DepositWithdrawPanel({ yield_, protocolSlug }: Props) {
       walletAddress: selectedAccount!.address,
       tokenSymbol: primaryToken,
       opportunityId: yield_.id,
+      vaultAddress: yield_.deposit_address ?? undefined,
+      txType: tab,
+      txAmount: numAmount,
     });
     api.trackWallet(selectedAccount!.address);
   }
@@ -145,18 +153,18 @@ export default function DepositWithdrawPanel({ yield_, protocolSlug }: Props) {
           {tab === "deposit" && balance != null && (
             <BalanceRow
               label="Available"
-              value={<>{balance.toLocaleString(undefined, { maximumFractionDigits: 6 })} {primaryToken}</>}
+              value={<>{fmtNum(balance, 6)} {primaryToken}</>}
             />
           )}
 
-          {tab === "withdraw" && position && (
+          {tab === "withdraw" && vaultBalance != null && vaultBalance > 0 && (
             <>
               <BalanceRow
                 label="Deposited"
-                className="mb-2"
-                value={<>{position.deposit_amount?.toLocaleString(undefined, { maximumFractionDigits: 6 })} {primaryToken}</>}
+                className={position?.pnl_usd != null ? "mb-2" : "mb-4"}
+                value={<>{fmtNum(vaultBalance, 6)} {primaryToken}</>}
               />
-              {position.pnl_usd != null && (
+              {position?.pnl_usd != null && (
                 <BalanceRow
                   label="PnL"
                   value={
@@ -169,7 +177,7 @@ export default function DepositWithdrawPanel({ yield_, protocolSlug }: Props) {
             </>
           )}
 
-          {tab === "withdraw" && !position && !positionLoading && (
+          {tab === "withdraw" && (vaultBalance == null || vaultBalance <= 0) && !vaultBalanceLoading && (
             <div className="flex-1 flex flex-col items-center justify-center gap-2">
               <p className="text-foreground-muted font-sans text-[0.75rem]">
                 No active position
@@ -180,8 +188,8 @@ export default function DepositWithdrawPanel({ yield_, protocolSlug }: Props) {
             </div>
           )}
 
-          {/* Amount input + actions (hidden when withdraw has no position) */}
-          {(tab === "deposit" || position) && (
+          {/* Amount input + actions (hidden when withdraw has no balance) */}
+          {(tab === "deposit" || (vaultBalance != null && vaultBalance > 0)) && (
             <>
               <div className="bg-surface-high rounded-sm px-4 py-3 mb-2 focus-within:shadow-[0_2px_0_0_var(--neon-primary)] transition-shadow">
                 <div className="flex items-center justify-between mb-1">

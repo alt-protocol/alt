@@ -324,7 +324,6 @@ def fetch_lending_reserves(
                 extra={
                     "token_mint": token_mint,
                     "reserve": reserve_pubkey,
-                    "decimals": int(reserve.get("decimals", 6)),
                     "protocol_url": f"{KAMINO_APP}/lending/reserve/{reserve_pubkey}/{market_pubkey}",
                     "supply_apy_raw": reserve.get("supplyApy"),
                     "borrow_apy_raw": reserve.get("borrowApy"),

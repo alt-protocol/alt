@@ -5,8 +5,7 @@ import Dropdown from "@/components/Dropdown";
 import { fmtCategory } from "@/lib/format";
 import { useClickOutside } from "@/lib/hooks/useClickOutside";
 import type { Filters } from "@/lib/hooks/useYieldFilters";
-
-const CATEGORIES = ["", "lending", "multiply", "insurance_fund", "vault"];
+import { getCategorySlugs } from "@/lib/categories";
 const QUICK_TOKENS = ["USDC"];
 
 const inputClass = "w-full bg-surface text-foreground rounded-sm px-3 py-2 text-[0.8rem] font-sans outline-none focus:bg-surface-high transition-colors placeholder:text-foreground-muted";
@@ -45,7 +44,7 @@ export default function FilterPanel({
 
   const protocolOptions = [{ value: "", label: "All Protocols" }, ...sources.map((s) => ({ value: s, label: s }))];
   const tokenOptions = [{ value: "", label: "All Tokens" }, ...allTokens.map((t) => ({ value: t, label: t }))];
-  const categoryOptions = [{ value: "", label: "All Categories" }, ...CATEGORIES.filter(Boolean).map((c) => ({ value: c, label: fmtCategory(c) }))];
+  const categoryOptions = [{ value: "", label: "All Categories" }, ...getCategorySlugs().map((c) => ({ value: c, label: fmtCategory(c) }))];
 
   return (
     <div className="px-5 py-3 flex items-center justify-between gap-3">

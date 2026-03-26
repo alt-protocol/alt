@@ -97,6 +97,6 @@ function LoadingSkeleton() {
 5. **Shared components**: Use `StatsGrid` for metrics, `PeriodSelector` for time toggles, `TabBar` for tab navigation.
 6. **Charts**: Dynamic import with `{ ssr: false }` for any Recharts components.
 7. **Wallet pages**: Use `useSelectedWalletAccount` from `@solana/react` (NOT legacy adapter).
-8. **Tables**: Every table MUST have `lg:hidden` card view + `hidden lg:block` table view. Use `PositionTable` + `getColumnsForType()` for position data.
+8. **Tables**: Every table MUST have `lg:hidden` card view + `hidden lg:block` table view. Use `PositionTable` + `getColumnsForType()` for position data. Columns are driven by the category registry (`@/lib/categories`).
 9. **Component size**: Pages ≤300 lines. Extract hooks to `frontend/src/lib/hooks/` when exceeding.
 10. **Deposit/withdraw panels**: Dynamic import `DepositWithdrawPanel` with `{ ssr: false }`.

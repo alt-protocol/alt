@@ -33,7 +33,16 @@ export function isBuildTxResultWithSetup(r: BuildTxResult): r is BuildTxResultWi
   return !Array.isArray(r) && "setupInstructionSets" in r;
 }
 
+export interface GetBalanceParams {
+  walletAddress: string;
+  depositAddress: string;
+  category: string;
+  extraData?: Record<string, unknown>;
+}
+
 export interface ProtocolAdapter {
   buildDepositTx(params: BuildTxParams): Promise<BuildTxResult>;
   buildWithdrawTx(params: BuildTxParams): Promise<BuildTxResult>;
+  /** Optional: protocol-specific balance fetching (e.g. Kamino vault shares → USD). */
+  getBalance?(params: GetBalanceParams): Promise<number | null>;
 }

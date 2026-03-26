@@ -32,6 +32,7 @@ class UserPosition(Base):
     opened_at = Column(TIMESTAMP, nullable=True)
     held_days = Column(Numeric(10, 4), nullable=True)
     apy = Column(Numeric(10, 4), nullable=True)
+    apy_realized = Column(Numeric(10, 4), nullable=True)
     is_closed = Column(Boolean, nullable=True)
     closed_at = Column(TIMESTAMP, nullable=True)
     close_value_usd = Column(Numeric(20, 2), nullable=True)

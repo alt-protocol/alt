@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.models.base import SessionLocal
 from app.models.user_position import TrackedWallet, UserPositionEvent
 from app.models.yield_opportunity import YieldOpportunity
-from app.services.utils import safe_float, get_with_retry, get_or_none, cached, parse_timestamp
+from app.services.utils import safe_float, get_with_retry, get_or_none, cached, parse_timestamp, compute_realized_apy
 
 logger = logging.getLogger(__name__)
 
@@ -278,7 +278,6 @@ def _compute_modified_dietz(
 
     pnl_usd = None
     pnl_pct = None
-    realized_apy = None
 
     if T and T > 0 and cash_flows:
         total_net_cf = sum(c for _, c in cash_flows)
@@ -294,13 +293,11 @@ def _compute_modified_dietz(
         if weighted_capital > 0:
             modified_dietz_return = pnl_usd / weighted_capital
             pnl_pct = modified_dietz_return * 100
-            realized_apy = modified_dietz_return * (365.0 / T) * 100
 
     return {
         "initial_deposit_usd": round(initial_deposit_usd, 2) if initial_deposit_usd else None,
         "pnl_usd": round(pnl_usd, 2) if pnl_usd is not None else None,
         "pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
-        "realized_apy": round(realized_apy, 4) if realized_apy is not None else None,
         "opened_at": opened_at,
         "held_days": round(held_days, 4) if held_days is not None else None,
         "token_symbol": cf["token_symbol"],
@@ -390,12 +387,15 @@ def _fetch_earn_positions(
     if not isinstance(txs_raw, list) or not txs_raw:
         return []
 
-    # Build vault → token info from transactions.
+    # Build vault → token info and first deposit timestamp from transactions.
     # Transactions are ordered newest-first; first occurrence has latest prices.
     vault_token_info: dict[str, dict] = {}
+    first_deposit_ts: dict[str, datetime] = {}
     for tx in txs_raw:
         vault = tx.get("kvault", "")
-        if vault and vault not in vault_token_info:
+        if not vault:
+            continue
+        if vault not in vault_token_info:
             mint = tx.get("tokenMint", "")
             symbol = tx.get("tokenSymbol") or _KNOWN_MINTS.get(mint)
             vault_token_info[vault] = {
@@ -404,6 +404,10 @@ def _fetch_earn_positions(
                 "share_price": _float(tx.get("sharePrice")),
                 "token_price": _float(tx.get("tokenPrice")),
             }
+        if "deposit" in (tx.get("instruction") or "").lower():
+            ts = _parse_timestamp(tx.get("createdOn"))
+            if ts and (vault not in first_deposit_ts or ts < first_deposit_ts[vault]):
+                first_deposit_ts[vault] = ts
 
     results = []
     for vault_address, token_info in vault_token_info.items():
@@ -475,8 +479,9 @@ def _fetch_earn_positions(
         # Earn vault APY: lookup from yield_opportunities table
         earn_apy = _lookup_opportunity_apy(vault_address, _omap)
 
-        # Token symbol from vault transactions
         token_sym = token_info.get("token_symbol")
+        opened_at = first_deposit_ts.get(vault_address)
+        held_days = round((now - opened_at).total_seconds() / 86400.0, 4) if opened_at else None
 
         results.append({
             "wallet_address": wallet,
@@ -489,9 +494,10 @@ def _fetch_earn_positions(
             "pnl_usd": pnl_usd,
             "pnl_pct": pnl_pct,
             "initial_deposit_usd": cost_basis_usd,
-            "opened_at": None,  # earn vault API doesn't expose this directly
-            "held_days": None,
+            "opened_at": opened_at,
+            "held_days": held_days,
             "apy": earn_apy,
+            "apy_realized": compute_realized_apy(pnl_usd, cost_basis_usd, held_days),
             "is_closed": False,
             "closed_at": None,
             "close_value_usd": None,
@@ -650,7 +656,6 @@ def _fetch_obligation_positions(
             closed_at = pnl_data.get("closed_at")
             close_value_usd = pnl_data.get("close_value_usd")
             token_symbol = pnl_data.get("token_symbol")
-            realized_apy = pnl_data.get("realized_apy")
 
             # Detect "recycled" obligations: the current collateral token
             # differs from the historical tx token, meaning the user withdrew
@@ -675,7 +680,6 @@ def _fetch_obligation_positions(
                 pnl_usd = 0.0
                 pnl_pct = 0.0
                 initial_deposit_usd = net_value  # best approximation
-                realized_apy = None
                 opened_at = None
                 held_days = None
 
@@ -708,6 +712,7 @@ def _fetch_obligation_positions(
                 "opened_at": opened_at,
                 "held_days": held_days,
                 "apy": apy,
+                "apy_realized": compute_realized_apy(pnl_usd, initial_deposit_usd, held_days),
                 "is_closed": is_closed,
                 "closed_at": closed_at,
                 "close_value_usd": close_value_usd,
@@ -730,7 +735,6 @@ def _fetch_obligation_positions(
                     "borrow_limit": _float(stats.get("borrowLimit")),
                     "borrow_utilization": _float(stats.get("borrowUtilization")),
                     "forward_apy": round(forward_apy, 4) if forward_apy is not None else None,
-                    "realized_apy": round(realized_apy, 4) if realized_apy is not None else None,
                 },
                 "snapshot_at": now,
                 "_obligation_events": all_obligation_events,
@@ -864,17 +868,18 @@ def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> in
     total_snapshots = 0
 
     with httpx.Client() as client:
-        # Fetch markets once — shared across all wallets
+        # Fetch shared data once — reused across all wallets
         all_markets = _get_all_markets(client)
+        opp_map = _load_opportunity_map(db)
 
         for wallet in wallets:
             try:
                 earn_positions = _fetch_earn_positions(
-                    wallet.wallet_address, client, db, now,
+                    wallet.wallet_address, client, db, now, opp_map=opp_map,
                 )
                 obligation_positions = _fetch_obligation_positions(
                     wallet.wallet_address, client, db, now,
-                    all_markets=all_markets,
+                    all_markets=all_markets, opp_map=opp_map,
                 )
                 all_positions = earn_positions + obligation_positions
 
@@ -884,7 +889,7 @@ def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> in
                 for pos_data in all_positions:
                     ob_evts = pos_data.pop("_obligation_events", None)
                     if ob_evts:
-                        collected_obligation_events = ob_evts
+                        collected_obligation_events.extend(ob_evts)
 
                 from app.services.utils import store_position_rows
                 total_snapshots += store_position_rows(db, all_positions, now)

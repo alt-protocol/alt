@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.models.base import SessionLocal
 from app.models.user_position import TrackedWallet, UserPositionEvent
 from app.models.yield_opportunity import YieldOpportunity
-from app.services.utils import safe_float, get_or_none, cached, parse_timestamp
+from app.services.utils import safe_float, get_or_none, cached, parse_timestamp, compute_realized_apy
 
 logger = logging.getLogger(__name__)
 
@@ -89,21 +89,6 @@ def _get_if_pool_apys(client: httpx.Client) -> dict[int, float]:
     return _cached("drift_if_apys", 300, _fetch)
 
 
-def _get_spot_market_accounts(client: httpx.Client) -> dict[int, dict]:
-    """Fetch spot market accounts for IF vault balances: {marketIndex: {...}}."""
-    def _fetch():
-        data = _get("/stats/spotMarketAccounts", client)
-        if not isinstance(data, list):
-            return {}
-        result = {}
-        for acct in data:
-            idx = acct.get("marketIndex")
-            if idx is not None:
-                result[idx] = acct
-        return result
-    return _cached("drift_spot_markets", 300, _fetch)
-
-
 # ---------------------------------------------------------------------------
 # Insurance Fund positions
 # ---------------------------------------------------------------------------
@@ -145,9 +130,7 @@ def _fetch_if_positions(
     if not events:
         return [], []
 
-    # Get pool APYs and spot market accounts
     if_apys = _get_if_pool_apys(client)
-    spot_accounts = _get_spot_market_accounts(client)
 
     # Group events by marketIndex, keep latest per market
     by_market: dict[int, list[dict]] = defaultdict(list)
@@ -160,7 +143,6 @@ def _fetch_if_positions(
     position_events = []
 
     for market_index, market_events in by_market.items():
-        # Sort by timestamp ascending
         market_events.sort(key=lambda e: e.get("ts", 0))
         latest = market_events[-1]
 
@@ -174,28 +156,15 @@ def _fetch_if_positions(
         symbol = latest.get("symbol", f"MARKET-{market_index}")
         external_id = f"drift-if-{market_index}"
 
-        # Compute USD value from spot market accounts (fresh pool state)
-        deposit_amount_usd = None
-        spot_acct = spot_accounts.get(market_index, {})
-        if spot_acct:
-            # Insurance fund vault balance and total shares from on-chain state
-            # The spot market account has insuranceFund data
-            if_data = spot_acct.get("insuranceFund", {})
-            total_shares = _float(if_data.get("totalShares"))
-            vault_balance = _float(if_data.get("revenueSettleBalance"))
+        # Current value: proportional share of IF vault (stablecoins — token units ≈ USD).
+        total_shares_ev = _float(latest.get("totalIfSharesAfter"))
+        vault_amount_ev = _float(latest.get("insuranceVaultAmountBefore"))
+        deposit_amount_usd = (
+            (shares_after / total_shares_ev) * vault_amount_ev
+            if total_shares_ev and total_shares_ev > 0 and vault_amount_ev
+            else None
+        )
 
-            # Fallback: use event-level approximation
-            if total_shares and total_shares > 0 and vault_balance:
-                deposit_amount_usd = (shares_after / total_shares) * vault_balance
-
-        # Fallback: approximate from last event data
-        if deposit_amount_usd is None:
-            total_shares_after = _float(latest.get("totalIfSharesAfter"))
-            vault_amount = _float(latest.get("insuranceVaultAmountBefore"))
-            if total_shares_after and total_shares_after > 0 and vault_amount:
-                deposit_amount_usd = (shares_after / total_shares_after) * vault_amount
-
-        # Compute net staked from events
         total_staked = 0.0
         total_unstaked = 0.0
         opened_at = None
@@ -212,19 +181,12 @@ def _fetch_if_positions(
         net_staked = total_staked - total_unstaked
         initial_deposit_usd = net_staked if net_staked > 0 else total_staked
 
-        pnl_usd = None
-        pnl_pct = None
-        if deposit_amount_usd is not None and initial_deposit_usd > 0:
-            pnl_usd = deposit_amount_usd - initial_deposit_usd
-            pnl_pct = (pnl_usd / initial_deposit_usd) * 100
-
-        held_days = None
-        if opened_at:
-            held_days = (now - opened_at).total_seconds() / 86400.0
+        pnl_usd = (deposit_amount_usd - initial_deposit_usd) if deposit_amount_usd is not None and initial_deposit_usd > 0 else None
+        pnl_pct = (pnl_usd / initial_deposit_usd * 100) if pnl_usd is not None else None
+        held_days = (now - opened_at).total_seconds() / 86400.0 if opened_at else None
 
         apy = if_apys.get(market_index)
 
-        # Match to YieldOpportunity
         opportunity_id = None
         match = _match_opportunity_by_external(external_id, db)
         if match:
@@ -246,6 +208,7 @@ def _fetch_if_positions(
             "opened_at": opened_at,
             "held_days": round(held_days, 4) if held_days is not None else None,
             "apy": round(apy, 4) if apy is not None else None,
+            "apy_realized": compute_realized_apy(pnl_usd, initial_deposit_usd, held_days),
             "is_closed": False,
             "closed_at": None,
             "close_value_usd": None,
@@ -260,7 +223,6 @@ def _fetch_if_positions(
             "snapshot_at": now,
         })
 
-        # Convert events
         for evt in market_events:
             position_events.append(_if_event_to_record(evt, wallet))
 
@@ -386,6 +348,7 @@ def _fetch_vault_positions(
             "opened_at": opened_at,
             "held_days": round(held_days, 4) if held_days is not None else None,
             "apy": round(apy, 4) if apy is not None else None,
+            "apy_realized": compute_realized_apy(pnl_usd, net_deposits, held_days),
             "is_closed": False,
             "closed_at": None,
             "close_value_usd": None,
@@ -460,9 +423,7 @@ def snapshot_all_wallets_drift(db: Session, snapshot_at: datetime | None = None)
     total_snapshots = 0
 
     with httpx.Client() as client:
-        # Pre-fetch shared pool data
         _get_if_pool_apys(client)
-        _get_spot_market_accounts(client)
 
         for wallet in wallets:
             try:

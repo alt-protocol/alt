@@ -114,6 +114,7 @@ class UserPositionOut(BaseModel):
     opened_at: Optional[datetime] = None
     held_days: Optional[float] = None
     apy: Optional[float] = None
+    apy_realized: Optional[float] = None
     is_closed: Optional[bool] = None
     closed_at: Optional[datetime] = None
     close_value_usd: Optional[float] = None

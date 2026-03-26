@@ -67,8 +67,9 @@ The backend **never** handles private keys or signs transactions. All deposit/wi
 
 ### Frontend (`frontend/src/`)
 - Uses `(app)` route group layout — see `frontend/CLAUDE.md` for details
-- `lib/protocols/` — Adapter pattern: `kamino.ts`, `drift.ts`, `jupiter.ts` implement `ProtocolAdapter` interface from `types.ts`; `index.ts` is the registry
-- `components/` — `DepositWithdrawPanel`, `ApyChart`, `PortfolioChart`, `WalletButton`, etc.
+- `lib/categories/` — Category registry: `registry.tsx` (types + map), `definitions/` (one file per category), `extra-data.ts` (typed extractors), `index.ts` (re-exports). Drives detail page layout, portfolio table columns, filter dropdowns — adding a new category is a single-file operation.
+- `lib/protocols/` — Adapter pattern: `kamino.ts`, `drift.ts`, `jupiter.ts` implement `ProtocolAdapter` interface from `types.ts`; `index.ts` is the registry. Adding a new protocol to an existing category requires zero UI changes.
+- `components/` — `CategoryDetailView` (shared detail page shell), `DepositWithdrawPanel`, `MultiplyPanel`, `ApyChart`, `PortfolioChart`, `WalletButton`, etc.
 - State: TanStack Query, no global store
 - Frontend has extracted shared utilities (`format.ts`, `instruction-converter.ts`, hooks, `PositionTable`, `FilterPanel`) — see `frontend/CLAUDE.md` for the full module reference. Always check existing modules before creating new functions.
 
@@ -94,8 +95,9 @@ All frontend work MUST follow `DESIGN.md`. Key constraints: dark-only, no 1px bo
 - Don't read `node_modules/`, `venv/`, `alembic/versions/`, or `__pycache__/` — these waste context
 - Don't read `DESIGN.md` unless doing UI work — root CLAUDE.md has the key constraints
 - Prefer editing existing files over creating new ones
-- When adding a new protocol: need 1 backend fetcher, 1 position fetcher, 1 frontend adapter, 1 registry entry — that's it
-- Root skills (`.claude/skills/`): `add-protocol`, `add-page`, `add-backend-route`, `start-dev`
+- When adding a new protocol: need 1 backend fetcher, 1 position fetcher, 1 frontend adapter, 1 registry entry — zero UI changes needed
+- When adding a new category: need 1 category definition file in `frontend/src/lib/categories/definitions/` — UI auto-adapts
+- Root skills (`.claude/skills/`): `add-protocol`, `add-category`, `add-page`, `add-backend-route`, `start-dev`
 - Backend skills (`backend/.claude/skills/`): `add-backend-route`
 
 ## Roadmap

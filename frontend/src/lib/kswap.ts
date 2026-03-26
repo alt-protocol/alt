@@ -7,12 +7,8 @@ import { HELIUS_RPC_URL } from "./constants";
 /**
  * KSwap swap provider utilities for klend-sdk multiply/leverage operations.
  *
- * The SDK expects two callbacks:
- *   SwapQuoteProvider<RouteOutput> — fetches a price quote
- *   SwapIxsProvider<RouteOutput>  — fetches swap instructions for a quote
- *
- * These use @kamino-finance/kswap-sdk which routes through multiple DEXes
- * and selects routes by smallest transaction size (critical for 1232-byte limit).
+ * Routes through multiple DEXes and selects routes by smallest transaction
+ * size (critical for Solana's 1232-byte limit).
  */
 
 const KSWAP_API_URL = "https://api.kamino.finance/kswap";
@@ -34,9 +30,7 @@ async function loadModules() {
   };
 }
 
-/**
- * Get or create a singleton KswapSdk instance.
- */
+/** Get or create a singleton KswapSdk instance. */
 export async function getKswapSdkInstance(): Promise<any> {
   if (_kswapSdk) return _kswapSdk;
   const { KswapSdk } = await loadModules();
@@ -47,96 +41,87 @@ export async function getKswapSdkInstance(): Promise<any> {
   return _kswapSdk;
 }
 
-/**
- * Get debt-to-collateral price via KSwap price API.
- */
-export async function getTokenPrice(
-  inputMint: Address,
-  outputMint: Address,
-): Promise<number> {
+/** Get debt-to-collateral price via Jupiter Price API (through KSwap). */
+export async function getTokenPrice(inputMint: Address, outputMint: Address): Promise<number> {
   const kswapSdk = await getKswapSdkInstance();
-  const params = {
+  const res = await kswapSdk.getJupiterPriceWithFallback({
     ids: inputMint.toString(),
     vsToken: outputMint.toString(),
-  };
-  const res = await kswapSdk.getJupiterPriceWithFallback(params);
-  return Number(res?.data?.[inputMint.toString()]?.price || 0);
+  });
+  return Number(res?.[inputMint.toString()]?.usdPrice || 0);
 }
 
-/**
- * Build a SwapQuoteProvider for klend-sdk leverage operations.
- * Selects the best route by price (outAmount / inAmount).
- */
-export async function createKswapQuoter(
-  kswapSdk: any,
+/** Build route params shared by quoter and swapper. */
+function buildRouteParams(
   executor: Address,
+  inputs: any,
   slippageBps: number,
-  inputMintReserve: any,
-  outputMintReserve: any,
+  BN: any,
+  amountStr: string,
+) {
+  return {
+    executor,
+    tokenIn: inputs.inputMint,
+    tokenOut: inputs.outputMint,
+    amount: new BN(amountStr),
+    maxSlippageBps: slippageBps,
+    wrapAndUnwrapSol: false,
+    swapType: "exactIn",
+    routerTypes: ALLOWED_ROUTERS,
+    includeRfq: false,
+    includeLimoLogs: false,
+    withSimulation: true,
+    filterFailedSimulations: false,
+    timeoutMs: 30000,
+    atLeastOneNoMoreThanTimeoutMS: 10000,
+    preferredMaxAccounts: 10,
+  };
+}
+
+/** Build RouterContext from reserve mint info. */
+function buildRouterContext(RouterContext: any, inputReserve: any, outputReserve: any) {
+  return new RouterContext(
+    { tokenProgramId: inputReserve.getLiquidityTokenProgram(), decimals: inputReserve.stats.decimals },
+    { tokenProgramId: outputReserve.getLiquidityTokenProgram(), decimals: outputReserve.stats.decimals },
+  );
+}
+
+/** Compute price from route amounts. */
+function routePrice(route: any, inFactor: any, outFactor: any, Decimal: any) {
+  const inAmt = new Decimal(route.amountsExactIn.amountIn.toString()).div(inFactor);
+  const outAmt = new Decimal(route.amountsExactIn.amountOutGuaranteed.toString()).div(outFactor);
+  return outAmt.div(inAmt);
+}
+
+/** Build a SwapQuoteProvider — selects best route by price. */
+export async function createKswapQuoter(
+  kswapSdk: any, executor: Address, slippageBps: number,
+  inputMintReserve: any, outputMintReserve: any,
 ): Promise<any> {
   const { RouterContext, Decimal, BN } = await loadModules();
 
   return async (inputs: any): Promise<any> => {
-    const inMintInfo = {
-      tokenProgramId: inputMintReserve.getLiquidityTokenProgram(),
-      decimals: inputMintReserve.stats.decimals,
-    };
-    const outMintInfo = {
-      tokenProgramId: outputMintReserve.getLiquidityTokenProgram(),
-      decimals: outputMintReserve.stats.decimals,
-    };
-    const routerContext = new RouterContext(inMintInfo, outMintInfo);
+    const ctx = buildRouterContext(RouterContext, inputMintReserve, outputMintReserve);
+    const params = buildRouteParams(executor, inputs, slippageBps, BN, inputs.inputAmountLamports.toDP(0).toString());
 
-    const routeParams = {
-      executor,
-      tokenIn: inputs.inputMint,
-      tokenOut: inputs.outputMint,
-      amount: new BN(inputs.inputAmountLamports.toDP(0).toString()),
-      maxSlippageBps: slippageBps,
-      wrapAndUnwrapSol: false,
-      swapType: "exactIn",
-      routerTypes: ALLOWED_ROUTERS,
-      includeRfq: false,
-      includeLimoLogs: false,
-      withSimulation: true,
-      filterFailedSimulations: false,
-      timeoutMs: 30000,
-      atLeastOneNoMoreThanTimeoutMS: 10000,
-      preferredMaxAccounts: 10,
-    };
+    const routeOutputs = await kswapSdk.getAllRoutes(params, ctx);
+    if (routeOutputs.routes.length === 0) throw new Error("No swap routes found. Try increasing slippage.");
 
-    const routeOutputs = await kswapSdk.getAllRoutes(routeParams, routerContext);
-    if (routeOutputs.routes.length === 0) {
-      throw new Error("No swap routes found. Try increasing slippage.");
-    }
+    const inFactor = inputMintReserve.getMintFactor();
+    const outFactor = outputMintReserve.getMintFactor();
 
-    const bestRoute = routeOutputs.routes.reduce((best: any, current: any) => {
-      const inBest = new Decimal(best.amountsExactIn.amountIn.toString()).div(inputMintReserve.getMintFactor());
-      const outBest = new Decimal(best.amountsExactIn.amountOutGuaranteed.toString()).div(outputMintReserve.getMintFactor());
-      const priceBest = outBest.div(inBest);
-      const inCur = new Decimal(current.amountsExactIn.amountIn.toString()).div(inputMintReserve.getMintFactor());
-      const outCur = new Decimal(current.amountsExactIn.amountOutGuaranteed.toString()).div(outputMintReserve.getMintFactor());
-      const priceCur = outCur.div(inCur);
-      return priceBest.greaterThan(priceCur) ? best : current;
-    });
+    const bestRoute = routeOutputs.routes.reduce((best: any, cur: any) =>
+      routePrice(best, inFactor, outFactor, Decimal).greaterThan(routePrice(cur, inFactor, outFactor, Decimal)) ? best : cur,
+    );
 
-    const inAmt = new Decimal(bestRoute.amountsExactIn.amountIn.toString()).div(inputMintReserve.getMintFactor());
-    const outAmt = new Decimal(bestRoute.amountsExactIn.amountOutGuaranteed.toString()).div(outputMintReserve.getMintFactor());
-
-    return { priceAInB: outAmt.div(inAmt), quoteResponse: bestRoute };
+    return { priceAInB: routePrice(bestRoute, inFactor, outFactor, Decimal), quoteResponse: bestRoute };
   };
 }
 
-/**
- * Build a SwapIxsProvider for klend-sdk leverage operations.
- * Returns all routes so the SDK can pick the one with smallest tx size.
- */
+/** Build a SwapIxsProvider — returns all routes for SDK to pick smallest tx. */
 export async function createKswapSwapper(
-  kswapSdk: any,
-  executor: Address,
-  slippageBps: number,
-  inputMintReserve: any,
-  outputMintReserve: any,
+  kswapSdk: any, executor: Address, slippageBps: number,
+  inputMintReserve: any, outputMintReserve: any,
 ): Promise<any> {
   const { RouterContext, Decimal, BN } = await loadModules();
 
@@ -146,53 +131,22 @@ export async function createKswapSwapper(
     lookupTables: any[];
     quote: any;
   }>> => {
-    const inMintInfo = {
-      tokenProgramId: inputMintReserve.getLiquidityTokenProgram(),
-      decimals: inputMintReserve.stats.decimals,
-    };
-    const outMintInfo = {
-      tokenProgramId: outputMintReserve.getLiquidityTokenProgram(),
-      decimals: outputMintReserve.stats.decimals,
-    };
-    const routerContext = new RouterContext(inMintInfo, outMintInfo);
+    const ctx = buildRouterContext(RouterContext, inputMintReserve, outputMintReserve);
+    const params = buildRouteParams(executor, inputs, slippageBps, BN, inputs.inputAmountLamports.toDP(0).toString());
 
-    const routeParams = {
-      executor,
-      tokenIn: inputs.inputMint,
-      tokenOut: inputs.outputMint,
-      amount: new BN(inputs.inputAmountLamports.toString()),
-      maxSlippageBps: slippageBps,
-      wrapAndUnwrapSol: false,
-      swapType: "exactIn",
-      routerTypes: ALLOWED_ROUTERS,
-      includeRfq: false,
-      includeLimoLogs: false,
-      withSimulation: true,
-      filterFailedSimulations: false,
-      timeoutMs: 30000,
-      atLeastOneNoMoreThanTimeoutMS: 10000,
-      preferredMaxAccounts: 10,
-    };
-
-    const routeOutputs = await kswapSdk.getAllRoutes(routeParams, routerContext);
-    if (routeOutputs.routes.length === 0) {
-      throw new Error("No swap routes found in swapper.");
-    }
+    const routeOutputs = await kswapSdk.getAllRoutes(params, ctx);
+    if (routeOutputs.routes.length === 0) throw new Error("No swap routes found in swapper.");
 
     return routeOutputs.routes.map((route: any) => {
-      const inAmt = new Decimal(route.amountsExactIn.amountIn.toString()).div(
-        route.inputTokenDecimals || inputMintReserve.getMintFactor(),
-      );
-      const outAmt = new Decimal(route.amountsExactIn.amountOutGuaranteed.toString()).div(
-        route.outputTokenDecimals || outputMintReserve.getMintFactor(),
-      );
+      const inFactor = route.inputTokenDecimals || inputMintReserve.getMintFactor();
+      const outFactor = route.outputTokenDecimals || outputMintReserve.getMintFactor();
 
       return {
         preActionIxs: [] as Instruction[],
         swapIxs: route.instructions?.swapIxs || [],
         lookupTables: route.lookupTableAccounts || [],
         quote: {
-          priceAInB: outAmt.div(inAmt),
+          priceAInB: routePrice(route, inFactor, outFactor, Decimal),
           quoteResponse: route,
           simulationResult: route.simulationResult,
           routerType: route.routerType,

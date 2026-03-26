@@ -1,7 +1,7 @@
 import type { Instruction } from "@solana/kit";
-import { address, createSolanaRpc, none } from "@solana/kit";
-import type { ProtocolAdapter, BuildTxParams, BuildTxResultWithSetup } from "./types";
-import { HELIUS_RPC_URL } from "../constants";
+import { address, none } from "@solana/kit";
+import type { ProtocolAdapter, BuildTxParams, BuildTxResult, BuildTxResultWithSetup } from "./types";
+import { getRpc } from "../rpc";
 import { getKswapSdkInstance, createKswapQuoter, createKswapSwapper } from "../kswap";
 import { selectBestRoute, assembleMultiplyLuts } from "../multiply-luts";
 
@@ -43,10 +43,6 @@ async function loadScope() {
   return { Scope };
 }
 
-function getRpc(): any {
-  return createSolanaRpc(HELIUS_RPC_URL);
-}
-
 function addr(s: string): any {
   return address(s);
 }
@@ -58,7 +54,7 @@ function addr(s: string): any {
 /** Load a KaminoVault with fresh on-chain state and reserves. */
 async function loadVault(depositAddress: string) {
   const { KaminoVault, Decimal } = await loadSdk();
-  const vault = new KaminoVault(getRpc(), addr(depositAddress));
+  const vault = new KaminoVault(getRpc() as any, addr(depositAddress));
   await vault.reloadState();
   await vault.reloadVaultReserves();
   return { vault, Decimal };
@@ -103,8 +99,12 @@ async function buildVaultDeposit(params: BuildTxParams): Promise<Instruction[]> 
   ] as unknown as Instruction[];
 }
 
-async function buildVaultWithdraw(params: BuildTxParams): Promise<Instruction[]> {
+/** Sentinel address used by the SDK when a field is unset. */
+const NULL_ADDRESS = "11111111111111111111111111111111";
+
+async function buildVaultWithdraw(params: BuildTxParams): Promise<BuildTxResult> {
   const { vault, Decimal } = await loadVault(params.depositAddress);
+  const vaultState = await vault.getState();
 
   const shareAmount = await tokenAmountToShares(
     vault,
@@ -113,11 +113,19 @@ async function buildVaultWithdraw(params: BuildTxParams): Promise<Instruction[]>
   );
 
   const bundle = await vault.withdrawIxs(params.signer as any, shareAmount);
-  return [
+  const instructions = [
     ...bundle.unstakeFromFarmIfNeededIxs,
     ...bundle.withdrawIxs,
     ...bundle.postWithdrawIxs,
   ] as unknown as Instruction[];
+
+  // Vault withdraw has 22+ accounts per reserve — needs ALT compression
+  const vaultLut = vaultState.vaultLookupTable as string;
+  if (vaultLut && vaultLut !== NULL_ADDRESS) {
+    return { instructions, lookupTableAddresses: [vaultLut] };
+  }
+
+  return instructions;
 }
 
 /** Parse and validate lending params from extraData, load market. */
@@ -133,7 +141,7 @@ async function prepareLending(params: BuildTxParams) {
   const decimals = params.extraData?.decimals != null ? Number(params.extraData.decimals) : 6;
   const amountBase = new BN(Math.floor(parseFloat(params.amount) * 10 ** decimals));
 
-  const market = await KaminoMarket.load(getRpc(), addr(marketAddress), 400);
+  const market = await KaminoMarket.load(getRpc() as any, addr(marketAddress), 400);
   if (!market) throw new Error("Failed to load Kamino market");
 
   return { market, amountBase, tokenMint, KaminoAction, VanillaObligation, PROGRAM_ID };
@@ -183,6 +191,11 @@ function isVaultCategory(category: string): boolean {
 // Multiply helpers
 // ---------------------------------------------------------------------------
 
+const DEV = process.env.NODE_ENV === "development";
+function logMultiply(step: string, data?: Record<string, unknown>) {
+  if (DEV) console.log(`[multiply] ${step}`, data ?? "");
+}
+
 /** Parse and validate multiply extraData fields. */
 function parseMultiplyParams(extra: Record<string, unknown> | undefined) {
   if (!extra) throw new Error("Missing extra_data for multiply");
@@ -205,7 +218,7 @@ async function prepareMultiply(params: BuildTxParams, slippageBps: number) {
   const { KaminoMarket, DEFAULT_RECENT_SLOT_DURATION_MS, Decimal, getComputeBudgetAndPriorityFeeIxs } = sdk;
 
   const { marketAddress, collMint, debtMint, marketLut } = parseMultiplyParams(params.extraData);
-  const rpc = getRpc();
+  const rpc = getRpc() as any;
   const collTokenMint = addr(collMint);
   const debtTokenMint = addr(debtMint);
 
@@ -261,7 +274,8 @@ async function finalizeMultiplyResult(
 // ---------------------------------------------------------------------------
 
 async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWithSetup> {
-  const ctx = await prepareMultiply(params, 30);
+  const userSlippage = (params.extraData?.slippageBps as number) ?? 30;
+  const ctx = await prepareMultiply(params, userSlippage);
   const {
     sdk, rpc, market, collReserve, debtReserve, kswapSdk,
     collTokenMint, debtTokenMint, collMint, debtMint, marketLut,
@@ -275,6 +289,7 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
 
   const leverage = params.extraData!.leverage as number;
   if (!leverage) throw new Error("Missing leverage for multiply open");
+  logMultiply("open:start", { collMint, debtMint, leverage, amount: params.amount, slippage: userSlippage });
 
   // Scope oracle refresh
   const { Scope } = await loadScope();
@@ -288,6 +303,7 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
   try {
     obligation = await market.getObligationByAddress(obligationAddress);
   } catch { /* first open — no obligation yet */ }
+  logMultiply("open:obligation", { exists: !!obligation });
 
   const scopeRefreshIx = obligation
     ? await getScopeRefreshIxForObligationAndReserves(market, collReserve, debtReserve, obligation, scopeConfig)
@@ -298,11 +314,27 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
   const [userLut, setupTxsIxs] = await getUserLutAddressAndSetupIxs(
     market, params.signer as any, none(), true, multiplyMints, [],
   );
+  logMultiply("open:lut", { userLut, setupTxCount: setupTxsIxs.length });
 
-  // Price for leverage calculation
-  const priceDebtToColl = await kswapSdk.getJupiterPriceWithFallback({
-    ids: debtMint, vsToken: collMint,
-  }).then((res: any) => new Decimal(Number(res?.data?.[debtMint]?.price || 0)));
+  // Price: fetch both USD prices and compute debt-to-coll ratio
+  const [debtPriceRes, collPriceRes] = await Promise.all([
+    kswapSdk.getJupiterPriceWithFallback({ ids: debtMint }),
+    kswapSdk.getJupiterPriceWithFallback({ ids: collMint }),
+  ]);
+  const debtPriceUsd = Number(debtPriceRes?.[debtMint]?.usdPrice || 0);
+  const collPriceUsd = Number(collPriceRes?.[collMint]?.usdPrice || 0);
+  logMultiply("open:prices", { debtPriceUsd, collPriceUsd });
+
+  if (!debtPriceUsd || !collPriceUsd) {
+    throw new Error(`Price unavailable — debt: $${debtPriceUsd}, coll: $${collPriceUsd}`);
+  }
+  const priceDebtToColl = new Decimal(debtPriceUsd / collPriceUsd);
+
+  // Validate inputs before SDK call
+  if (priceDebtToColl.isZero() || priceDebtToColl.isNaN()) {
+    throw new Error("Invalid price ratio — cannot calculate leverage");
+  }
+  logMultiply("open:priceRatio", { priceDebtToColl: priceDebtToColl.toString() });
 
   const routes = await getDepositWithLeverageIxs({
     owner: params.signer as any,
@@ -310,7 +342,7 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
     debtTokenMint, collTokenMint,
     depositAmount: new Decimal(params.amount),
     priceDebtToColl,
-    slippagePct: new Decimal(30 / 100),
+    slippagePct: new Decimal(userSlippage / 100),
     obligation, referrer: none(), currentSlot,
     targetLeverage: new Decimal(leverage),
     selectedTokenMint: collTokenMint,
@@ -319,6 +351,7 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
     quoteBufferBps: new Decimal(1000),
     quoter, swapper, useV2Ixs: true,
   });
+  logMultiply("open:routes", { count: routes.length });
 
   return finalizeMultiplyResult(routes, {
     userLut, collMint, debtMint, marketLut, isMultiply: true, setupTxsIxs,
@@ -330,7 +363,8 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
 // ---------------------------------------------------------------------------
 
 async function buildMultiplyClose(params: BuildTxParams): Promise<BuildTxResultWithSetup> {
-  const ctx = await prepareMultiply(params, 50);
+  const userSlippage = (params.extraData?.slippageBps as number) ?? 50;
+  const ctx = await prepareMultiply(params, userSlippage);
   const {
     sdk, market,
     collTokenMint, debtTokenMint, collMint, debtMint, marketLut,
@@ -383,5 +417,19 @@ export const kaminoAdapter: ProtocolAdapter = {
     if (params.category === "multiply") return buildMultiplyClose(params);
     if (isVaultCategory(params.category)) return buildVaultWithdraw(params);
     return buildLendingWithdraw(params);
+  },
+
+  async getBalance({ walletAddress, depositAddress, category }) {
+    if (!isVaultCategory(category)) return null;
+    const sdk = await import("@kamino-finance/klend-sdk");
+    const { getRpc } = await import("@/lib/rpc");
+    const { address } = await import("@solana/kit");
+    const vault = new sdk.KaminoVault(getRpc() as any, address(depositAddress) as any);
+    const [exchangeRate, userShares] = await Promise.all([
+      vault.getExchangeRate(),
+      vault.getUserShares(address(walletAddress) as any),
+    ]);
+    if (userShares.totalShares.isZero()) return 0;
+    return userShares.totalShares.mul(exchangeRate).toNumber();
   },
 };

@@ -1,15 +1,10 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { createSolanaRpc, address } from "@solana/kit";
-import { HELIUS_RPC_URL, TOKEN_MINTS } from "../constants";
+import { address } from "@solana/kit";
+import { TOKEN_MINTS } from "../constants";
+import { getRpc } from "@/lib/rpc";
 import { queryKeys } from "@/lib/queryKeys";
-
-let _rpc: ReturnType<typeof createSolanaRpc> | null = null;
-function getRpc() {
-  if (!_rpc) _rpc = createSolanaRpc(HELIUS_RPC_URL);
-  return _rpc;
-}
 
 const TOKEN_DECIMALS: Record<string, number> = {
   SOL: 9,

@@ -4,35 +4,94 @@ Jupiter Lend API endpoints used:
   - GET /lend/v1/earn/tokens — token metadata (prices, rates, symbols). Cached 3 min.
   - GET /lend/v1/earn/positions?users={wallet} — user share balances + underlying amounts
   - GET /lend/v1/earn/earnings?user={wallet}&positions={pos1},{pos2} — PnL per position
+
+Helius RPC (HELIUS_RPC_URL):
+  - getSignaturesForAddress on each position's ATA — first deposit timestamp (no REST alternative)
+
+Helius RPC (HELIUS_RPC_URL env var) is used to resolve first-deposit timestamps, since
+the Jupiter Lend REST API exposes no transaction history.
 """
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
+from solders.pubkey import Pubkey
 from sqlalchemy.orm import Session
 
 from app.models.base import SessionLocal
 from app.models.user_position import TrackedWallet
 from app.models.yield_opportunity import YieldOpportunity
-from app.services.utils import safe_float, cached
+from app.services.utils import safe_float, cached, compute_realized_apy
 
 logger = logging.getLogger(__name__)
 
 JUPITER_LEND_API = "https://api.jup.ag/lend/v1"
 
+_TOKEN_PROGRAM = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+_ATA_PROGRAM   = Pubkey.from_string("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe8bXo")
 
 _float = safe_float
 _cached = cached
 
 
 def _build_headers() -> dict[str, str]:
-    import os
     key = os.getenv("JUPITER_API_KEY", "")
     headers: dict[str, str] = {}
     if key:
         headers["x-api-key"] = key
     return headers
+
+
+def _get_ata(wallet: str, mint: str) -> str:
+    """Derive the Associated Token Account address for a wallet + mint."""
+    w, m = Pubkey.from_string(wallet), Pubkey.from_string(mint)
+    ata, _ = Pubkey.find_program_address(
+        [bytes(w), bytes(_TOKEN_PROGRAM), bytes(m)], _ATA_PROGRAM,
+    )
+    return str(ata)
+
+
+def _first_deposit_ts(
+    wallet: str, mint: str, helius_url: str, client: httpx.Client,
+) -> Optional[datetime]:
+    """Return the timestamp of the wallet's first jlToken receipt via Helius RPC.
+
+    Paginate getSignaturesForAddress on the ATA (newest-first) to find the oldest
+    transaction = initial deposit. Result cached 1 h since it never changes.
+    """
+    def _fetch() -> Optional[int]:
+        ata = _get_ata(wallet, mint)
+        before: Optional[str] = None
+        oldest_block_time: Optional[int] = None
+        while True:
+            params: dict = {"limit": 1000, "commitment": "confirmed"}
+            if before:
+                params["before"] = before
+            try:
+                r = client.post(
+                    helius_url,
+                    json={"jsonrpc": "2.0", "id": 1,
+                          "method": "getSignaturesForAddress",
+                          "params": [ata, params]},
+                    timeout=30,
+                )
+                r.raise_for_status()
+                sigs = r.json().get("result") or []
+            except Exception as exc:
+                logger.warning("Helius getSignaturesForAddress %s: %s", ata[:12], exc)
+                break
+            if not sigs:
+                break
+            oldest_block_time = sigs[-1].get("blockTime")
+            if len(sigs) < 1000:
+                break
+            before = sigs[-1]["signature"]
+        return oldest_block_time
+
+    block_time = _cached(f"jup_opened_{wallet[:8]}_{mint[:8]}", 3600, _fetch)
+    return datetime.fromtimestamp(block_time, tz=timezone.utc) if block_time else None
 
 
 def _get_earn_tokens(client: httpx.Client) -> list[dict]:
@@ -49,32 +108,19 @@ def _get_earn_tokens(client: httpx.Client) -> list[dict]:
     return _cached("jup_earn_tokens", 180, _fetch)
 
 
-def _match_opportunity(deposit_address: str, db: Session) -> Optional[int]:
-    """Link a position to a YieldOpportunity by deposit_address (asset mint)."""
+def _match_opportunity(deposit_address: str, db: Session) -> tuple[Optional[int], Optional[float]]:
+    """Returns (opportunity_id, apy_current) for the active opportunity at deposit_address."""
     opp = (
-        db.query(YieldOpportunity.id)
+        db.query(YieldOpportunity.id, YieldOpportunity.apy_current)
         .filter(
             YieldOpportunity.deposit_address == deposit_address,
             YieldOpportunity.is_active.is_(True),
         )
         .first()
     )
-    return opp.id if opp else None
-
-
-def _lookup_opportunity_apy(deposit_address: str, db: Session) -> Optional[float]:
-    """Get current APY from yield_opportunities for fallback."""
-    opp = (
-        db.query(YieldOpportunity.apy_current)
-        .filter(
-            YieldOpportunity.deposit_address == deposit_address,
-            YieldOpportunity.is_active.is_(True),
-        )
-        .first()
-    )
-    if opp and opp.apy_current is not None:
-        return float(opp.apy_current)
-    return None
+    if opp:
+        return opp.id, float(opp.apy_current) if opp.apy_current is not None else None
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -83,12 +129,14 @@ def _lookup_opportunity_apy(deposit_address: str, db: Session) -> Optional[float
 
 def _fetch_earn_positions(
     wallet: str, client: httpx.Client, db: Session, now: datetime,
+    helius_url: str = "",
 ) -> list[dict]:
     """Fetch Jupiter Lend earn positions for a wallet.
 
     1. GET /earn/tokens → token metadata (prices, symbols)
     2. GET /earn/positions?users={wallet} → share balances + underlying
     3. GET /earn/earnings?user={wallet}&positions={...} → PnL
+    4. Helius RPC getSignaturesForAddress → first deposit timestamp (if HELIUS_RPC_URL set)
     """
     # Step 1: token metadata (cached)
     tokens_list = _get_earn_tokens(client)
@@ -154,7 +202,8 @@ def _fetch_earn_positions(
             if isinstance(earnings_data, list):
                 for e in earnings_data:
                     addr = e.get("address", e.get("assetAddress", ""))
-                    val = _float(e.get("earnings")) or _float(e.get("earningsUsd"))
+                    raw = e.get("earningsUsd") if e.get("earningsUsd") is not None else e.get("earnings")
+                    val = _float(raw)
                     if addr and val is not None:
                         earnings_map[addr] = val
             elif isinstance(earnings_data, dict):
@@ -195,14 +244,14 @@ def _fetch_earn_positions(
             if initial_deposit_usd > 0:
                 pnl_pct = (pnl_usd / initial_deposit_usd) * 100
 
-        opportunity_id = _match_opportunity(asset_address, db)
-        apy = _lookup_opportunity_apy(asset_address, db)
-
-        # Fallback APY from token metadata
+        opportunity_id, apy = _match_opportunity(asset_address, db)
         if apy is None:
             rate_bps = token_info.get("total_rate_bps")
             if rate_bps is not None:
                 apy = rate_bps / 100
+
+        opened_at = _first_deposit_ts(wallet, asset_address, helius_url, client) if helius_url else None
+        held_days = round((now - opened_at).total_seconds() / 86400.0, 4) if opened_at else None
 
         results.append({
             "wallet_address": wallet,
@@ -215,9 +264,10 @@ def _fetch_earn_positions(
             "pnl_usd": round(pnl_usd, 2) if pnl_usd is not None else None,
             "pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
             "initial_deposit_usd": round(initial_deposit_usd, 2) if initial_deposit_usd else None,
-            "opened_at": None,
-            "held_days": None,
-            "apy": apy,
+            "opened_at": opened_at,
+            "held_days": held_days,
+            "apy": round(apy, 4) if apy is not None else None,
+            "apy_realized": compute_realized_apy(pnl_usd, initial_deposit_usd, held_days),
             "is_closed": False,
             "closed_at": None,
             "close_value_usd": None,
@@ -258,9 +308,10 @@ def fetch_wallet_positions(wallet_address: str, db: Session) -> dict:
     """Fetch current Jupiter Lend positions for a wallet."""
     now = datetime.now(timezone.utc)
     headers = _build_headers()
+    helius_url = os.getenv("HELIUS_RPC_URL", "")
 
     with httpx.Client(headers=headers) as client:
-        earn_positions = _fetch_earn_positions(wallet_address, client, db, now)
+        earn_positions = _fetch_earn_positions(wallet_address, client, db, now, helius_url=helius_url)
         multiply_positions = _fetch_multiply_positions(wallet_address, client, db, now)
 
     all_positions = earn_positions + multiply_positions
@@ -297,12 +348,13 @@ def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> in
     now = snapshot_at or datetime.now(timezone.utc)
     total_snapshots = 0
     headers = _build_headers()
+    helius_url = os.getenv("HELIUS_RPC_URL", "")
 
     with httpx.Client(headers=headers) as client:
         for wallet in wallets:
             try:
                 earn_positions = _fetch_earn_positions(
-                    wallet.wallet_address, client, db, now,
+                    wallet.wallet_address, client, db, now, helius_url=helius_url,
                 )
                 from app.services.utils import store_position_rows
                 total_snapshots += store_position_rows(db, earn_positions, now)

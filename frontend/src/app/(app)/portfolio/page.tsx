@@ -11,6 +11,7 @@ import { LoadingSkeleton, NoWalletState, ErrorState, SyncingState } from "@/comp
 import RefreshButton from "@/components/RefreshButton";
 import { usePortfolioData } from "@/lib/hooks/usePortfolioData";
 import { queryKeys } from "@/lib/queryKeys";
+import { getAllCategories } from "@/lib/categories";
 import type { ChartPoint } from "@/lib/hooks/usePortfolioData";
 import type { UserPositionOut } from "@/lib/api";
 
@@ -18,11 +19,7 @@ const PortfolioChart = dynamic(() => import("@/components/PortfolioChart"), { ss
 
 const SIDEBAR_TYPES = [
   { key: "all", label: "ALL" },
-  { key: "lending", label: "LEND" },
-  { key: "multiply", label: "MULTIPLY" },
-  { key: "earn_vault", label: "VAULTS" },
-  { key: "insurance_fund", label: "INSURANCE FUNDS" },
-  { key: "earn", label: "EARN" },
+  ...getAllCategories().map((c) => ({ key: c.slug, label: c.sidebarLabel })),
 ];
 
 interface ChartCardProps {

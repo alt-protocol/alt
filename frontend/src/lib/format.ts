@@ -61,6 +61,18 @@ export function fmtProductType(t: string): string {
   return map[t] ?? t;
 }
 
+const VAULT_TAG_LABELS: Record<string, string> = {
+  rwa_loop: "RWA Loop",
+  stable_loop: "Stable Loop",
+  sol_loop: "SOL Loop",
+  directional_leverage: "Directional",
+};
+
+export function fmtVaultTag(tag: string | null | undefined): string {
+  if (!tag) return "Multiply";
+  return VAULT_TAG_LABELS[tag] ?? fmtCategory(tag);
+}
+
 export function truncateId(id: string, len = 12): string {
   if (id.length <= len) return id;
   return id.slice(0, len) + "\u2026";

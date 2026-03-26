@@ -58,6 +58,17 @@ def cached(key: str, ttl: float, fn):
     return result
 
 
+def compute_realized_apy(
+    pnl_usd: Optional[float],
+    initial_deposit_usd: Optional[float],
+    held_days: Optional[float],
+) -> Optional[float]:
+    """Annualized return from actual PnL. None if data is missing or < 1 day held."""
+    if pnl_usd is None or not initial_deposit_usd or held_days is None or held_days < 1:
+        return None
+    return round((pnl_usd / initial_deposit_usd) * (365.0 / held_days) * 100, 4)
+
+
 def store_position_rows(db, positions: list[dict], snapshot_at: datetime) -> int:
     """Store a list of position dicts as UserPosition rows. Returns count."""
     from app.models.user_position import UserPosition
@@ -78,6 +89,7 @@ def store_position_rows(db, positions: list[dict], snapshot_at: datetime) -> int
             opened_at=pos_data.get("opened_at"),
             held_days=pos_data.get("held_days"),
             apy=pos_data.get("apy"),
+            apy_realized=pos_data.get("apy_realized"),
             is_closed=pos_data.get("is_closed"),
             closed_at=pos_data.get("closed_at"),
             close_value_usd=pos_data.get("close_value_usd"),

@@ -14,15 +14,24 @@ Requires `.env.local` with `NEXT_PUBLIC_HELIUS_RPC_URL`. `NEXT_PUBLIC_API_URL` d
 ### Routing
 Uses `(app)` route group layout in `src/app/(app)/` for dashboard, portfolio, and yield detail pages. Landing page at `src/app/page.tsx` outside the group.
 
+### Category Registry (`src/lib/categories/`)
+- `registry.tsx` — `CategoryDefinition` interface + `getCategoryDef(slug)`, `getAllCategories()`, `getCategorySlugs()`
+- `definitions/` — One file per category (lending, multiply, vault, insurance-fund, earn) exporting `CategoryDefinition`
+- `extra-data.ts` — Typed extra_data extractors per category (replaces ad-hoc casts)
+- `index.ts` — Re-exports + registers all built-in categories
+- Adding a new category = 1 definition file + register in index.ts. UI auto-adapts (filters, sidebar, detail page, position table).
+
 ### Protocol Adapters (`src/lib/protocols/`)
-- `types.ts` — `ProtocolAdapter` interface: `buildDepositTx` and `buildWithdrawTx` return `Instruction[]` (or with lookup table addresses)
+- `types.ts` — `ProtocolAdapter` interface: `buildDepositTx`, `buildWithdrawTx`, optional `getBalance`
 - `kamino.ts`, `drift.ts`, `jupiter.ts` — protocol-specific implementations
 - `index.ts` — registry mapping protocol slugs to adapters
+- Adding a new protocol to an existing category requires zero UI changes.
 
 ### Transaction Flow
 1. Adapter builds instructions from `BuildTxParams` (signer, depositAddress, amount, category, extraData)
-2. `DepositWithdrawPanel` assembles transaction, signs via wallet, submits to Helius RPC
-3. Backend is never involved in signing
+2. `CategoryDetailView` resolves action panel (DepositWithdrawPanel or custom) based on category registry
+3. `useTransaction` hook handles both simple and multi-step flows (setup txs + main tx)
+4. Backend is never involved in signing
 
 ### Wallet
 Uses `@solana/kit` + `@solana/react` (Wallet Standard) — NOT legacy `@solana/wallet-adapter-*`. Providers in `SolanaProviders.tsx`.
@@ -37,6 +46,8 @@ All UI must follow `DESIGN.md`. See root `CLAUDE.md` for key constraints summary
 
 - New pages go in `src/app/(app)/` route group (shared layout with nav/wallet)
 - New protocol adapters: implement `ProtocolAdapter` from `types.ts`, add to registry in `index.ts`
+- New categories: create definition in `src/lib/categories/definitions/`, register in `index.ts`. Use `add-category` skill.
+- Never add `if (category === "X")` checks in components — use the category registry
 - API calls: add functions to `lib/api.ts`, consume via TanStack Query hooks in components
 - Never use `useEffect` for data fetching — always TanStack Query (`useQuery`/`useMutation`)
 - Never use legacy `@solana/wallet-adapter-*` or `@solana/web3.js` v1 — use `@solana/kit` + `@solana/react`
@@ -48,35 +59,51 @@ All UI must follow `DESIGN.md`. See root `CLAUDE.md` for key constraints summary
 
 Always check these before creating new functions — most common utilities already exist.
 
+### Categories (`src/lib/categories/`)
+- `registry.tsx` — `CategoryDefinition` type, `getCategoryDef()`, `getAllCategories()`, `getCategorySlugs()`, `getAllOverviewColumns()`, `getAllOverviewCardFields()`
+- `extra-data.ts` — `getMultiplyExtra()`, `getLendingExtra()` — typed extraction from `extra_data`
+- `definitions/` — `lending.tsx`, `multiply.tsx`, `vault.tsx`, `insurance-fund.tsx`, `earn.tsx`
+
 ### Utilities (`src/lib/`)
 - `format.ts` — all formatting: `fmtNum`, `fmtApy`, `fmtTvl`, `fmtUsd`, `fmtPct`, `fmtDays`, `fmtDate`, `fmtDateShort`, `fmtCategory`, `fmtProductType`, `truncateId`, `pnlColor`
 - `instruction-converter.ts` — `convertLegacyInstruction`, `convertJupiterApiInstruction` for building transactions from protocol SDKs
 - `api.ts` — `api.getYields()`, `api.getPositions()`, etc. Add new endpoints here, never inline fetch calls. Types (`YieldOpportunity`, `UserPositionOut`, etc.) also live here.
 - `constants.ts` — `API_URL`, `HELIUS_RPC_URL`, `TOKEN_MINTS`
+- `rpc.ts` — shared lazy-initialized Solana RPC singleton (`getRpc()`)
 - `jupiter-swap.ts` — Jupiter swap integration (V6 API quoter/swapper for klend-sdk)
 - `kswap.ts` — KSwap swap provider for Kamino Multiply: `createKswapQuoter`, `createKswapSwapper`, `getTokenPrice`, `getKswapSdkInstance`. Routes through multiple DEXes, optimizes for tx size.
 - `multiply-luts.ts` — LUT (Address Lookup Table) management for Multiply txs: `fetchCdnLuts`, `resolveMissingLuts`, `selectBestRoute`, `assembleMultiplyLuts`. Handles CDN LUTs, user LUTs, and missing account resolution via Kamino API.
+- `multiply-utils.ts` — `parseLeverageTable(extra)` parses leverage_table from extra_data, `getMultiplyStatusLabel(status)` maps tx status to labels.
+- `transaction-utils.ts` — `buildTransactionMessage(signer, blockhash, instructions)`, `getTxStatusLabel(status)`, and `mapTxError(err)`. Shared by useTransaction hook.
 
 ### Hooks (`src/lib/hooks/`)
 - `useClickOutside.ts` — `useClickOutside(ref, isActive, onClickOutside)`
 - `useYieldFilters.ts` — `useYieldFilters(yields)` returns filter/sort state + filtered results
 - `useTokenBalance.ts` — fetch SPL token balance for connected wallet
-- `useVaultTransaction.ts` — deposit/withdraw transaction lifecycle (vault, lending)
-- `useMultiplyTransaction.ts` — multiply transaction lifecycle with setup phase: `"idle" | "preparing" | "building" | "signing" | "confirming" | "success" | "error"`. Handles user LUT setup txs before main multiply tx.
+- `useTransaction.ts` — unified transaction lifecycle for all categories: `"idle" | "preparing" | "building" | "signing" | "confirming" | "success" | "error"`. Handles setup txs (LUT creation) automatically when present.
+- `usePositionBalance.ts` — protocol-agnostic balance hook, delegates to `adapter.getBalance()`. Replaces Kamino-specific `useVaultBalance`.
+- `useVaultBalance.ts` — **deprecated**, kept for backwards compat. Use `usePositionBalance` for new code.
+- `useVaultTransaction.ts` — **deprecated** re-export of `useTransaction`. Use `useTransaction` for new code.
+- `useMultiplyTransaction.ts` — **deprecated** re-export of `useTransaction`. Use `useTransaction` for new code.
 - `usePositionForOpportunity.ts` — `usePositionForOpportunity(walletAddress, opportunityId)` returns user's active position for a specific yield opportunity (used by withdraw tab)
+- `useSlippage.ts` — `useSlippage(defaultBps)` — persisted slippage preference in localStorage, used by MultiplyPanel
 - `usePortfolioData.ts` — wallet tracking, position fetching, history, events, summary computations
 
 ### Components (`src/components/`)
-- `PositionTable.tsx` — data-driven table via `ColumnDef[]`, use `getColumnsForType(type)`
-- `FilterPanel.tsx` — reusable filter UI, takes hook state as props
+- `CategoryDetailView.tsx` — shared detail page shell driven by category registry. Renders stats, detail fields, action panel, and APY history for any category.
+- `PositionTable.tsx` — data-driven table via `ColumnDef[]`, columns driven by category registry via `getColumnsForType(type)`
+- `FilterPanel.tsx` — reusable filter UI, category options auto-populated from registry
 - `ProtocolChip.tsx` — protocol badge with icon
 - `Dropdown.tsx` — styled dropdown menu
 - `StatsGrid.tsx` — data-driven stats grid with `StatItem[]`, supports `size` ("default"/"lg") and custom `columns`
 - `PeriodSelector.tsx` — 7d/30d/90d toggle, `variant` "surface" (default) or "neon"
 - `TabBar.tsx` — horizontal equal-width tab toggle with gap-[1px] bg-outline-ghost pattern
 - `WalletModal.tsx` — wallet connection modal (detected + popular wallets list)
+- `DetailRow.tsx` — shared label/value row used in detail pages
+- `ProtocolFallbackPanel.tsx` — "Current APY + Open in Protocol" fallback card for yields without adapter
+- `ApyHistorySection.tsx` — APY history chart with period selector, owns its own query. Reused by all category detail views.
 - `DepositWithdrawPanel.tsx` — vault/lending deposit/withdraw flow
-- `MultiplyPanel.tsx` — Kamino Multiply open/withdraw/close with leverage selector, projected APY, KSwap routing. Uses `useMultiplyTransaction` hook.
+- `MultiplyPanel.tsx` — Kamino Multiply open/withdraw/close with leverage selector, projected APY, KSwap routing.
 - `EventsTable.tsx` — transaction history table with mobile card view + desktop table
 - `PortfolioStates.tsx` — `LoadingSkeleton`, `NoWalletState`, `ErrorState`, `SyncingState` for portfolio page
 - `ApyChart.tsx`, `PortfolioChart.tsx` — Recharts-based charts (dynamically imported)
@@ -90,6 +117,10 @@ Always check these before creating new functions — most common utilities alrea
 ### Colors & Styling
 - Always use CSS variables (`var(--surface-low)`, `var(--neon-primary)`, `var(--foreground-muted)`), never hardcoded hex in components/charts
 - PnL styling: use `pnlColor(n)` from format.ts — returns Tailwind class
+
+### Categories & extra_data
+- Category UI config lives in `lib/categories/definitions/` — never add category conditionals in components
+- Use typed extractors from `lib/categories/extra-data.ts` — never cast extra_data fields inline
 
 ### Instructions & Transactions
 - Use `convertLegacyInstruction` or `convertJupiterApiInstruction` from `lib/instruction-converter.ts`
@@ -105,7 +136,7 @@ Always check these before creating new functions — most common utilities alrea
 
 ## Table/List Patterns
 
-- For position tables: use `PositionTable` + `getColumnsForType()`, don't create inline tables
+- For position tables: use `PositionTable` + `getColumnsForType()` — columns are driven by the category registry
 - Mobile: every table MUST have a `lg:hidden` card view + `hidden lg:block` table view
 - Table styling: `text-[0.8rem] font-sans`, header: `text-foreground-muted uppercase text-[0.6rem] tracking-[0.05em] bg-surface`
 
@@ -113,6 +144,7 @@ Always check these before creating new functions — most common utilities alrea
 
 - Pages: `src/app/(app)/<route>/page.tsx` — keep page logic thin, delegate to hooks and components
 - Components: `src/components/` — shared UI components
+- Categories: `src/lib/categories/` — category registry (one definition file per category)
 - Hooks: `src/lib/hooks/` — reusable state/behavior hooks
 - Protocols: `src/lib/protocols/` — one file per protocol implementing `ProtocolAdapter`
 - Utilities: `src/lib/` — `format.ts`, `api.ts`, `constants.ts`, `instruction-converter.ts`, `jupiter-swap.ts`

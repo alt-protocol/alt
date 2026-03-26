@@ -294,16 +294,23 @@ export const {slug}Adapter: ProtocolAdapter = {
   async buildWithdrawTx(params) {
     return buildWithdraw(params);
   },
+
+  // Optional: protocol-specific balance fetching (e.g. vault shares → USD)
+  // async getBalance({ walletAddress, depositAddress, category }) {
+  //   return null;
+  // },
 };
 ```
 
 **Key patterns:**
 - Implement `ProtocolAdapter` from `./types`
 - `buildDepositTx` and `buildWithdrawTx` return `Promise<BuildTxResult>` (either `Instruction[]` or `BuildTxResultWithLookups`)
+- Optional `getBalance` method for protocol-specific balance fetching (e.g. vault share → USD conversion)
 - Use `convertLegacyInstruction` from `../instruction-converter` if SDK uses legacy web3.js
 - Dynamic import SDKs to avoid bundling at compile time
 - Export as `{slug}Adapter`
 - Never sign or submit — only build instructions (non-custodial constraint)
+- Category-specific UI is handled by the category registry — no UI changes needed when adding a protocol to an existing category
 
 ---
 
@@ -327,7 +334,13 @@ if (key === "{slug}") {
 
 ---
 
-## Step 6: Verify
+## Step 6: Verify category compatibility
+
+Ensure the protocol's yield categories are already registered in the category registry (`frontend/src/lib/categories/`). If the protocol introduces a new category, run the `add-category` skill first.
+
+---
+
+## Step 7: Verify
 
 1. **Backend health check:** `curl http://localhost:8000/api/health` → `{"status":"ok"}`
 2. **Frontend build:** `cd frontend && npm run build` → no errors

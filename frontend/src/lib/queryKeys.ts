@@ -9,6 +9,9 @@ export const queryKeys = {
     history: (wallet: string, period: string) => ["positionHistory", wallet, period] as const,
     events: (wallet: string) => ["positionEvents", wallet] as const,
   },
+  vault: {
+    balance: (wallet: string, vault: string) => ["vaultBalance", wallet, vault] as const,
+  },
   wallet: {
     status: (wallet: string) => ["walletStatus", wallet] as const,
     tokenBalance: (wallet: string, symbol: string) => ["tokenBalance", wallet, symbol] as const,
