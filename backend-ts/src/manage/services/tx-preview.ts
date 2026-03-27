@@ -4,7 +4,7 @@ import { logger } from "../../shared/logger.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-const COMPUTE_BUDGET_PROGRAM = "ComputeBudget111111111111111111111111111";
+const COMPUTE_BUDGET_PROGRAM = "ComputeBudget111111111111111111111111111111";
 const SET_CU_PRICE_DISCRIMINATOR = 0x03;
 
 export interface SimulationPreview {
