@@ -1,5 +1,6 @@
 import type { OpportunityDetail } from "../../shared/types.js";
 import type { SerializableInstruction } from "../../shared/types.js";
+import { STABLECOIN_SYMBOLS } from "../../shared/constants.js";
 import { hasAdapter } from "../protocols/index.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -51,9 +52,9 @@ export function guardAdapterExists(opp: OpportunityDetail): void {
   }
 }
 
-/** Optional deposit limit check (env: MAX_DEPOSIT_USD). */
+/** Optional deposit limit check (env: MCP_MAX_DEPOSIT_USD). */
 export function guardDepositLimit(amount: string): void {
-  const maxStr = process.env.MAX_DEPOSIT_USD;
+  const maxStr = process.env.MCP_MAX_DEPOSIT_USD;
   if (!maxStr) return;
 
   const max = Number(maxStr);
@@ -61,6 +62,38 @@ export function guardDepositLimit(amount: string): void {
   if (Number.isFinite(max) && Number.isFinite(val) && val > max) {
     throw new GuardError(
       `Amount $${val} exceeds maximum deposit limit of $${max}`,
+    );
+  }
+}
+
+/**
+ * Stablecoin-only guard. When STABLECOIN_ONLY !== "false" (default: enabled),
+ * at least one token in the opportunity must be a stablecoin.
+ */
+export function guardStablecoinOnly(opp: OpportunityDetail): void {
+  if (process.env.STABLECOIN_ONLY === "false") return;
+
+  const hasStable = opp.tokens.some((t) => STABLECOIN_SYMBOLS.has(t));
+  if (!hasStable) {
+    throw new GuardError(
+      `Opportunity "${opp.name}" has no stablecoin tokens (${opp.tokens.join(", ")}). ` +
+        `Only stablecoin opportunities are allowed. Set STABLECOIN_ONLY=false to override.`,
+    );
+  }
+}
+
+/**
+ * Category blocklist. Rejects categories listed in BLOCKED_CATEGORIES env var.
+ * Default: "multiply" (leveraged positions blocked for safety).
+ */
+export function guardCategoryAllowed(opp: OpportunityDetail): void {
+  const blockedStr = process.env.BLOCKED_CATEGORIES ?? "multiply";
+  if (!blockedStr) return;
+
+  const blocked = new Set(blockedStr.split(",").map((s) => s.trim()));
+  if (blocked.has(opp.category)) {
+    throw new GuardError(
+      `Category "${opp.category}" is blocked. Blocked categories: ${blockedStr}`,
     );
   }
 }

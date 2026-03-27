@@ -62,5 +62,5 @@ export const BuildTxResponse = z.object({
 
 export const SubmitTxResponse = z.object({
   signature: z.string(),
-  status: z.enum(["submitted", "confirmed", "failed"]),
+  status: z.enum(["submitted"]),
 });
