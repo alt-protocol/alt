@@ -241,6 +241,10 @@ function computeModifiedDietz(
   let closeValueUsd: number | null = null;
   if (isClosed) {
     closeValueUsd = cf.sumWithdraw + cf.sumRepay - cf.sumBorrow;
+    // Derive close date from last cash flow entry
+    if (cf.cashFlows.length > 0) {
+      closedAt = cf.cashFlows[cf.cashFlows.length - 1][0];
+    }
   }
 
   const endTime = isClosed && closedAt ? closedAt : now;
@@ -296,8 +300,8 @@ function computeObligationPnl(
   const cf = accumulateCashFlows(filtered);
   const result = computeModifiedDietz(cf, currentNetValue, now);
 
-  // Find closed_at from last tx for closed positions
-  if (result.isClosed) {
+  // Refine closed_at from tx timestamp if Dietz only had cash flow dates
+  if (result.isClosed && !result.closedAt) {
     for (let i = filtered.length - 1; i >= 0; i--) {
       const t = parseTimestamp(filtered[i].createdOn);
       if (t) {
@@ -452,6 +456,13 @@ async function fetchEarnPositions(
       if (costBasisUsd && costBasisUsd > 0 && pnlUsd !== null) {
         pnlPct = (pnlUsd / costBasisUsd) * 100;
       }
+    }
+
+    if (pnlUsd === null) {
+      logger.info(
+        { wallet: wallet.slice(0, 8), vault: vaultAddress.slice(0, 8), hasResponse: !!pnlData },
+        "Kamino earn vault: PnL null after parsing",
+      );
     }
 
     const entry = oppMap[vaultAddress];
@@ -663,6 +674,11 @@ async function fetchObligationPositions(
             obligationAddress,
             productType,
           ),
+        );
+      } else {
+        logger.info(
+          { wallet: wallet.slice(0, 8), obligation: obligationAddress.slice(0, 8), productType },
+          "No tx history for obligation — PnL will be null",
         );
       }
 

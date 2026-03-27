@@ -1,35 +1,39 @@
+function bad(n: number | null | undefined): boolean {
+  return n == null || !Number.isFinite(n);
+}
+
 export function fmtNum(n: number | null | undefined, decimals = 2): string {
-  if (n == null) return "\u2014";
-  return n.toFixed(decimals);
+  if (bad(n)) return "\u2014";
+  return n!.toFixed(decimals);
 }
 
 export function fmtApy(n: number | null | undefined): string {
-  if (n == null) return "\u2014";
-  return `${n.toFixed(2)}%`;
+  if (bad(n)) return "\u2014";
+  return `${n!.toFixed(2)}%`;
 }
 
 export function fmtTvl(n: number | null | undefined): string {
-  if (n == null) return "\u2014";
-  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`;
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
-  return `$${n.toFixed(0)}`;
+  if (bad(n)) return "\u2014";
+  if (n! >= 1_000_000_000) return `$${(n! / 1_000_000_000).toFixed(1)}B`;
+  if (n! >= 1_000_000) return `$${(n! / 1_000_000).toFixed(1)}M`;
+  if (n! >= 1_000) return `$${(n! / 1_000).toFixed(0)}K`;
+  return `$${n!.toFixed(0)}`;
 }
 
 export function fmtUsd(n: number | null | undefined): string {
-  if (n == null) return "\u2014";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+  if (bad(n)) return "\u2014";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n!);
 }
 
 export function fmtPct(n: number | null | undefined): string {
-  if (n == null) return "\u2014";
-  const sign = n > 0 ? "+" : "";
-  return `${sign}${n.toFixed(2)}%`;
+  if (bad(n)) return "\u2014";
+  const sign = n! > 0 ? "+" : "";
+  return `${sign}${n!.toFixed(2)}%`;
 }
 
 export function fmtDays(n: number | null | undefined): string {
-  if (n == null) return "\u2014";
-  return `${n.toFixed(1)}d`;
+  if (bad(n)) return "\u2014";
+  return `${n!.toFixed(1)}d`;
 }
 
 export function fmtDate(s: string | null | undefined): string {
@@ -79,8 +83,8 @@ export function truncateId(id: string, len = 12): string {
 }
 
 export function pnlColor(n: number | null | undefined): string {
-  if (n == null) return "text-foreground-muted";
-  if (n > 0) return "text-neon";
-  if (n < 0) return "text-red-400";
+  if (bad(n)) return "text-foreground-muted";
+  if (n! > 0) return "text-neon";
+  if (n! < 0) return "text-red-400";
   return "text-foreground-muted";
 }

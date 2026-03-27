@@ -139,7 +139,7 @@ export default function Portfolio() {
               { label: "Net Value", value: fmtUsd(summary.totalValue) },
               { label: "PnL ($)", value: fmtUsd(summary.totalPnlUsd), colorClass: pnlColor(summary.totalPnlUsd) },
               { label: "ROI", value: fmtPct(summary.roi), colorClass: pnlColor(summary.roi) },
-              { label: "Current APY", value: fmtApy(summary.weightedApy), colorClass: "text-neon" },
+              { label: "Current APY", value: fmtApy(summary.weightedApy), colorClass: pnlColor(summary.weightedApy) },
               { label: "Real APY", value: fmtApy(summary.weightedApyRealized), colorClass: pnlColor(summary.weightedApyRealized) },
               { label: "Positions", value: `${summary.count}` },
             ]}

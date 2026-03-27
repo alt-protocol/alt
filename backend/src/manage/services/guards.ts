@@ -84,10 +84,10 @@ export function guardStablecoinOnly(opp: OpportunityDetail): void {
 
 /**
  * Category blocklist. Rejects categories listed in BLOCKED_CATEGORIES env var.
- * Default: "multiply" (leveraged positions blocked for safety).
+ * Default: none blocked. Set BLOCKED_CATEGORIES="multiply" to block leveraged positions.
  */
 export function guardCategoryAllowed(opp: OpportunityDetail): void {
-  const blockedStr = process.env.BLOCKED_CATEGORIES ?? "multiply";
+  const blockedStr = process.env.BLOCKED_CATEGORIES ?? "";
   if (!blockedStr) return;
 
   const blocked = new Set(blockedStr.split(",").map((s) => s.trim()));

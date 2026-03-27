@@ -19,6 +19,7 @@ export interface OpportunityDetail {
 export interface OpportunityMapEntry {
   id: number;
   apy_current: number | null;
+  tvl_usd: number | null;
   first_token: string | null;
 }
 
