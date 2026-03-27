@@ -1,30 +1,24 @@
 #!/bin/bash
 
-# Runs ruff check after Claude edits/writes backend Python files
+# Runs tsc type-check after Claude edits/writes backend TypeScript files
 INPUT=$(cat)
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 
-# Only run for backend Python files
-if ! echo "$FILE_PATH" | grep -qE 'backend/.*\.py$'; then
+# Only run for backend TypeScript files
+if ! echo "$FILE_PATH" | grep -qE 'backend/.*\.ts$'; then
   exit 0
 fi
 
-cd "$CLAUDE_PROJECT_DIR"
+cd "$CLAUDE_PROJECT_DIR/backend"
 
-RUFF="$CLAUDE_PROJECT_DIR/backend/venv/bin/ruff"
-if [ ! -f "$RUFF" ]; then
-  echo "Ruff not installed in venv, skipping"
-  exit 0
-fi
+TSC_OUTPUT=$(npx tsc --noEmit 2>&1)
+TSC_EXIT=$?
 
-LINT_OUTPUT=$("$RUFF" check "$FILE_PATH" 2>&1)
-LINT_EXIT=$?
-
-if [ $LINT_EXIT -ne 0 ]; then
-  echo "RUFF ERRORS:" >&2
-  echo "$LINT_OUTPUT" | tail -20 >&2
+if [ $TSC_EXIT -ne 0 ]; then
+  echo "TSC ERRORS:" >&2
+  echo "$TSC_OUTPUT" | tail -20 >&2
   exit 2
 fi
 
-echo "Ruff OK"
+echo "tsc OK"
 exit 0

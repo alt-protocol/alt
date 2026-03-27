@@ -7,12 +7,25 @@ A curated, non-custodial Solana yield dashboard. Discover, deposit, and monitor 
 ```
 alt/
 ├── frontend/           # Next.js 16, TypeScript, Tailwind
-├── backend/            # Python, FastAPI, PostgreSQL
-├── scripts/            # DB seed, backfill, and validation scripts
+├── backend/            # Node.js, Fastify, Drizzle, PostgreSQL
+├── mcp-server/         # MCP server (thin API wrapper)
 └── README.md
 ```
 
 ## Quick Start
+
+### Database
+```bash
+docker compose up -d          # starts Postgres on port 5432
+```
+
+### Backend
+```bash
+cd backend
+npm install
+cp .env.example .env          # add DB URL and API keys
+npm run dev                    # http://localhost:8001
+```
 
 ### Frontend
 ```bash
@@ -20,20 +33,4 @@ cd frontend
 npm install
 cp .env.example .env.local   # add Helius RPC URL
 npm run dev                   # http://localhost:3000
-```
-
-### Backend
-```bash
-cd backend
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env          # add DB URL and Helius API key
-alembic upgrade head
-uvicorn app.main:app --reload  # http://localhost:8000
-```
-
-### Seed protocols
-```bash
-python scripts/seed_protocols.py
 ```

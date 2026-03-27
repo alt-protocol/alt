@@ -1,12 +1,10 @@
-# Python
-backend/venv/
-backend/__pycache__/
-backend/**/__pycache__/
+# Backend (Node.js)
+backend/node_modules/
+backend/dist/
 backend/.env
-*.pyc
-*.pyo
+backend/drizzle/meta/
 
-# Node
+# Frontend (Node.js)
 frontend/node_modules/
 frontend/.next/
 frontend/.env.local
@@ -16,14 +14,7 @@ frontend/.git/
 .env.*.local
 frontend/.env.production.local
 
-# Test caches
-.pytest_cache/
-backend/.pytest_cache/
-
 # General
 .DS_Store
 *.log
 .env
-*.egg-info/
-.venv/
-__pycache__/
