@@ -21,17 +21,24 @@ Uses `(app)` route group layout in `src/app/(app)/` for dashboard, portfolio, an
 - `index.ts` — Re-exports + registers all built-in categories
 - Adding a new category = 1 definition file + register in index.ts + add columns to `PositionTable.getColumnsForType()`. Filters, sidebar, and detail pages auto-adapt.
 
-### Protocol Adapters (`src/lib/protocols/`)
+### Protocol Adapters (`src/lib/protocols/`) — *moving to backend*
+> **Migration:** Protocol adapters are moving to the backend Manage module (`backend-ts/src/manage/protocols/`). After migration, the frontend will call `/api/manage/tx/build-deposit` instead of building transactions locally. The `lib/protocols/` directory, `instruction-converter.ts`, `jupiter-swap.ts`, and `multiply-luts.ts` will be deleted.
+
+Currently:
 - `types.ts` — `ProtocolAdapter` interface: `buildDepositTx`, `buildWithdrawTx`, optional `getBalance`
 - `kamino.ts`, `drift.ts`, `jupiter.ts` — protocol-specific implementations
 - `index.ts` — registry mapping protocol slugs to adapters
-- Adding a new protocol to an existing category requires zero UI changes.
 
 ### Transaction Flow
-1. Adapter builds instructions from `BuildTxParams` (signer, depositAddress, amount, category, extraData)
-2. `CategoryDetailView` resolves action panel (DepositWithdrawPanel or custom) based on category registry
-3. `useTransaction` hook handles both simple and multi-step flows (setup txs + main tx)
-4. Backend is never involved in signing
+**Current (pre-migration):**
+1. Adapter builds instructions locally from `BuildTxParams` (signer, depositAddress, amount, category, extraData)
+2. `useTransaction` hook handles setup txs + main tx + signing
+
+**After migration:**
+1. Frontend calls `POST /api/manage/tx/build-deposit` → gets unsigned instructions as JSON
+2. Frontend deserializes instructions into `@solana/kit` `Instruction` objects
+3. `useTransaction` hook builds tx message, signs with wallet, submits directly via RPC
+4. Backend is never involved in signing — only builds instructions
 
 ### Wallet & Chain
 Currently Solana-only: `@solana/kit` + `@solana/react` (Wallet Standard) — NOT legacy `@solana/wallet-adapter-*`. Providers in `SolanaProviders.tsx`. Multi-chain support is designed (Chain Registry pattern in `src/lib/chains/`) but not yet implemented. See root `CLAUDE.md` for the architecture plan.
@@ -66,13 +73,13 @@ Always check these before creating new functions — most common utilities alrea
 
 ### Utilities (`src/lib/`)
 - `format.ts` — all formatting: `fmtNum`, `fmtApy`, `fmtTvl`, `fmtUsd`, `fmtPct`, `fmtDays`, `fmtDate`, `fmtDateShort`, `fmtCategory`, `fmtProductType`, `truncateId`, `pnlColor`
-- `instruction-converter.ts` — `convertLegacyInstruction`, `convertJupiterApiInstruction` for building transactions from protocol SDKs
+- `instruction-converter.ts` — `convertLegacyInstruction`, `convertJupiterApiInstruction` for building transactions from protocol SDKs *(moving to backend)*
 - `api.ts` — `api.getYields()`, `api.getPositions()`, etc. Add new endpoints here, never inline fetch calls. Types (`YieldOpportunity`, `UserPositionOut`, etc.) also live here.
 - `constants.ts` — `API_URL`, `HELIUS_RPC_URL`, `TOKEN_MINTS`
 - `rpc.ts` — shared lazy-initialized Solana RPC singleton (`getRpc()`, `getRpcSubscriptions()`). All RPC calls must use these — never create new instances.
-- `kswap.ts` — KSwap swap provider for Kamino Multiply: `createKswapQuoter`, `createKswapSwapper`, `getKswapSdkInstance`. Required for klend-sdk multiply (Jupiter V6 is incompatible with flash loan flow).
-- `multiply-luts.ts` — LUT management for Multiply txs: `fetchCdnLuts`, `resolveMissingLuts`, `selectBestRoute`, `assembleMultiplyLuts`.
-- `multiply-utils.ts` — `parseLeverageTable(extra)`, `interpolateApy(entries, leverage)`, `getMultiplyStatusLabel(status)`.
+- `kswap.ts` — KSwap swap provider for Kamino Multiply *(moving to backend)*
+- `multiply-luts.ts` — LUT management for Multiply txs *(moving to backend)*
+- `multiply-utils.ts` — `parseLeverageTable(extra)`, `interpolateApy(entries, leverage)`, `getMultiplyStatusLabel(status)` *(UI helpers stay, SDK logic moves)*
 - `transaction-utils.ts` — `buildTransactionMessage(signer, blockhash, instructions)` and `mapTxError(err)`. Shared by useTransaction hook.
 
 ### Hooks (`src/lib/hooks/`)
@@ -142,8 +149,8 @@ Always check these before creating new functions — most common utilities alrea
 - Components: `src/components/` — shared UI components
 - Categories: `src/lib/categories/` — category registry (one definition file per category)
 - Hooks: `src/lib/hooks/` — reusable state/behavior hooks
-- Protocols: `src/lib/protocols/` — one file per protocol implementing `ProtocolAdapter`
-- Utilities: `src/lib/` — `format.ts`, `api.ts`, `constants.ts`, `instruction-converter.ts`, `jupiter-swap.ts`
+- Protocols: `src/lib/protocols/` — one file per protocol implementing `ProtocolAdapter` *(moving to backend)*
+- Utilities: `src/lib/` — `format.ts`, `api.ts`, `constants.ts`, `rpc.ts`, `transaction-utils.ts`
 
 ## Import Conventions
 
