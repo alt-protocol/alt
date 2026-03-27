@@ -61,15 +61,19 @@ server.tool(
     limit: z.number().int().min(1).max(100).optional().describe("Max results (default: 20)"),
   },
   async ({ category, sort, stablecoins_only, limit }) => {
-    const params = new URLSearchParams();
-    if (category) params.set("category", category);
-    if (sort) params.set("sort", sort);
-    if (stablecoins_only) params.set("stablecoins_only", "true");
-    params.set("limit", String(limit ?? 20));
+    try {
+      const params = new URLSearchParams();
+      if (category) params.set("category", category);
+      if (sort) params.set("sort", sort);
+      if (stablecoins_only) params.set("stablecoins_only", "true");
+      params.set("limit", String(limit ?? 20));
 
-    const qs = params.toString();
-    const data = await apiGet(`/api/discover/yields${qs ? `?${qs}` : ""}`);
-    return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+      const qs = params.toString();
+      const data = await apiGet(`/api/discover/yields${qs ? `?${qs}` : ""}`);
+      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true as const, content: [{ type: "text" as const, text: (err as Error).message }] };
+    }
   },
 );
 
@@ -80,8 +84,12 @@ server.tool(
     id: z.number().int().positive().describe("Opportunity ID"),
   },
   async ({ id }) => {
-    const data = await apiGet(`/api/discover/yields/${id}`);
-    return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    try {
+      const data = await apiGet(`/api/discover/yields/${id}`);
+      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true as const, content: [{ type: "text" as const, text: (err as Error).message }] };
+    }
   },
 );
 
@@ -94,8 +102,12 @@ server.tool(
     wallet_address: z.string().describe("Solana wallet address"),
   },
   async ({ wallet_address }) => {
-    const data = await apiGet(`/api/monitor/portfolio/${wallet_address}`);
-    return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    try {
+      const data = await apiGet(`/api/monitor/portfolio/${wallet_address}`);
+      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true as const, content: [{ type: "text" as const, text: (err as Error).message }] };
+    }
   },
 );
 
@@ -107,15 +119,21 @@ server.tool(
     protocol: z.string().optional().describe("Filter by protocol slug (kamino, drift, jupiter)"),
   },
   async ({ wallet_address, protocol }) => {
-    const params = new URLSearchParams();
-    if (protocol) params.set("protocol", protocol);
-    const qs = params.toString();
+    try {
+      const params = new URLSearchParams();
+      if (protocol) params.set("protocol", protocol);
+      const qs = params.toString();
 
-    // Trigger position tracking (fire-and-forget)
-    apiPost(`/api/monitor/portfolio/${wallet_address}/track`, {}).catch(() => {});
+      // Trigger position tracking (fire-and-forget)
+      apiPost(`/api/monitor/portfolio/${wallet_address}/track`, {}).catch((err) =>
+        console.error("Track wallet:", err.message),
+      );
 
-    const data = await apiGet(`/api/monitor/portfolio/${wallet_address}/positions${qs ? `?${qs}` : ""}`);
-    return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+      const data = await apiGet(`/api/monitor/portfolio/${wallet_address}/positions${qs ? `?${qs}` : ""}`);
+      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true as const, content: [{ type: "text" as const, text: (err as Error).message }] };
+    }
   },
 );
 
@@ -130,13 +148,17 @@ server.tool(
     amount: z.string().describe("Deposit amount as a decimal string (e.g. '100.5')"),
   },
   async ({ opportunity_id, wallet_address, amount }) => {
-    const data = await apiPost("/api/manage/tx/build-deposit", {
-      opportunity_id,
-      wallet_address,
-      amount,
-      simulate: true,
-    });
-    return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    try {
+      const data = await apiPost("/api/manage/tx/build-deposit", {
+        opportunity_id,
+        wallet_address,
+        amount,
+        simulate: true,
+      });
+      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true as const, content: [{ type: "text" as const, text: (err as Error).message }] };
+    }
   },
 );
 
@@ -149,13 +171,17 @@ server.tool(
     amount: z.string().describe("Withdrawal amount as a decimal string (e.g. '50.0')"),
   },
   async ({ opportunity_id, wallet_address, amount }) => {
-    const data = await apiPost("/api/manage/tx/build-withdraw", {
-      opportunity_id,
-      wallet_address,
-      amount,
-      simulate: true,
-    });
-    return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    try {
+      const data = await apiPost("/api/manage/tx/build-withdraw", {
+        opportunity_id,
+        wallet_address,
+        amount,
+        simulate: true,
+      });
+      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true as const, content: [{ type: "text" as const, text: (err as Error).message }] };
+    }
   },
 );
 
@@ -166,8 +192,12 @@ server.tool(
     signed_transaction: z.string().describe("Base64-encoded signed transaction bytes"),
   },
   async ({ signed_transaction }) => {
-    const data = await apiPost("/api/manage/tx/submit", { signed_transaction }, true);
-    return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    try {
+      const data = await apiPost("/api/manage/tx/submit", { signed_transaction }, true);
+      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true as const, content: [{ type: "text" as const, text: (err as Error).message }] };
+    }
   },
 );
 
@@ -176,6 +206,9 @@ server.tool(
 // ---------------------------------------------------------------------------
 
 async function main() {
+  if (!API_KEY) {
+    console.error("Warning: AKASHI_API_KEY not set — submit_transaction will fail");
+  }
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("Akashi MCP server running on stdio");
