@@ -9,23 +9,18 @@ import { api } from "@/lib/api";
  */
 export function usePositionBalance(
   walletAddress: string | undefined,
-  protocolSlug: string | undefined,
-  depositAddress: string | undefined,
-  category: string | undefined,
-  extraData?: Record<string, unknown>,
-  opportunityId?: number,
+  opportunityId: number | undefined,
 ) {
   return useQuery({
-    queryKey: ["positionBalance", walletAddress, protocolSlug, depositAddress],
+    queryKey: ["positionBalance", walletAddress, opportunityId],
     queryFn: async () => {
-      if (!opportunityId) return null;
       const { balance } = await api.getBalance({
-        opportunity_id: opportunityId,
+        opportunity_id: opportunityId!,
         wallet_address: walletAddress!,
       });
       return balance;
     },
-    enabled: !!walletAddress && !!protocolSlug && !!depositAddress && !!category && !!opportunityId,
+    enabled: !!walletAddress && !!opportunityId,
     staleTime: 30_000,
   });
 }
