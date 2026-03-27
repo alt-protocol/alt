@@ -59,27 +59,6 @@ async function latestPositions(
   protocol?: string,
   productType?: string,
 ) {
-  const conditions = [eq(userPositions.wallet_address, walletAddress)];
-  if (protocol) conditions.push(eq(userPositions.protocol_slug, protocol));
-  if (productType) conditions.push(eq(userPositions.product_type, productType));
-
-  const rows = await db.execute(sql`
-    SELECT up.*
-    FROM user_positions up
-    INNER JOIN (
-      SELECT protocol_slug, MAX(snapshot_at) as latest_at
-      FROM user_positions
-      WHERE wallet_address = ${walletAddress}
-      GROUP BY protocol_slug
-    ) sub ON up.protocol_slug = sub.protocol_slug
-           AND up.snapshot_at = sub.latest_at
-           AND up.wallet_address = ${walletAddress}
-    ${protocol ? sql`WHERE up.protocol_slug = ${protocol}` : sql``}
-    ${productType ? sql`AND up.product_type = ${productType}` : sql``}
-    ORDER BY up.id
-  `);
-
-  // Use a simpler approach: query via drizzle
   const latestSub = db
     .select({
       protocol_slug: userPositions.protocol_slug,

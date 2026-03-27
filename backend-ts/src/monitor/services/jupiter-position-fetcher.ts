@@ -9,7 +9,7 @@
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { eq } from "drizzle-orm";
-import { address, getProgramDerivedAddress } from "@solana/addresses";
+import { address, getAddressEncoder, getProgramDerivedAddress } from "@solana/addresses";
 import { getWithRetry, getOrNull, postJson } from "../../shared/http.js";
 import { logger } from "../../shared/logger.js";
 import { safeFloat, parseTimestamp, cachedAsync } from "../../shared/utils.js";
@@ -39,18 +39,15 @@ function buildHeaders(): Record<string, string> {
 // ATA derivation + first deposit timestamp
 // ---------------------------------------------------------------------------
 
-async function getAta(wallet: string, mint: string): Promise<string> {
-  const walletAddr = address(wallet);
-  const mintAddr = address(mint);
-  const tokenProgram = address(TOKEN_PROGRAM);
-  const ataProgram = address(ATA_PROGRAM);
+const addressEncoder = getAddressEncoder();
 
+async function getAta(wallet: string, mint: string): Promise<string> {
   const [pda] = await getProgramDerivedAddress({
-    programAddress: ataProgram,
+    programAddress: address(ATA_PROGRAM),
     seeds: [
-      new TextEncoder().encode(walletAddr),
-      new TextEncoder().encode(tokenProgram),
-      new TextEncoder().encode(mintAddr),
+      addressEncoder.encode(address(wallet)),
+      addressEncoder.encode(address(TOKEN_PROGRAM)),
+      addressEncoder.encode(address(mint)),
     ],
   });
   return pda;
@@ -365,6 +362,11 @@ export async function snapshotAllWallets(
         earnPositions,
         now,
       );
+
+      await database
+        .update(trackedWallets)
+        .set({ last_fetched_at: now })
+        .where(eq(trackedWallets.id, wallet.id));
 
       logger.info(
         {
