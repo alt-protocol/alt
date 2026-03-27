@@ -94,6 +94,11 @@ export async function buildTransaction(
 
   // Post-build guard: verify all programs are known
   guardProgramWhitelist(serialized.instructions);
+  if (serialized.setupInstructionSets) {
+    for (const set of serialized.setupInstructionSets) {
+      guardProgramWhitelist(set);
+    }
+  }
 
   return serialized;
 }

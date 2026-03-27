@@ -4,12 +4,32 @@ import { logger } from "../../shared/logger.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+const COMPUTE_BUDGET_PROGRAM = "ComputeBudget111111111111111111111111111";
+const SET_CU_PRICE_DISCRIMINATOR = 0x03;
+
 export interface SimulationPreview {
   success: boolean;
   computeUnits: number | null;
+  /** Estimated fee in lamports (base fee + priority fee). */
   fee: number | null;
   error: string | null;
   logs?: string[];
+}
+
+/**
+ * Extract priority fee (microLamports per CU) from a setComputeUnitPrice
+ * instruction in the built instructions. Returns 0 if not found.
+ */
+function extractPriorityFee(instructions: SerializableInstruction[]): number {
+  for (const ix of instructions) {
+    if (ix.programAddress !== COMPUTE_BUDGET_PROGRAM) continue;
+    const data = Buffer.from(ix.data, "base64");
+    if (data.length >= 9 && data[0] === SET_CU_PRICE_DISCRIMINATOR) {
+      // 8-byte little-endian u64 microLamports
+      return Number(data.readBigUInt64LE(1));
+    }
+  }
+  return 0;
 }
 
 /**
@@ -47,10 +67,10 @@ export async function simulateTransaction(
 
     // Build v0 message
     const payer = new web3.PublicKey(walletAddress);
+    const connection = new web3.Connection(process.env.HELIUS_RPC_URL!);
 
     let addressLookupTableAccounts: any[] = [];
     if (lookupTableAddresses?.length) {
-      const connection = new web3.Connection(process.env.HELIUS_RPC_URL!);
       const lutPromises = lookupTableAddresses.map(async (addr: string) => {
         const info = await connection.getAddressLookupTable(
           new web3.PublicKey(addr),
@@ -72,16 +92,22 @@ export async function simulateTransaction(
     const tx = new web3.VersionedTransaction(messageV0);
 
     // Simulate (unsigned — RPC supports sigVerify: false)
-    const connection = new web3.Connection(process.env.HELIUS_RPC_URL!);
     const simResult = await connection.simulateTransaction(tx, {
       sigVerify: false,
       replaceRecentBlockhash: true,
     });
 
     const computeUnits = simResult.value.unitsConsumed ?? null;
-    // Estimate fee: base fee (5000 lamports) + priority fee estimate
-    // Solana base fee = 5000 lamports per signature (typically 1 sig)
-    const fee = computeUnits !== null ? 5000 : null;
+
+    // Estimate fee: base fee (5000 lamports/sig) + priority fee from instructions
+    let fee: number | null = null;
+    if (computeUnits !== null) {
+      const microLamports = extractPriorityFee(instructions);
+      const priorityFee = Math.ceil(
+        (computeUnits * microLamports) / 1_000_000,
+      );
+      fee = 5000 + priorityFee;
+    }
 
     return {
       success: simResult.value.err === null,
