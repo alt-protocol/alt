@@ -10,22 +10,17 @@ import { api } from "@/lib/api";
  */
 export function useWithdrawState(
   walletAddress: string | undefined,
-  protocolSlug: string | undefined,
-  depositAddress: string | undefined,
-  category: string | undefined,
-  extraData?: Record<string, unknown>,
-  opportunityId?: number,
+  opportunityId: number | undefined,
 ) {
   return useQuery<WithdrawState | null>({
-    queryKey: ["withdrawState", walletAddress, protocolSlug, depositAddress],
+    queryKey: ["withdrawState", walletAddress, opportunityId],
     queryFn: async () => {
-      if (!opportunityId) return null;
       return api.getWithdrawState({
-        opportunity_id: opportunityId,
+        opportunity_id: opportunityId!,
         wallet_address: walletAddress!,
       });
     },
-    enabled: !!walletAddress && !!protocolSlug && !!depositAddress && !!category && !!opportunityId,
+    enabled: !!walletAddress && !!opportunityId,
     staleTime: 30_000,
   });
 }

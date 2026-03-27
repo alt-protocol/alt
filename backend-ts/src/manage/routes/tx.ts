@@ -3,6 +3,7 @@ import { buildTransaction } from "../services/tx-builder.js";
 import { simulateTransaction } from "../services/tx-preview.js";
 import { discoverService } from "../../discover/service.js";
 import { getAdapter } from "../protocols/index.js";
+import { authHook } from "../../shared/auth.js";
 import { logger } from "../../shared/logger.js";
 import { BuildTxBody, SubmitTxBody, BalanceBody, WithdrawStateBody } from "./schemas.js";
 
@@ -71,10 +72,10 @@ export async function txRoutes(app: FastifyInstance) {
     },
   );
 
-  // POST /tx/submit — submit signed transaction via Helius RPC
+  // POST /tx/submit — submit signed transaction via Helius RPC (API key required)
   app.post(
     "/tx/submit",
-    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } }, preHandler: [authHook] },
     async (request, reply) => {
       const body = SubmitTxBody.parse(request.body);
 
