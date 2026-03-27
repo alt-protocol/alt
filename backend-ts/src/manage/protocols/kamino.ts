@@ -5,6 +5,7 @@ import type {
   BuildTxParams,
   BuildTxResult,
   BuildTxResultWithLookups,
+  BuildTxResultWithSetup,
   GetBalanceParams,
 } from "./types.js";
 import { getRpc } from "../../shared/rpc.js";
@@ -350,8 +351,9 @@ async function finalizeMultiplyResult(
     debtMint: string;
     marketLut?: string;
     isMultiply: boolean;
+    setupInstructionSets?: Instruction[][];
   },
-): Promise<BuildTxResultWithLookups> {
+): Promise<BuildTxResultWithLookups | BuildTxResultWithSetup> {
   const bestRoute = selectBestRoute(routes);
   const ixCount = bestRoute.ixs?.length ?? 0;
 
@@ -371,10 +373,20 @@ async function finalizeMultiplyResult(
     isMultiply: opts.isMultiply,
   });
 
-  return {
+  const result: BuildTxResultWithLookups = {
     instructions: bestRoute.ixs as unknown as Instruction[],
     lookupTableAddresses,
   };
+
+  // Include setup instructions if LUT creation is needed
+  if (opts.setupInstructionSets && opts.setupInstructionSets.length > 0) {
+    return {
+      ...result,
+      setupInstructionSets: opts.setupInstructionSets,
+    } as BuildTxResultWithSetup;
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -383,7 +395,7 @@ async function finalizeMultiplyResult(
 
 async function buildMultiplyOpen(
   params: BuildTxParams,
-): Promise<BuildTxResultWithLookups> {
+): Promise<BuildTxResultWithLookups | BuildTxResultWithSetup> {
   const userSlippage = (params.extraData?.slippageBps as number) ?? 30;
   const ctx = await prepareMultiply(params, userSlippage);
   const {
@@ -446,7 +458,7 @@ async function buildMultiplyOpen(
 
   // User LUT + setup txs
   const multiplyMints = [{ coll: collTokenMint, debt: debtTokenMint }];
-  const [userLut] = await getUserLutAddressAndSetupIxs(
+  const [userLut, setupTxsIxs] = await getUserLutAddressAndSetupIxs(
     market,
     addr(params.walletAddress) as any,
     none(),
@@ -499,12 +511,18 @@ async function buildMultiplyOpen(
     useV2Ixs: true,
   });
 
+  // Filter to non-empty setup instruction sets
+  const nonEmptySetups = (setupTxsIxs as any[][])
+    .filter((ixs: any[]) => ixs.length > 0)
+    .map((ixs: any[]) => ixs as unknown as Instruction[]);
+
   return finalizeMultiplyResult(routes, {
     userLut,
     collMint,
     debtMint,
     marketLut,
     isMultiply: true,
+    setupInstructionSets: nonEmptySetups.length > 0 ? nonEmptySetups : undefined,
   });
 }
 

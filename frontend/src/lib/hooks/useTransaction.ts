@@ -11,8 +11,8 @@ import {
 } from "@solana/kit";
 import type { Instruction } from "@solana/kit";
 import type { TransactionSendingSigner } from "@solana/signers";
-import type { BuildTxResult } from "../protocols/types";
-import { isBuildTxResultWithSetup, isBuildTxResultWithLookups } from "../protocols/types";
+import type { BuildTxResult } from "../tx-types";
+import { isBuildTxResultWithSetup, isBuildTxResultWithLookups } from "../tx-types";
 import { getRpc } from "../rpc";
 import { buildTransactionMessage, mapTxError } from "../transaction-utils";
 

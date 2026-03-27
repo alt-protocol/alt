@@ -1,4 +1,8 @@
 import { API_URL } from "./constants";
+import type { BuildTxApiResponse } from "./instruction-deserializer";
+import type { WithdrawState } from "./tx-types";
+
+export type { BuildTxApiResponse };
 
 export interface Protocol {
   id: number;
@@ -115,7 +119,21 @@ async function apiFetch<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: `API error ${res.status}` }));
+    throw new Error(err.error ?? err.details ?? `API error ${res.status}: ${path}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 export const api = {
+  // --- Discover module ---
   getYields: (params?: { category?: string; sort?: string; tokens?: string; stablecoins_only?: boolean }) => {
     const qs = new URLSearchParams(
       Object.fromEntries(
@@ -123,24 +141,22 @@ export const api = {
       )
     ).toString();
     return apiFetch<{ data: YieldOpportunity[]; meta: { total: number; last_updated: string | null } }>(
-      `/api/yields${qs ? `?${qs}` : ""}`
+      `/api/discover/yields${qs ? `?${qs}` : ""}`
     );
   },
 
   getYieldDetail: (id: number) =>
-    apiFetch<YieldOpportunityDetail>(`/api/yields/${id}`),
+    apiFetch<YieldOpportunityDetail>(`/api/discover/yields/${id}`),
 
   getYieldHistory: (id: number, period: string = "7d") =>
-    apiFetch<{ data: YieldHistoryPoint[] }>(`/api/yields/${id}/history?period=${period}`),
+    apiFetch<{ data: YieldHistoryPoint[] }>(`/api/discover/yields/${id}/history?period=${period}`),
 
   getProtocols: () =>
-    apiFetch<{ data: Protocol[] }>("/api/protocols"),
+    apiFetch<{ data: Protocol[] }>("/api/discover/protocols"),
 
+  // --- Monitor module ---
   getPortfolio: (walletAddress: string) =>
-    apiFetch<Portfolio>(`/api/portfolio/${walletAddress}`),
-
-  getHealth: () =>
-    apiFetch<{ status: string }>("/api/health"),
+    apiFetch<Portfolio>(`/api/monitor/portfolio/${walletAddress}`),
 
   trackWallet: (() => {
     const cache = new Map<string, number>();
@@ -149,7 +165,7 @@ export const api = {
       const now = Date.now();
       if (now - (cache.get(wallet) ?? 0) < THROTTLE_MS) return Promise.resolve();
       cache.set(wallet, now);
-      return fetch(`${API_URL}/api/portfolio/${wallet}/track`, { method: "POST" })
+      return fetch(`${API_URL}/api/monitor/portfolio/${wallet}/track`, { method: "POST" })
         .then(r => r.json()).catch(() => {});
     };
   })(),
@@ -158,17 +174,44 @@ export const api = {
     const qs = new URLSearchParams(
       Object.fromEntries(Object.entries(params ?? {}).filter(([, v]) => v != null) as [string, string][])
     ).toString();
-    return apiFetch<UserPositionOut[]>(`/api/portfolio/${wallet}/positions${qs ? `?${qs}` : ""}`);
+    return apiFetch<UserPositionOut[]>(`/api/monitor/portfolio/${wallet}/positions${qs ? `?${qs}` : ""}`);
   },
 
   getPositionHistory: (wallet: string, period: "7d" | "30d" | "90d" = "7d") =>
-    apiFetch<UserPositionHistoryPoint[]>(`/api/portfolio/${wallet}/positions/history?period=${period}`),
+    apiFetch<UserPositionHistoryPoint[]>(`/api/monitor/portfolio/${wallet}/positions/history?period=${period}`),
 
   getWalletStatus: (wallet: string) =>
     apiFetch<{ fetch_status: string; last_fetched_at: string | null }>(
-      `/api/portfolio/${wallet}/status`
+      `/api/monitor/portfolio/${wallet}/status`
     ),
 
   getPositionEvents: (wallet: string) =>
-    apiFetch<UserPositionEventOut[]>(`/api/portfolio/${wallet}/events`),
+    apiFetch<UserPositionEventOut[]>(`/api/monitor/portfolio/${wallet}/events`),
+
+  // --- Manage module ---
+  buildDeposit: (params: {
+    opportunity_id: number;
+    wallet_address: string;
+    amount: string;
+    simulate?: boolean;
+    extra_data?: Record<string, unknown>;
+  }) => apiPost<BuildTxApiResponse>("/api/manage/tx/build-deposit", params),
+
+  buildWithdraw: (params: {
+    opportunity_id: number;
+    wallet_address: string;
+    amount: string;
+    simulate?: boolean;
+    extra_data?: Record<string, unknown>;
+  }) => apiPost<BuildTxApiResponse>("/api/manage/tx/build-withdraw", params),
+
+  getBalance: (params: { opportunity_id: number; wallet_address: string }) =>
+    apiPost<{ balance: number | null }>("/api/manage/balance", params),
+
+  getWithdrawState: (params: { opportunity_id: number; wallet_address: string }) =>
+    apiPost<WithdrawState | null>("/api/manage/withdraw-state", params),
+
+  // --- Health ---
+  getHealth: () =>
+    apiFetch<{ status: string }>("/api/health"),
 };

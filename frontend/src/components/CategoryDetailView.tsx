@@ -7,8 +7,9 @@ import dynamic from "next/dynamic";
 import type { YieldOpportunityDetail } from "@/lib/api";
 import { fmtCategory } from "@/lib/format";
 import { queryKeys } from "@/lib/queryKeys";
-import { hasAdapter } from "@/lib/protocols";
 import { getCategoryDef } from "@/lib/categories";
+
+const SUPPORTED_PROTOCOLS = new Set(["kamino", "jupiter", "drift"]);
 import type { CategoryDefinition } from "@/lib/categories/registry";
 import { ProtocolChip } from "@/components/ProtocolChip";
 import { DetailRow } from "@/components/DetailRow";
@@ -58,7 +59,7 @@ export default function CategoryDetailView({ yield_: y, id }: Props) {
   // eslint-disable-next-line react-hooks/static-components -- stable: getCustomPanel returns a module-level cached lazy component per category slug
   const CustomPanel = getCustomPanel(categoryDef);
 
-  const hasPanel = y.protocol?.slug && hasAdapter(y.protocol.slug) && y.deposit_address;
+  const hasPanel = y.protocol?.slug && SUPPORTED_PROTOCOLS.has(y.protocol.slug) && y.deposit_address;
 
   return (
     <>

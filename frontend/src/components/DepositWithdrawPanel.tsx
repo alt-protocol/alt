@@ -6,7 +6,7 @@ import { useWalletAccountTransactionSendingSigner } from "@solana/react";
 import type { UiWalletAccount } from "@wallet-standard/react";
 import type { YieldOpportunityDetail } from "@/lib/api";
 import { api } from "@/lib/api";
-import { getAdapter } from "@/lib/protocols";
+import { deserializeBuildResponse } from "@/lib/instruction-deserializer";
 import { fmtNum, fmtUsd, fmtPct, pnlColor } from "@/lib/format";
 import { useTokenBalance } from "@/lib/hooks/useTokenBalance";
 import { usePositionBalance } from "@/lib/hooks/usePositionBalance";
@@ -55,6 +55,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
     tab === "withdraw" ? yield_.deposit_address ?? undefined : undefined,
     tab === "withdraw" ? yield_.category : undefined,
     yield_.extra_data ?? undefined,
+    tab === "withdraw" ? yield_.id : undefined,
   );
   const { position } = usePositionForOpportunity(
     selectedAccount.address,
@@ -66,6 +67,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
     tab === "withdraw" ? yield_.deposit_address ?? undefined : undefined,
     tab === "withdraw" ? yield_.category : undefined,
     yield_.extra_data ?? undefined,
+    tab === "withdraw" ? yield_.id : undefined,
   );
 
   const { execute, status, error, txSignature, reset } = useTransaction(signer);
@@ -98,24 +100,20 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
   async function handleSubmit() {
     if (!yield_.deposit_address) return;
 
-    const adapter = await getAdapter(protocolSlug);
-    if (!adapter) return;
-
     reset();
 
     const success = await execute(async () => {
       const params = {
-        signer: signer!,
-        depositAddress: yield_.deposit_address!,
+        opportunity_id: yield_.id,
+        wallet_address: selectedAccount.address,
         amount,
-        category: yield_.category,
-        extraData: yield_.extra_data ?? undefined,
       };
 
-      if (tab === "deposit") {
-        return adapter.buildDepositTx(params);
-      }
-      return adapter.buildWithdrawTx(params);
+      const response = tab === "deposit"
+        ? await api.buildDeposit(params)
+        : await api.buildWithdraw(params);
+
+      return deserializeBuildResponse(response);
     });
 
     if (!success) return;

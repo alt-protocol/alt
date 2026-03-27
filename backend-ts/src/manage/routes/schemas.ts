@@ -64,3 +64,21 @@ export const SubmitTxResponse = z.object({
   signature: z.string(),
   status: z.enum(["submitted"]),
 });
+
+// ---------------------------------------------------------------------------
+// Balance + withdraw state
+// ---------------------------------------------------------------------------
+
+export const BalanceBody = z.object({
+  opportunity_id: z.number().int().positive(),
+  wallet_address: z
+    .string()
+    .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "Invalid Solana wallet address"),
+});
+
+export const WithdrawStateBody = z.object({
+  opportunity_id: z.number().int().positive(),
+  wallet_address: z
+    .string()
+    .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "Invalid Solana wallet address"),
+});
