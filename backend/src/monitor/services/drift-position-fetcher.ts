@@ -34,13 +34,15 @@ async function dGet(path: string): Promise<unknown | null> {
 
 // ---------------------------------------------------------------------------
 // IF pool APYs (cached 5 min)
+// The /stats/insuranceFund API only returns { marketIndex, symbol, apy }
+// per entry — no share price or vault balance fields.
 // ---------------------------------------------------------------------------
 
-let _ifApysCache: { at: number; data: Record<number, number> } | null = null;
+let _ifApyCache: { at: number; data: Record<number, number> } | null = null;
 
 async function getIfPoolApys(): Promise<Record<number, number>> {
   const now = Date.now();
-  if (_ifApysCache && now - _ifApysCache.at < 300_000) return _ifApysCache.data;
+  if (_ifApyCache && now - _ifApyCache.at < 300_000) return _ifApyCache.data;
 
   const data = await dGet("/stats/insuranceFund");
   const result: Record<number, number> = {};
@@ -57,7 +59,7 @@ async function getIfPoolApys(): Promise<Record<number, number>> {
       }
     }
   }
-  _ifApysCache = { at: now, data: result };
+  _ifApyCache = { at: now, data: result };
   return result;
 }
 
@@ -165,13 +167,37 @@ async function fetchIfPositions(
     const symbol =
       (latest.symbol as string) ?? `MARKET-${idx}`;
     const externalId = `drift-if-${idx}`;
+    const entry = oppMap[externalId];
 
+    // Compute current deposit value using opportunity TVL (updated every
+    // 15 min from on-chain data) and event-level total shares.
+    // The Drift /stats/insuranceFund API only returns { marketIndex, symbol, apy }
+    // — no share price or vault balance — so we derive value from the Discover
+    // module's TVL combined with the most recent event's total shares.
     const totalSharesEv = safeFloat(latest.totalIfSharesAfter);
-    const vaultAmountEv = safeFloat(latest.insuranceVaultAmountBefore);
-    const depositAmountUsd =
-      totalSharesEv && totalSharesEv > 0 && vaultAmountEv
-        ? (sharesAfter / totalSharesEv) * vaultAmountEv
-        : null;
+    const tvlUsd = entry?.tvl_usd ?? null;
+    let depositAmountUsd: number | null = null;
+
+    if (tvlUsd && tvlUsd > 0 && totalSharesEv && totalSharesEv > 0) {
+      // TVL is current (from on-chain); totalShares from last event is approximate
+      depositAmountUsd = (sharesAfter / totalSharesEv) * tvlUsd;
+    }
+
+    // Fallback: fully stale event-level data
+    if (depositAmountUsd === null) {
+      const vaultAmountEv = safeFloat(latest.insuranceVaultAmountBefore);
+      depositAmountUsd =
+        totalSharesEv && totalSharesEv > 0 && vaultAmountEv
+          ? (sharesAfter / totalSharesEv) * vaultAmountEv
+          : null;
+    }
+
+    if (depositAmountUsd === null) {
+      logger.info(
+        { wallet: wallet.slice(0, 8), market: idx, shares: sharesAfter },
+        "Drift IF: could not compute current value — no TVL or event data",
+      );
+    }
 
     let totalStaked = 0;
     let totalUnstaked = 0;
@@ -200,7 +226,6 @@ async function fetchIfPositions(
         : null;
 
     let apy: number | null = ifApys[idx] ?? null;
-    const entry = oppMap[externalId];
     if (apy === null && entry) apy = entry.apy_current;
 
     positions.push(

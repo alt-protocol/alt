@@ -58,6 +58,7 @@ export const discoverService: DiscoverService = {
         deposit_address: yieldOpportunities.deposit_address,
         external_id: yieldOpportunities.external_id,
         apy_current: yieldOpportunities.apy_current,
+        tvl_usd: yieldOpportunities.tvl_usd,
         tokens: yieldOpportunities.tokens,
       })
       .from(yieldOpportunities)
@@ -68,6 +69,7 @@ export const discoverService: DiscoverService = {
       const entry: OpportunityMapEntry = {
         id: row.id,
         apy_current: numOrNull(row.apy_current),
+        tvl_usd: numOrNull(row.tvl_usd),
         first_token: row.tokens.length > 0 ? row.tokens[0] : null,
       };
       if (row.deposit_address) result[row.deposit_address] = entry;

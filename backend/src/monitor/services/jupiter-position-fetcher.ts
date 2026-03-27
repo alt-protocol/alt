@@ -187,6 +187,16 @@ async function fetchEarnPositions(
         `${JUPITER_LEND_API}/earn/earnings?user=${wallet}&positions=${positionIds.join(",")}`,
         { headers },
       );
+      logger.debug(
+        {
+          type: Array.isArray(earningsData) ? "array" : typeof earningsData,
+          length: Array.isArray(earningsData) ? earningsData.length : undefined,
+          keys: earningsData && typeof earningsData === "object" && !Array.isArray(earningsData)
+            ? Object.keys(earningsData as Record<string, unknown>).slice(0, 5)
+            : undefined,
+        },
+        "Jupiter earnings response shape",
+      );
       if (Array.isArray(earningsData)) {
         for (const e of earningsData as Record<string, unknown>[]) {
           const addr =
@@ -209,9 +219,23 @@ async function fetchEarnPositions(
           if (parsed !== null) earningsMap[addr] = parsed;
         }
       }
-    } catch {
-      logger.warn({ wallet: wallet.slice(0, 8) }, "Jupiter /earn/earnings failed");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isAuth = msg.includes("401") || msg.includes("403");
+      logger.warn(
+        { err: msg, wallet: wallet.slice(0, 8), positionCount: positionIds.length },
+        isAuth
+          ? "Jupiter /earn/earnings auth failed (check JUPITER_API_KEY) — PnL will be null"
+          : "Jupiter /earn/earnings failed — PnL will be null",
+      );
     }
+  }
+
+  if (positionIds.length > 0 && Object.keys(earningsMap).length === 0) {
+    logger.info(
+      { wallet: wallet.slice(0, 8), positionCount: positionIds.length },
+      "Jupiter earnings: no matches found in response — all PnL will be null",
+    );
   }
 
   const earliestMap = await batchEarliestSnapshots(database, wallet);

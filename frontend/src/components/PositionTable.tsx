@@ -9,6 +9,7 @@ import { getCategoryDef } from "@/lib/categories";
 
 export interface ColumnDef {
   header: string;
+  title?: string;
   align: "left" | "right";
   render: (position: UserPositionOut) => React.ReactNode;
 }
@@ -24,7 +25,7 @@ function getCardFields(position: UserPositionOut, type: string): PositionCardFie
     case "lending":
       return [
         { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
-        { label: "APY Current", value: fmtApy(position.apy), colorClass: "text-neon" },
+        { label: "APY Current", value: fmtApy(position.apy), colorClass: pnlColor(position.apy) },
         { label: "APY Realized", value: fmtApy(position.apy_realized), colorClass: pnlColor(position.apy_realized) },
         { label: "Interest Earned", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
         { label: "Days Held", value: fmtDays(position.held_days) },
@@ -32,7 +33,7 @@ function getCardFields(position: UserPositionOut, type: string): PositionCardFie
     case "multiply":
       return [
         { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
-        { label: "APY Current", value: fmtApy(position.apy), colorClass: "text-neon" },
+        { label: "APY Current", value: fmtApy(position.apy), colorClass: pnlColor(position.apy) },
         { label: "APY Realized", value: fmtApy(position.apy_realized), colorClass: pnlColor(position.apy_realized) },
         { label: "PnL ($)", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
         { label: "PnL (%)", value: fmtPct(position.pnl_pct), colorClass: pnlColor(position.pnl_pct) },
@@ -42,7 +43,7 @@ function getCardFields(position: UserPositionOut, type: string): PositionCardFie
     case "earn":
       return [
         { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
-        { label: "APY Current", value: fmtApy(position.apy), colorClass: "text-neon" },
+        { label: "APY Current", value: fmtApy(position.apy), colorClass: pnlColor(position.apy) },
         { label: "APY Realized", value: fmtApy(position.apy_realized), colorClass: pnlColor(position.apy_realized) },
         { label: "Interest Earned", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
         { label: "Days Held", value: fmtDays(position.held_days) },
@@ -50,7 +51,7 @@ function getCardFields(position: UserPositionOut, type: string): PositionCardFie
     case "insurance_fund":
       return [
         { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
-        { label: "APY Current", value: fmtApy(position.apy), colorClass: "text-neon" },
+        { label: "APY Current", value: fmtApy(position.apy), colorClass: pnlColor(position.apy) },
         { label: "APY Realized", value: fmtApy(position.apy_realized), colorClass: pnlColor(position.apy_realized) },
         { label: "PnL", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
         { label: "Days Held", value: fmtDays(position.held_days) },
@@ -59,7 +60,7 @@ function getCardFields(position: UserPositionOut, type: string): PositionCardFie
       return [
         { label: "Net Value", value: fmtUsd(position.deposit_amount_usd) },
         { label: "PnL", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
-        { label: "APY Current", value: fmtApy(position.apy), colorClass: "text-neon" },
+        { label: "APY Current", value: fmtApy(position.apy), colorClass: pnlColor(position.apy) },
         { label: "APY Realized", value: fmtApy(position.apy_realized), colorClass: pnlColor(position.apy_realized) },
       ];
   }
@@ -98,8 +99,8 @@ export function getColumnsForType(type: string): ColumnDef[] {
     ) : null,
   };
 
-  const apyCurrent: ColumnDef = { header: "APY Current", align: "right", render: (p) => <span className="text-neon">{fmtApy(p.apy)}</span> };
-  const apyRealized: ColumnDef = { header: "APY Realized", align: "right", render: (p) => <span className={pnlColor(p.apy_realized)}>{fmtApy(p.apy_realized)}</span> };
+  const apyCurrent: ColumnDef = { header: "APY Current", title: "Current market APY from the protocol. For multiply, net of borrow costs.", align: "right", render: (p) => <span className={pnlColor(p.apy)}>{fmtApy(p.apy)}</span> };
+  const apyRealized: ColumnDef = { header: "APY Realized", title: "Your actual annualized return based on PnL and time held.", align: "right", render: (p) => <span className={pnlColor(p.apy_realized)}>{fmtApy(p.apy_realized)}</span> };
 
   switch (type) {
     case "lending":
@@ -220,6 +221,7 @@ function PositionTableInner({ columns, positions, activeType }: PositionTablePro
                 <th
                   key={i}
                   className={`${col.align === "right" ? "text-right" : "text-left"} px-5 py-2.5 font-medium`}
+                  title={col.title}
                 >
                   {col.header}
                 </th>
