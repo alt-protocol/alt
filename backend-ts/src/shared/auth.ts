@@ -66,6 +66,12 @@ export async function authHook(
     }
   } else {
     rateLimitTracker.set(keyHash, { count: 1, windowStart: now });
+
+    // Evict stale entries to prevent unbounded memory growth
+    const staleThreshold = now - 2 * RATE_LIMIT_WINDOW_MS;
+    for (const [k, v] of rateLimitTracker) {
+      if (v.windowStart < staleThreshold) rateLimitTracker.delete(k);
+    }
   }
 
   (request as any).apiKeyName = apiKey.name;

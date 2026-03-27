@@ -67,7 +67,7 @@ export function guardDepositLimit(amount: string): void {
 }
 
 /**
- * Stablecoin-only guard. When STABLECOIN_ONLY !== "false" (default: enabled),
+ * Stablecoin-only guard. When STABLECOIN_ONLY === "true" (default: disabled),
  * at least one token in the opportunity must be a stablecoin.
  */
 export function guardStablecoinOnly(opp: OpportunityDetail): void {
