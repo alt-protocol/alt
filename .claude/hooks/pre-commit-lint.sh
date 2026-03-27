@@ -20,14 +20,13 @@ if [ $? -ne 0 ]; then
   FAILED=1
 fi
 
-# Run ruff only on staged Python files
-RUFF="$CLAUDE_PROJECT_DIR/backend/venv/bin/ruff"
-STAGED_PY=$(git diff --cached --name-only --diff-filter=ACM -- 'backend/*.py' 'backend/**/*.py')
-if [ -n "$STAGED_PY" ]; then
-  RUFF_OUTPUT=$("$RUFF" check $STAGED_PY 2>&1)
+# Run tsc on staged backend TypeScript files
+STAGED_TS=$(git diff --cached --name-only --diff-filter=ACM -- 'backend/*.ts' 'backend/**/*.ts')
+if [ -n "$STAGED_TS" ]; then
+  TSC_OUTPUT=$(cd backend && npx tsc --noEmit 2>&1)
   if [ $? -ne 0 ]; then
-    echo "PRE-COMMIT: Ruff failed:" >&2
-    echo "$RUFF_OUTPUT" | tail -15 >&2
+    echo "PRE-COMMIT: TypeScript check failed:" >&2
+    echo "$TSC_OUTPUT" | tail -15 >&2
     FAILED=1
   fi
 fi

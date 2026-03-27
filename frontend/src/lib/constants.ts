@@ -1,4 +1,4 @@
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
 
 export const HELIUS_RPC_URL =
   process.env.NEXT_PUBLIC_HELIUS_RPC_URL ??

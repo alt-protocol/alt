@@ -1,7 +1,0 @@
-line-length = 88
-target-version = "py311"
-exclude = ["alembic/"]
-
-[lint]
-select = ["E", "F", "W"]
-ignore = ["E501"]  # line length handled separately
