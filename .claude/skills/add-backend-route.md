@@ -8,14 +8,13 @@ user_invocable: true
 
 Scaffold a new API endpoint for Akashi. Routes belong to one of 3 modules.
 
-> **Architecture:** The backend is a modular monolith with 3 modules. See `MIGRATION_PLAN.md`.
-> If `backend-ts/` doesn't exist yet, use the legacy Python backend pattern below.
+> **Architecture:** The backend is a modular monolith with 3 modules (Discover, Manage, Monitor).
 
 **Ask the user for:** endpoint path, HTTP method, which module it belongs to, what data it returns, and whether it needs rate limiting or API key auth.
 
 ---
 
-## For Node.js backend (`backend-ts/`)
+## For Node.js backend (`backend/`)
 
 ### Which module?
 
@@ -27,7 +26,7 @@ Scaffold a new API endpoint for Akashi. Routes belong to one of 3 modules.
 
 ### Pattern (Fastify + Zod)
 
-Add to the appropriate `backend-ts/src/{module}/routes/*.ts`:
+Add to the appropriate `backend/src/{module}/routes/*.ts`:
 
 ```typescript
 import { z } from 'zod';
@@ -84,28 +83,6 @@ Consume via TanStack Query — never `useEffect` for data fetching.
 - Zod schemas for validation + auto-generated Swagger docs
 - `@fastify/rate-limit` on mutation endpoints
 - Pagination: `limit` (default 100, max 500) + `offset` (default 0)
-
----
-
-## For legacy Python backend (`backend/`) — if `backend-ts/` doesn't exist yet
-
-### Option A: Add to existing router
-Existing routers: `app/routers/yields.py`, `app/routers/protocols.py`, `app/routers/portfolio.py`.
-
-```python
-@router.get("/path", response_model=SchemaOut)
-def get_thing(param: Optional[str] = Query(None), db: Session = Depends(get_db)):
-    result = db.query(Model).filter(...).first()
-    if not result:
-        raise HTTPException(status_code=404, detail="Not found")
-    return SchemaOut.model_validate(result)
-```
-
-### Option B: Create new router
-Create `backend/app/routers/{name}.py`, register in `main.py` with `app.include_router({name}.router, prefix="/api")`.
-
-### Add Pydantic schema
-Add to `backend/app/schemas/__init__.py` with `model_config = {"from_attributes": True}`.
 
 ---
 
