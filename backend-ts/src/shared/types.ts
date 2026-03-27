@@ -26,3 +26,10 @@ export interface DiscoverService {
   getOpportunityById(id: number): Promise<OpportunityDetail | null>;
   getOpportunityMap(): Promise<Record<string, OpportunityMapEntry>>;
 }
+
+/** JSON-safe instruction format returned by Manage routes. */
+export interface SerializableInstruction {
+  programAddress: string;
+  accounts: Array<{ address: string; role: number }>; // 0=readonly, 1=writable, 2=readonlySigner, 3=writableSigner
+  data: string; // base64-encoded
+}

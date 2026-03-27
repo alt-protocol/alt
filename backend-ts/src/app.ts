@@ -9,6 +9,7 @@ import { sql } from "drizzle-orm";
 import { db } from "./shared/db.js";
 import { errorHandler } from "./shared/error-handler.js";
 import { discoverPlugin } from "./discover/index.js";
+import { managePlugin } from "./manage/index.js";
 import { monitorPlugin } from "./monitor/index.js";
 
 export async function buildApp() {
@@ -48,6 +49,9 @@ export async function buildApp() {
 
   // Discover module
   await app.register(discoverPlugin, { prefix: "/api/discover" });
+
+  // Manage module
+  await app.register(managePlugin, { prefix: "/api/manage" });
 
   // Monitor module
   await app.register(monitorPlugin, { prefix: "/api/monitor" });

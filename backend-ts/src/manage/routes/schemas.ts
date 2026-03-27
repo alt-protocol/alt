@@ -1,0 +1,66 @@
+import { z } from "zod";
+
+// ---------------------------------------------------------------------------
+// Request schemas
+// ---------------------------------------------------------------------------
+
+export const BuildTxBody = z.object({
+  opportunity_id: z.number().int().positive(),
+  wallet_address: z
+    .string()
+    .regex(
+      /^[1-9A-HJ-NP-Za-km-z]{32,44}$/,
+      "Invalid Solana wallet address",
+    ),
+  amount: z
+    .string()
+    .refine(
+      (v) => !isNaN(Number(v)) && Number(v) > 0,
+      "Amount must be a positive number",
+    ),
+  simulate: z.boolean().default(false),
+  extra_data: z.record(z.unknown()).optional(),
+});
+
+export const SubmitTxBody = z.object({
+  signed_transaction: z
+    .string()
+    .min(1, "signed_transaction is required"),
+});
+
+// ---------------------------------------------------------------------------
+// Response schemas
+// ---------------------------------------------------------------------------
+
+export const SerializableInstructionSchema = z.object({
+  programAddress: z.string(),
+  accounts: z.array(
+    z.object({
+      address: z.string(),
+      role: z.number().int().min(0).max(3),
+    }),
+  ),
+  data: z.string(),
+});
+
+export const SimulationSchema = z.object({
+  success: z.boolean(),
+  computeUnits: z.number().nullable(),
+  fee: z.number().nullable(),
+  error: z.string().nullable(),
+  logs: z.array(z.string()).optional(),
+});
+
+export const BuildTxResponse = z.object({
+  instructions: z.array(SerializableInstructionSchema),
+  lookupTableAddresses: z.array(z.string()).optional(),
+  setupInstructionSets: z
+    .array(z.array(SerializableInstructionSchema))
+    .optional(),
+  simulation: SimulationSchema.optional(),
+});
+
+export const SubmitTxResponse = z.object({
+  signature: z.string(),
+  status: z.enum(["submitted", "confirmed", "failed"]),
+});
