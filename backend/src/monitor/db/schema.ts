@@ -1,5 +1,5 @@
 import {
-  pgTable,
+  pgSchema,
   serial,
   varchar,
   text,
@@ -12,10 +12,12 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
+const monitorSchema = pgSchema("monitor");
+
 // ---------------------------------------------------------------------------
 // tracked_wallets
 // ---------------------------------------------------------------------------
-export const trackedWallets = pgTable(
+export const trackedWallets = monitorSchema.table(
   "tracked_wallets",
   {
     id: serial("id").primaryKey(),
@@ -31,7 +33,7 @@ export const trackedWallets = pgTable(
 // ---------------------------------------------------------------------------
 // user_positions
 // ---------------------------------------------------------------------------
-export const userPositions = pgTable(
+export const userPositions = monitorSchema.table(
   "user_positions",
   {
     id: serial("id").primaryKey(),
@@ -67,7 +69,7 @@ export const userPositions = pgTable(
 // ---------------------------------------------------------------------------
 // user_position_events
 // ---------------------------------------------------------------------------
-export const userPositionEvents = pgTable(
+export const userPositionEvents = monitorSchema.table(
   "user_position_events",
   {
     id: serial("id").primaryKey(),

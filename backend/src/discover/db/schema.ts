@@ -1,5 +1,5 @@
 import {
-  pgTable,
+  pgSchema,
   serial,
   varchar,
   text,
@@ -13,10 +13,12 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
+const discoverSchema = pgSchema("discover");
+
 // ---------------------------------------------------------------------------
 // protocols
 // ---------------------------------------------------------------------------
-export const protocols = pgTable("protocols", {
+export const protocols = discoverSchema.table("protocols", {
   id: serial("id").primaryKey(),
   slug: varchar("slug", { length: 50 }).unique().notNull(),
   name: varchar("name", { length: 100 }).notNull(),
@@ -34,7 +36,7 @@ export const protocols = pgTable("protocols", {
 // ---------------------------------------------------------------------------
 // yield_opportunities
 // ---------------------------------------------------------------------------
-export const yieldOpportunities = pgTable(
+export const yieldOpportunities = discoverSchema.table(
   "yield_opportunities",
   {
     id: serial("id").primaryKey(),
@@ -79,7 +81,7 @@ export const yieldOpportunities = pgTable(
 // ---------------------------------------------------------------------------
 // yield_snapshots
 // ---------------------------------------------------------------------------
-export const yieldSnapshots = pgTable(
+export const yieldSnapshots = discoverSchema.table(
   "yield_snapshots",
   {
     id: serial("id").primaryKey(),

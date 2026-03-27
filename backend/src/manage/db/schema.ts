@@ -1,5 +1,5 @@
 import {
-  pgTable,
+  pgSchema,
   serial,
   varchar,
   boolean,
@@ -8,7 +8,9 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-export const apiKeys = pgTable(
+const manageSchema = pgSchema("manage");
+
+export const apiKeys = manageSchema.table(
   "api_keys",
   {
     id: serial("id").primaryKey(),
