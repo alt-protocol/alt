@@ -10,9 +10,20 @@
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
+    "@drift-labs/sdk": "^2.156.0-beta.0",
+    "@drift-labs/vaults-sdk": "^0.9.266",
     "@fastify/cors": "^10.0.2",
     "@fastify/rate-limit": "^10.2.1",
+    "@jup-ag/lend": "^0.1.9",
+    "@kamino-finance/klend-sdk": "^7.3.21",
+    "@kamino-finance/kswap-sdk": "^2.4.5",
+    "@solana-program/compute-budget": "^0.15.0",
     "@solana/addresses": "^2.1.1",
+    "@solana/kit": "^6.5.0",
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4",
+    "bn.js": "^5.2.3",
+    "decimal.js": "^10.6.0",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.38.4",
     "fastify": "^5.2.1",
@@ -23,6 +34,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@types/bn.js": "^5.2.0",
     "@types/node": "^22.12.0",
     "@types/node-cron": "^3.0.11",
     "@types/pg": "^8.11.11",
