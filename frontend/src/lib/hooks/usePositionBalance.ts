@@ -1,12 +1,11 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { getAdapter } from "@/lib/protocols";
+import { api } from "@/lib/api";
 
 /**
- * Protocol-agnostic balance hook. Delegates to adapter.getBalance() if available.
- * Returns null if the adapter doesn't implement getBalance (caller should fallback
- * to backend position data).
+ * Protocol-agnostic balance hook. Calls backend Manage API to fetch
+ * protocol-specific vault/position balance.
  */
 export function usePositionBalance(
   walletAddress: string | undefined,
@@ -14,20 +13,19 @@ export function usePositionBalance(
   depositAddress: string | undefined,
   category: string | undefined,
   extraData?: Record<string, unknown>,
+  opportunityId?: number,
 ) {
   return useQuery({
     queryKey: ["positionBalance", walletAddress, protocolSlug, depositAddress],
     queryFn: async () => {
-      const adapter = await getAdapter(protocolSlug!);
-      if (!adapter?.getBalance) return null;
-      return adapter.getBalance({
-        walletAddress: walletAddress!,
-        depositAddress: depositAddress!,
-        category: category!,
-        extraData,
+      if (!opportunityId) return null;
+      const { balance } = await api.getBalance({
+        opportunity_id: opportunityId,
+        wallet_address: walletAddress!,
       });
+      return balance;
     },
-    enabled: !!walletAddress && !!protocolSlug && !!depositAddress && !!category,
+    enabled: !!walletAddress && !!protocolSlug && !!depositAddress && !!category && !!opportunityId,
     staleTime: 30_000,
   });
 }

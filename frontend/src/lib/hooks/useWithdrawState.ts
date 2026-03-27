@@ -1,13 +1,12 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import type { WithdrawState } from "@/lib/protocols/types";
-import { getAdapter } from "@/lib/protocols";
+import type { WithdrawState } from "@/lib/tx-types";
+import { api } from "@/lib/api";
 
 /**
- * Protocol-agnostic withdrawal state hook. Delegates to adapter.getWithdrawState()
- * for protocols with multi-step withdrawals (e.g. Drift vault redeem period).
- * Returns null for protocols that don't implement getWithdrawState.
+ * Protocol-agnostic withdrawal state hook. Calls backend Manage API to check
+ * multi-step withdrawal state (e.g. Drift vault redeem period).
  */
 export function useWithdrawState(
   walletAddress: string | undefined,
@@ -15,20 +14,18 @@ export function useWithdrawState(
   depositAddress: string | undefined,
   category: string | undefined,
   extraData?: Record<string, unknown>,
+  opportunityId?: number,
 ) {
   return useQuery<WithdrawState | null>({
     queryKey: ["withdrawState", walletAddress, protocolSlug, depositAddress],
     queryFn: async () => {
-      const adapter = await getAdapter(protocolSlug!);
-      if (!adapter?.getWithdrawState) return null;
-      return adapter.getWithdrawState({
-        walletAddress: walletAddress!,
-        depositAddress: depositAddress!,
-        category: category!,
-        extraData,
+      if (!opportunityId) return null;
+      return api.getWithdrawState({
+        opportunity_id: opportunityId,
+        wallet_address: walletAddress!,
       });
     },
-    enabled: !!walletAddress && !!protocolSlug && !!depositAddress && !!category,
+    enabled: !!walletAddress && !!protocolSlug && !!depositAddress && !!category && !!opportunityId,
     staleTime: 30_000,
   });
 }
