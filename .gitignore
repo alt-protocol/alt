@@ -4,6 +4,10 @@ backend/dist/
 backend/.env
 backend/drizzle/meta/
 
+# MCP Server (Node.js)
+mcp-server/node_modules/
+mcp-server/dist/
+
 # Frontend (Node.js)
 frontend/node_modules/
 frontend/.next/
