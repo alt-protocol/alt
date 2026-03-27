@@ -78,10 +78,15 @@ export async function simulateTransaction(
       replaceRecentBlockhash: true,
     });
 
+    const computeUnits = simResult.value.unitsConsumed ?? null;
+    // Estimate fee: base fee (5000 lamports) + priority fee estimate
+    // Solana base fee = 5000 lamports per signature (typically 1 sig)
+    const fee = computeUnits !== null ? 5000 : null;
+
     return {
       success: simResult.value.err === null,
-      computeUnits: simResult.value.unitsConsumed ?? null,
-      fee: null, // Fee estimation requires commitment level
+      computeUnits,
+      fee,
       error: simResult.value.err
         ? JSON.stringify(simResult.value.err)
         : null,

@@ -10,6 +10,9 @@ import {
   guardOpportunityActive,
   guardAdapterExists,
   guardDepositLimit,
+  guardStablecoinOnly,
+  guardCategoryAllowed,
+  guardProgramWhitelist,
 } from "./guards.js";
 import { logger } from "../../shared/logger.js";
 
@@ -43,6 +46,8 @@ export async function buildTransaction(
   const opp = await discoverService.getOpportunityById(opportunity_id);
   guardOpportunityActive(opp, opportunity_id);
   guardAdapterExists(opp);
+  guardStablecoinOnly(opp);
+  guardCategoryAllowed(opp);
 
   // Load adapter
   const adapter = await getAdapter(opp.protocol!.slug);
@@ -85,5 +90,10 @@ export async function buildTransaction(
       : await adapter.buildWithdrawTx(params);
 
   // Serialize for JSON transport
-  return serializeResult(result);
+  const serialized = serializeResult(result);
+
+  // Post-build guard: verify all programs are known
+  guardProgramWhitelist(serialized.instructions);
+
+  return serialized;
 }
