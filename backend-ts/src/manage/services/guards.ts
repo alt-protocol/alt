@@ -71,7 +71,7 @@ export function guardDepositLimit(amount: string): void {
  * at least one token in the opportunity must be a stablecoin.
  */
 export function guardStablecoinOnly(opp: OpportunityDetail): void {
-  if (process.env.STABLECOIN_ONLY === "false") return;
+  if (process.env.STABLECOIN_ONLY !== "true") return;
 
   const hasStable = opp.tokens.some((t) => STABLECOIN_SYMBOLS.has(t));
   if (!hasStable) {
