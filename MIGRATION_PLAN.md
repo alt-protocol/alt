@@ -1,354 +1,228 @@
-# Unified Node.js Backend + MCP Server
+# Akashi Platform — Modular Monolith with 3 Independent Services
 
 ## Context
 
-Akashi's Python backend (~4,300 lines) handles yield data fetching, position tracking, and API serving. The frontend (TypeScript) builds all transactions via protocol SDKs. The goal is to:
+Akashi is evolving from a simple yield aggregator into a platform with three distinct functions:
+1. **Discover** — find and compare yield opportunities across protocols
+2. **Manage** — build and execute deposit/withdraw transactions
+3. **Monitor** — track portfolio positions, PnL, and events
 
-1. **Migrate** the Python backend to Node.js/TypeScript — single language across the entire stack
-2. **Add transaction building** endpoints so agents can get unsigned transactions
-3. **Create a thin MCP server** that wraps the transaction API for AI agent integration
+These are architecturally independent concerns with separate data models. Building them as 3 independent modules within a modular monolith gives clean boundaries without operational overhead. Each module has its own DB schema, routes, and business logic — no cross-module imports.
 
-This eliminates language switching, enables code sharing (protocol adapters, types), and positions the platform as infrastructure for autonomous yield management at scale.
+Future extensions (out of scope — discussed verbally, architecture supports them as additional modules):
+- **AI Agents** — executor + validator sub-agents (compose Discover + Manage + Monitor)
+- **Social Layer** — strategy sharing, copy trading (new module with own schema)
 
-## Architecture Overview
-
-```
-                    Frontend (Next.js, Vercel)
-                         ↓ HTTP
-Unified Node.js Backend (Railway)
-  ├── Data API (/api/yields, /api/protocols, /api/portfolio)  ← replaces Python
-  ├── Transaction API (/api/tx/build-deposit, /api/tx/submit) ← NEW
-  ├── Background Jobs (yield fetchers, position fetchers)      ← replaces APScheduler
-  └── Protocol Adapters (shared with frontend origin code)
-                         ↓
-                    PostgreSQL (same DB, same schema)
-
-Thin MCP Server (npm package, runs locally on agent's machine)
-  └── Translates MCP tool calls → HTTP requests to backend /api/tx/*
-```
-
-### Non-Custodial MCP Flow
+## Architecture
 
 ```
-Agent                          MCP Server                    Backend                     Solana
-  |                                |                            |                          |
-  |-- list_opportunities --------->|-- GET /api/yields -------->|                          |
-  |<-- yields + APYs -------------|<-- JSON -------------------|                          |
-  |                                |                            |                          |
-  |-- build_deposit(opp, amt) ---->|-- POST /api/tx/build ----->|                          |
-  |                                |                            |-- build unsigned tx ----->|
-  |                                |                            |<-- simulate tx ----------|
-  |<-- unsigned tx + simulation --|<-- JSON -------------------|                          |
-  |                                |                            |                          |
-  |   [agent verifies & signs]     |                            |                          |
-  |                                |                            |                          |
-  |-- submit_transaction(signed)-->|-- POST /api/tx/submit ---->|                          |
-  |                                |                            |-- send to Helius RPC --->|
-  |                                |                            |<-- confirmation ---------|
-  |<-- tx signature + status -----|<-- JSON -------------------|                          |
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+│   Web App   │  │  MCP Server │  │ Mobile App  │  │ Telegram Bot│
+│  (Next.js)  │  │  (~200 LOC) │  │  (future)   │  │  (future)   │
+└──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘
+       └────────────────┴────────────────┴────────────────┘
+                                │
+                    ┌───────────┴───────────┐
+                    │   Modular Monolith    │
+                    │   (Node.js/Fastify)   │
+                    │                       │
+                    │  ┌─────────────────┐  │
+                    │  │    DISCOVER     │  │  /api/discover/*
+                    │  │  yields, protos │  │  schema: discover
+                    │  │  fetcher jobs   │  │
+                    │  └─────────────────┘  │
+                    │  ┌─────────────────┐  │
+                    │  │     MANAGE      │  │  /api/manage/*
+                    │  │  tx build/submit│  │  schema: manage
+                    │  │  protocol SDKs  │  │
+                    │  └─────────────────┘  │
+                    │  ┌─────────────────┐  │
+                    │  │    MONITOR      │  │  /api/monitor/*
+                    │  │  positions, PnL │  │  schema: monitor
+                    │  │  position jobs  │  │
+                    │  └─────────────────┘  │
+                    │                       │
+                    │  shared/ (auth, types)│
+                    └───────────┬───────────┘
+                                │
+                    ┌───────────┴───────────┐
+                    │  PostgreSQL (1 inst)  │
+                    │  3 schemas:           │
+                    │  discover │ manage │  │
+                    │  monitor             │
+                    └───────────────────────┘
 ```
 
-Key: Backend never holds private keys. Signing happens on the agent's side.
+## Module Boundaries
 
-## Tech Stack
+### DISCOVER — "What opportunities exist?"
+**Schema: `discover`**
+- `discover.protocols` — protocol metadata (Kamino, Drift, Jupiter)
+- `discover.yield_opportunities` — live yield data (APY, TVL, risk, deposit_address)
+- `discover.yield_snapshots` — historical APY/TVL time-series
 
-| Concern | Choice | Why |
-|---------|--------|-----|
-| Framework | **Hono** | TypeScript-first, fast, lightweight, works everywhere (Node, Bun, edge) |
-| ORM | **Drizzle** | Type-safe, schema-as-code, lightweight, excellent PostgreSQL support |
-| Validation | **Zod** | TypeScript-first, pairs with Drizzle and Hono |
-| Scheduler | **node-cron** (Phase 1) → **BullMQ** (Phase 2) | Simple cron first, Redis-backed queues when scaling |
-| HTTP client | **Native fetch** + retry wrapper | Node.js 18+ built-in, no deps needed |
-| Rate limiting | **hono-rate-limiter** | Middleware pattern, in-memory → Redis at scale |
-| MCP SDK | **@modelcontextprotocol/sdk** | Official SDK, stdio transport |
+**Routes:** `/api/discover/yields`, `/api/discover/yields/:id`, `/api/discover/yields/:id/history`, `/api/discover/protocols`
+
+**Background jobs:** Yield fetchers (Kamino, Drift, Jupiter) on 15-min cron. **Dependencies:** None — fully independent.
+
+### MANAGE — "Execute a deposit or withdrawal"
+**Schema: `manage`**
+- `manage.api_keys` — API key auth for agent access
+
+**Routes:** `/api/manage/tx/build-deposit`, `/api/manage/tx/build-withdraw`, `/api/manage/tx/submit` (all POST, API key auth)
+
+**Contains:** Protocol adapters (Kamino, Drift, Jupiter SDKs), instruction serializer, safety guards.
+
+**Transaction flow — dual submission:**
+1. Client calls `POST /api/manage/tx/build-deposit` → gets unsigned instructions (+ optional simulation preview)
+2. Client signs locally (wallet, keypair, Privy, Ledger — any custody)
+3. Client chooses submission path:
+   - **Direct:** client submits signed tx to Solana via their own RPC (lower latency, frontend default)
+   - **Via backend:** client sends signed tx to `POST /api/manage/tx/submit` → backend submits via Helius RPC (for MCP agents, bots)
+
+**Simulation is opt-in:**
+- `simulate: true` in build request → response includes preview (balance changes, programs, fee estimate)
+- `simulate: false` (default) → response is just instructions (~200ms faster)
+- Browser wallets already simulate before signing, so frontend skips it. MCP agents pass `simulate: true`.
+
+**Dependencies:** Reads from Discover (`discoverService.getOpportunityById(id)`). Read-only cross-module call.
+
+### MONITOR — "What's in my portfolio?"
+**Schema: `monitor`**
+- `monitor.tracked_wallets` — registered wallets + fetch status
+- `monitor.user_positions` — position snapshots (value, PnL, APY)
+- `monitor.user_position_events` — deposit/withdraw transaction history
+
+**Routes:** `/api/monitor/portfolio/:wallet`, `/api/monitor/portfolio/:wallet/track`, `/api/monitor/portfolio/:wallet/status`, `/api/monitor/portfolio/:wallet/positions`, `/api/monitor/portfolio/:wallet/positions/history`, `/api/monitor/portfolio/:wallet/events`
+
+**Background jobs:** Position fetchers on 15-min cron. **Dependencies:** Reads from Discover (`discoverService.getOpportunityMap()`). Read-only.
+
+## Module Isolation Rules
+
+1. No cross-module table access — each module only queries its own schema
+2. Cross-module reads via service interfaces — defined TypeScript interfaces, not direct DB queries
+3. No cross-module writes — modules never modify another module's data
+4. Shared code in `shared/` — auth middleware, common types, error handling, RPC client
+5. Each module registers its own Fastify plugin — routes, jobs, DB connection are self-contained
+6. Splitting to separate services later = replace service interface calls with HTTP calls
 
 ## Project Structure
 
 ```
-backend-ts/                          # New Node.js backend (replaces backend/)
-  package.json
-  tsconfig.json
-  drizzle.config.ts
-  Dockerfile
+backend-ts/
+  package.json, tsconfig.json, drizzle.config.ts, Dockerfile
   src/
-    index.ts                         # Entry point: start server + scheduler
-    app.ts                           # Hono app with all routes + middleware
+    index.ts                           # Starts Fastify, registers all 3 modules
+    shared/                            # Common code (types, auth, RPC, error handling, rate limiting, constants)
+    discover/                          # MODULE 1
+      index.ts, service.ts, scheduler.ts
+      db/ (schema.ts, connection.ts)
+      routes/ (yields.ts, protocols.ts)
+      services/ (kamino-fetcher.ts, drift-fetcher.ts, jupiter-fetcher.ts, utils.ts)
+    manage/                            # MODULE 2
+      index.ts, service.ts
+      db/ (schema.ts, connection.ts)
+      routes/ (tx.ts)
+      protocols/ (types.ts, kamino.ts, drift.ts, jupiter.ts, index.ts)
+      services/ (tx-builder.ts, tx-preview.ts, instruction-serializer.ts, instruction-converter.ts, guards.ts)
+    monitor/                           # MODULE 3
+      index.ts, service.ts, scheduler.ts
+      db/ (schema.ts, connection.ts)
+      routes/ (portfolio.ts)
+      services/ (kamino-position-fetcher.ts, drift-position-fetcher.ts, jupiter-position-fetcher.ts, utils.ts)
 
-    db/
-      schema.ts                      # Drizzle schema (all 6 tables)
-      index.ts                       # DB connection pool
-      seed.ts                        # Protocol seed data
-
-    api/
-      yields.ts                      # GET /api/yields, /api/yields/:id, /api/yields/:id/history
-      protocols.ts                   # GET /api/protocols
-      portfolio.ts                   # POST /api/portfolio/:wallet/track + 5 GET endpoints
-      tx.ts                          # POST /api/tx/build-deposit, build-withdraw, submit
-      health.ts                      # GET /api/health
-
-    services/
-      kamino-fetcher.ts              # Port from Python (850 lines → ~600 TS)
-      drift-fetcher.ts               # Port from Python (422 lines → ~350 TS)
-      jupiter-fetcher.ts             # Port from Python (340 lines → ~280 TS)
-      kamino-position-fetcher.ts     # Port from Python
-      drift-position-fetcher.ts      # Port from Python
-      jupiter-position-fetcher.ts    # Port from Python
-      utils.ts                       # retry, cache, timestamps, PnL, DB helpers
-
-    protocols/                       # From frontend (shared tx building logic)
-      types.ts
-      kamino.ts
-      drift.ts
-      jupiter.ts
-      index.ts
-
-    lib/
-      rpc.ts                         # Solana RPC singleton
-      instruction-converter.ts       # From frontend (verbatim)
-      tx-builder.ts                  # Build unsigned transactions
-      tx-preview.ts                  # Simulate + describe transactions
-      guards.ts                      # Safety checks (stablecoin, limits)
-      constants.ts                   # Token mints, program IDs
-
-    middleware/
-      rate-limit.ts                  # Per-endpoint rate limiting
-      auth.ts                        # API key auth (for /api/tx/* endpoints)
-      error-handler.ts               # Unified error responses
-
-    scheduler.ts                     # Cron jobs (yield + position fetchers)
-
-mcp-server/                          # Thin MCP wrapper (~200 lines)
-  package.json
-  tsconfig.json
-  src/
-    index.ts                         # stdio entry point
-    server.ts                        # Tool definitions → HTTP calls to backend
+mcp-server/                            # Thin MCP wrapper (~200 lines)
+  src/ (index.ts, server.ts)
 ```
 
-## Database Migration
+## Tech Stack
 
-**Same PostgreSQL, same 6 tables, same schema.** Drizzle connects to the existing database. No data migration needed.
+| Concern | Choice |
+|---------|--------|
+| Framework | **Fastify** (each module = Fastify plugin) |
+| ORM | **Drizzle** (per-schema connections) |
+| Validation | **Zod** via `fastify-type-provider-zod` |
+| Scheduler | **node-cron** → **BullMQ** at scale |
+| MCP SDK | **@modelcontextprotocol/sdk** |
 
-**Migration strategy:** Use Drizzle's `drizzle-kit pull` to introspect the existing DB and generate the schema file, ensuring exact match.
+## Migration Strategy
 
-## API Endpoints (100% backward compatible)
-
-### Existing endpoints (same contract as Python):
-
-| Endpoint | Method | Rate limit | Notes |
-|----------|--------|-----------|-------|
-| `/api/yields` | GET | 60/min | Same query params: category, sort, tokens, vault_tag, stablecoins_only, limit, offset |
-| `/api/yields/:id` | GET | 60/min | Same response with deposit_address, extra_data, protocol, recent_snapshots |
-| `/api/yields/:id/history` | GET | 60/min | Same: period (7d/30d/90d), limit, offset |
-| `/api/protocols` | GET | 60/min | Same response |
-| `/api/portfolio/:wallet/track` | POST | 5/min | Same background fetch pattern |
-| `/api/portfolio/:wallet/status` | GET | 60/min | Same fetch_status response |
-| `/api/portfolio/:wallet/positions` | GET | 60/min | Same filters, latest snapshot logic |
-| `/api/portfolio/:wallet/positions/history` | GET | 60/min | Same bucketing (1h/4h/12h) |
-| `/api/portfolio/:wallet/events` | GET | 60/min | Same event history |
-| `/api/portfolio/:wallet` | GET | 30/min | Same Helius RPC token balance fetch |
-| `/api/health` | GET | — | Same DB check |
-
-### New transaction endpoints:
-
-| Endpoint | Method | Auth | Purpose |
-|----------|--------|------|---------|
-| `/api/tx/build-deposit` | POST | API key | Build unsigned deposit transaction |
-| `/api/tx/build-withdraw` | POST | API key | Build unsigned withdraw transaction |
-| `/api/tx/submit` | POST | API key | Submit signed transaction via RPC |
-| `/api/tx/simulate` | POST | API key | Simulate a transaction (optional standalone) |
-
-### Transaction API request/response:
-
-**POST `/api/tx/build-deposit`**
-```json
-// Request
-{
-  "opportunity_id": 42,
-  "amount": "100",
-  "wallet_address": "7xKX..."
-}
-
-// Response
-{
-  "unsigned_transaction": "<base64 serialized tx>",
-  "preview": {
-    "description": "Deposit 100 USDC into Kamino USDC Vault",
-    "protocol": "Kamino",
-    "category": "vault",
-    "programs_involved": [
-      { "name": "Kamino Vault Program", "address": "kvau..." }
-    ],
-    "expected_balance_changes": [
-      { "token": "USDC", "change": "-100.00" },
-      { "token": "kUSDC", "change": "+99.85" }
-    ],
-    "simulation_status": "success",
-    "estimated_fee_sol": "0.000005"
-  }
-}
-```
-
-**POST `/api/tx/submit`**
-```json
-// Request
-{ "signed_transaction": "<base64 signed tx>" }
-
-// Response
-{ "signature": "5xYz...", "status": "confirmed" }
-```
-
-## Service Migration Map
-
-### Yield Fetchers
-
-| Python | TypeScript | Key changes |
-|--------|-----------|-------------|
-| `kamino_fetcher.py` (850 lines) | `kamino-fetcher.ts` (~600 lines) | `httpx` → native `fetch`, `tenacity` → custom retry, `safe_float` → TS helper |
-| `drift_fetcher.py` (422 lines) | `drift-fetcher.ts` (~350 lines) | `solders.Pubkey.find_program_address` → `@solana/kit` `getProgramDerivedAddress` |
-| `jupiter_fetcher.py` (340 lines) | `jupiter-fetcher.ts` (~280 lines) | Straightforward port, simplest fetcher |
-
-### Position Fetchers
-
-| Python | TypeScript | Key changes |
-|--------|-----------|-------------|
-| `kamino_position_fetcher.py` (700 lines) | `kamino-position-fetcher.ts` (~550 lines) | Modified Dietz PnL logic preserved exactly |
-| `drift_position_fetcher.py` (500 lines) | `drift-position-fetcher.ts` (~400 lines) | IF vault PDA derivation → `@solana/kit` |
-| `jupiter_position_fetcher.py` (400 lines) | `jupiter-position-fetcher.ts` (~320 lines) | ATA derivation → `@solana/kit` |
-
-### Shared Utilities
-
-| Python function | TypeScript equivalent |
-|----------------|----------------------|
-| `safe_float(val)` | `safeFloat(val: unknown): number \| null` |
-| `get_with_retry(url, client)` | `fetchWithRetry(url, opts)` using native fetch + retry logic |
-| `get_or_none(url, client)` | `fetchOrNull(url, opts)` |
-| `cached(key, ttl, fn)` | `cached<T>(key, ttlMs, fn)` with Map + TTL |
-| `parse_timestamp(ts)` | `parseTimestamp(ts: string \| number): Date \| null` |
-| `compute_realized_apy(pnl, deposit, days)` | `computeRealizedApy(pnl, deposit, days): number \| null` |
-| `load_opportunity_map(db)` | `loadOpportunityMap(db)` with Drizzle queries |
-| `store_position_rows(db, positions, ts)` | `storePositionRows(db, positions, ts)` with Drizzle insert |
-| `upsert_opportunity(db, ...)` | `upsertOpportunity(db, ...)` with Drizzle upsert |
-
-## Protocol Adapters (Transaction Building)
-
-Adapted from `frontend/src/lib/protocols/` for server-side use:
-
-**Changes from frontend versions:**
-1. Accept `walletAddress: string` instead of `TransactionSendingSigner` (build unsigned tx, no signer needed at build time)
-2. Remove `"use client"` directives
-3. Replace `@/lib/*` imports with local imports
-4. Replace `NEXT_PUBLIC_*` env vars with server env vars
-5. Remove Kamino multiply support (blocked by guards for agents)
-
-**Files to adapt:**
-- `frontend/src/lib/protocols/types.ts` → `backend-ts/src/protocols/types.ts`
-- `frontend/src/lib/protocols/kamino.ts` → vault + lending only
-- `frontend/src/lib/protocols/drift.ts` → insurance fund + vault
-- `frontend/src/lib/protocols/jupiter.ts` → earn/lending
-- `frontend/src/lib/instruction-converter.ts` → copy verbatim
-- `frontend/src/lib/transaction-utils.ts` → extract `buildTransactionMessage`
-
-## Safety Guards
-
-Applied to all `/api/tx/*` endpoints:
-
-1. **API key authentication** — agents must register for a key
-2. **Stablecoin-only** — reject opportunities without USDC/USDT/USDS
-3. **Category blocklist** — `multiply` blocked (configurable)
-4. **Per-tx spend limit** — `MCP_MAX_DEPOSIT_USD` (default $1000)
-5. **Simulation before return** — every build endpoint simulates; fail fast
-6. **Program verification** — validate instruction program IDs match known protocols
-
-## MCP Server (Thin Wrapper)
-
-~200 lines total. Zero protocol SDKs, zero RPC connections.
-
-**Tools:**
-
-| Tool | HTTP call |
-|------|----------|
-| `list_opportunities` | `GET /api/yields?stablecoins_only=true` |
-| `get_opportunity_details` | `GET /api/yields/:id` |
-| `get_positions` | `GET /api/portfolio/:wallet/positions` |
-| `get_wallet_balance` | `GET /api/portfolio/:wallet` |
-| `build_deposit` | `POST /api/tx/build-deposit` |
-| `build_withdraw` | `POST /api/tx/build-withdraw` |
-| `submit_transaction` | `POST /api/tx/submit` |
-
-**Config:** Just needs `AKASHI_API_URL` and `AKASHI_API_KEY` env vars.
-
-## Environment Variables (backend-ts)
+Same repo, parallel backends. `backend-ts/` alongside `backend/`.
 
 ```
-DATABASE_URL=postgresql://...
-HELIUS_API_KEY=...
-HELIUS_RPC_URL=https://mainnet.helius-rpc.com/?api-key=...
-JUPITER_API_KEY=...                    # optional, higher rate limits
-CORS_ORIGINS=http://localhost:3000     # comma-separated
-PORT=8000
-MCP_MAX_DEPOSIT_USD=1000               # per-tx limit for agent endpoints
-MCP_BLOCKED_CATEGORIES=multiply        # comma-separated
+During migration:
+  backend/       ← Python (port 8000, production)
+  backend-ts/    ← Node.js (port 8001, development)
+  frontend/      ← Points to 8000, switch to 8001 for testing
+  mcp-server/    ← Added in Phase 5
 ```
 
 ## Implementation Phases
 
-### Phase 1: Backend scaffold + data API (replaces Python)
+### Phase 1: Scaffold + Discover module (~1.5 weeks)
 1. Create `backend-ts/` with package.json, tsconfig, Dockerfile
-2. Set up Drizzle with `drizzle-kit pull` from existing DB
-3. Port `api/yields.ts`, `api/protocols.ts`, `api/health.ts`
-4. Port `services/utils.ts` (retry, cache, timestamps, PnL)
-5. Port `api/portfolio.ts` (all 6 endpoints)
-6. Set up scheduler with node-cron
-7. Port yield fetchers (kamino → drift → jupiter)
-8. Port position fetchers
-9. **Verify:** all existing frontend calls work against new backend
+2. Set up Fastify with plugin architecture
+3. Create `shared/` (auth, types, RPC, error handling)
+4. Set up Drizzle with `discover` schema — pull existing tables
+5. Port `discover/` module: routes + services (3 yield fetchers) + scheduler
+6. **Verify:** `/api/discover/yields` matches Python `/api/yields`
 
-### Phase 2: Transaction building API
-1. Copy + adapt protocol adapters from frontend
-2. Create `tx-builder.ts`, `tx-preview.ts`, `guards.ts`
-3. Create `api/tx.ts` with build-deposit, build-withdraw, submit endpoints
-4. Add API key auth middleware
-5. **Verify:** build unsigned tx, sign externally, submit, confirm on-chain
+### Phase 2: Monitor module (~1 week)
+1. Set up Drizzle with `monitor` schema — pull existing tables
+2. Port `monitor/` module: routes + services (3 position fetchers) + scheduler
+3. Wire cross-module read: Monitor reads from Discover service interface
+4. **Verify:** `/api/monitor/portfolio/:w/positions` matches Python
 
-### Phase 3: MCP server
-1. Create `mcp-server/` with minimal deps
-2. Register 7 tools mapping to backend HTTP endpoints
-3. Test with MCP Inspector
-4. Test with Claude Desktop
-5. **Verify:** full agent flow (discover → build → sign → submit)
+### Phase 3: Manage module (~1 week)
+1. Set up Drizzle with `manage` schema (api_keys table)
+2. Move protocol adapters from frontend → `manage/protocols/`
+3. Create tx-builder, instruction-serializer, guards, tx-preview
+4. Create routes: build-deposit, build-withdraw, submit, simulate
+5. Wire cross-module read: Manage reads from Discover service interface
+6. **Verify:** POST build-deposit returns valid unsigned instructions
 
-### Phase 4: Deploy + cut over
+### Phase 4: Frontend migration (~3-5 days)
+1. Update API client URLs (`/api/yields` → `/api/discover/yields`, etc.)
+2. Add instruction deserializer (JSON → @solana/kit Instruction)
+3. Replace protocol adapter calls with `/api/manage/tx/*` API calls
+4. Remove protocol SDK dependencies from package.json
+5. Delete: `frontend/src/lib/protocols/`, `jupiter-swap.ts`, `multiply-luts.ts`
+6. **Verify:** all flows work through new API
+
+### Phase 5: MCP server (~2-3 days)
+1. Create `mcp-server/` (~200 lines)
+2. Register 7 tools → HTTP calls to discover/manage/monitor endpoints
+3. Test with MCP Inspector + Claude Desktop
+
+### Phase 6: Deploy + cut over (~2-3 days)
 1. Deploy `backend-ts` to Railway alongside Python backend
 2. Run both in parallel, compare responses
-3. Switch frontend `NEXT_PUBLIC_API_URL` to new backend
-4. Retire Python backend
-5. Publish MCP server as npm package
+3. Switch frontend, retire Python backend
+4. Rename `backend-ts/` → `backend/`
+5. **CLAUDE.md:** Full rewrite for new architecture
 
 ## Key Files to Reference
 
-**Python backend (source of truth for business logic):**
-- `backend/app/services/kamino_fetcher.py` — most complex fetcher
-- `backend/app/services/utils.py` — shared utility patterns
-- `backend/app/routers/portfolio.py` — most complex router (438 lines)
-- `backend/app/routers/yields.py` — query/filter/sort logic
-- `backend/app/models/` — all table definitions
-- `backend/app/schemas/__init__.py` — all response types
+**Python backend (port source):**
+- `backend/app/services/kamino_fetcher.py` → `discover/services/`
+- `backend/app/services/utils.py` → split into `discover/services/utils.ts` + `monitor/services/utils.ts`
+- `backend/app/routers/portfolio.py` → `monitor/routes/`
+- `backend/app/routers/yields.py` → `discover/routes/`
+- `backend/app/models/` → split across 3 schema files
+- `backend/app/schemas/__init__.py` → Zod schemas per module
 
-**Frontend (source for protocol adapters):**
-- `frontend/src/lib/protocols/types.ts` — ProtocolAdapter interface
-- `frontend/src/lib/protocols/kamino.ts` — Kamino adapter
-- `frontend/src/lib/protocols/drift.ts` — Drift adapter
-- `frontend/src/lib/protocols/jupiter.ts` — Jupiter adapter
-- `frontend/src/lib/hooks/useTransaction.ts` — tx lifecycle to extract
-- `frontend/src/lib/instruction-converter.ts` — copy verbatim
-- `frontend/src/lib/transaction-utils.ts` — buildTransactionMessage
+**Frontend (adapter source):**
+- `frontend/src/lib/protocols/*.ts` → `manage/protocols/`
+- `frontend/src/lib/instruction-converter.ts` → `manage/services/`
+- `frontend/src/lib/hooks/useTransaction.ts` — stays on frontend
+- `frontend/src/components/DepositWithdrawPanel.tsx` — changes to call API
 
 ## Verification Plan
 
-1. **Data API parity:** Run Python and Node.js backends side-by-side, compare responses for every endpoint with same inputs
-2. **Fetcher parity:** Compare yield data ingested by both backends after one cron cycle
-3. **Position parity:** Track same wallet, compare position snapshots
-4. **Transaction flow:** build-deposit → sign with test wallet → submit → verify on-chain
-5. **MCP flow:** Claude Desktop → list opportunities → build deposit → sign → submit → check position
-6. **Load test:** verify Node.js backend handles target throughput
+1. **Discover parity:** compare yield/protocol responses with Python backend
+2. **Monitor parity:** compare portfolio/position responses with Python backend
+3. **Manage tx build:** POST build-deposit → valid unsigned instructions
+4. **End-to-end:** discover → build → sign → submit → monitor position
+5. **MCP flow:** Claude Desktop → all 7 tools work
+6. **Module isolation:** verify no cross-schema DB queries
+7. **Frontend:** all pages work with new API routes

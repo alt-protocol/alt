@@ -1,361 +1,126 @@
 ---
 name: add-protocol
-description: Scaffold a complete protocol integration across backend fetcher, position fetcher, main.py registrations, frontend adapter, and adapter registry
+description: Scaffold a complete protocol integration across Discover (yield fetcher), Monitor (position fetcher), and Manage (tx adapter)
 user_invocable: true
 ---
 
 # Add Protocol Integration
 
-Scaffold a new protocol integration for Akashi. This creates 4 files and updates 2 registrations.
+Scaffold a new protocol integration for Akashi. Creates files across 3 backend modules + registrations.
+
+> **Architecture:** The backend is a modular monolith with 3 modules: Discover (yield data), Manage (tx building), Monitor (positions). See `MIGRATION_PLAN.md`.
+> If `backend-ts/` doesn't exist yet, use the legacy Python backend pattern (see `backend/CLAUDE.md`).
 
 **Ask the user for:** protocol name, slug, API base URL, description, website URL, audit status, and auditors.
 
 ---
 
-## Step 1: Backend yield fetcher
+## For Node.js backend (`backend-ts/`)
 
-Create `backend/app/services/{slug}_fetcher.py`:
+### Step 1: Discover — yield fetcher
 
-```python
-"""Fetch live yield data from {Name} API."""
-import logging
-from datetime import datetime, timezone
-from typing import Optional
-
-import httpx
-from sqlalchemy.orm import Session
-
-from app.models.base import SessionLocal
-from app.models.protocol import Protocol
-from app.services.utils import safe_float, get_or_none, upsert_opportunity
-
-logger = logging.getLogger(__name__)
-
-{SLUG}_API = "{api_base_url}"
-
-_float = safe_float
-
-
-def _get(path: str, client: httpx.Client) -> Optional[dict | list]:
-    return get_or_none(f"{{{SLUG}_API}}{{path}}", client, log_label="{Name} API")
-
-
-def _risk_tier(symbol: str) -> str:
-    # TODO: classify tokens by risk
-    return "medium"
-
-
-def fetch_{slug}_yields() -> int:
-    """Fetch {Name} yield opportunities. Returns count updated/inserted."""
-    logger.info("Starting {Name} yield fetch")
-    now = datetime.now(timezone.utc)
-
-    db: Session = SessionLocal()
-    try:
-        protocol = db.query(Protocol).filter(Protocol.slug == "{slug}").first()
-        if not protocol:
-            logger.error("Protocol '{slug}' not found in DB — run seed first")
-            return 0
-
-        with httpx.Client() as client:
-            # TODO: fetch opportunities from API
-            raw = _get("/endpoint", client)
-            if not isinstance(raw, list):
-                logger.error("Unexpected {Name} API response")
-                return 0
-
-            count = 0
-            for entry in raw:
-                external_id = f"{slug}-{{entry.get('id', '')}}"
-                opp = upsert_opportunity(
-                    db, protocol, external_id,
-                    name=f"{Name} — {{entry.get('name', '')}}",
-                    category="vault",  # or lending, pool, etc.
-                    tokens=[],  # fill from API
-                    apy_current=_float(entry.get("apy")),
-                    tvl_usd=_float(entry.get("tvl")),
-                    deposit_address=entry.get("address"),
-                    risk_tier=_risk_tier(""),
-                    extra={
-                        "source": "{slug}_api",
-                        "protocol_url": "{website_url}",
-                    },
-                    now=now,
-                    source="{slug}_api",
-                )
-                count += 1
-
-        db.commit()
-        logger.info("{Name} fetch complete: %d opportunities", count)
-        return count
-
-    except Exception as exc:
-        db.rollback()
-        logger.error("{Name} fetch failed: %s", exc)
-        raise
-    finally:
-        db.close()
-```
-
-**Key patterns:**
-- Import `safe_float`, `get_or_none`, `upsert_opportunity` from `app.services.utils`
-- Alias: `_float = safe_float`
-- Private `_get()` wraps `get_or_none` with base URL and log label
-- Private `_risk_tier()` classifies tokens
-- Main function: `SessionLocal()` in try/finally, load protocol row, `httpx.Client()`, call `upsert_opportunity()`, commit
-- Functions ≤ 80 lines — extract helpers with `_` prefix
-- Use `extra_data` for protocol-specific fields, never add columns
-- Deactivate stale entries with `is_active=False`, never delete
-
----
-
-## Step 2: Backend position fetcher
-
-Create `backend/app/services/{slug}_position_fetcher.py`:
-
-```python
-"""Fetch user positions from {Name} and store snapshots."""
-import logging
-from datetime import datetime, timezone
-from typing import Optional
-
-import httpx
-from sqlalchemy.orm import Session
-
-from app.models.base import SessionLocal
-from app.models.user_position import TrackedWallet
-from app.models.yield_opportunity import YieldOpportunity
-from app.services.utils import safe_float, get_or_none, cached, parse_timestamp, store_position_rows
-
-logger = logging.getLogger(__name__)
-
-{SLUG}_API = "{api_base_url}"
-
-_float = safe_float
-_cached = cached
-_parse_timestamp = parse_timestamp
-
-
-def _get(path: str, client: httpx.Client) -> Optional[dict | list]:
-    return get_or_none(f"{{{SLUG}_API}}{{path}}", client, log_label="{Name} API")
-
-
-def _match_opportunity_by_external(external_id: str, db: Session) -> Optional[tuple[int, float | None]]:
-    """Find YieldOpportunity by external_id. Returns (id, apy) or None."""
-    opp = (
-        db.query(YieldOpportunity.id, YieldOpportunity.apy_current)
-        .filter(
-            YieldOpportunity.external_id == external_id,
-            YieldOpportunity.is_active.is_(True),
-        )
-        .first()
-    )
-    if opp:
-        return opp.id, float(opp.apy_current) if opp.apy_current is not None else None
-    return None
-
-
-def fetch_wallet_positions(wallet_address: str, db: Session) -> dict:
-    """Fetch all {Name} positions for a wallet. Returns dict with positions list."""
-    now = datetime.now(timezone.utc)
-
-    with httpx.Client() as client:
-        # TODO: fetch positions from API
-        positions = []
-
-    total_value_usd = sum(_float(p.get("deposit_amount_usd")) or 0 for p in positions)
-    total_pnl_usd = sum(_float(p.get("pnl_usd")) or 0 for p in positions if p.get("pnl_usd") is not None)
-
-    return {
-        "wallet": wallet_address,
-        "positions": positions,
-        "events": [],
-        "summary": {
-            "total_value_usd": total_value_usd,
-            "total_pnl_usd": total_pnl_usd,
-            "position_count": len(positions),
-        },
-    }
-
-
-def snapshot_all_wallets(db: Session, snapshot_at: datetime | None = None) -> int:
-    """Iterate all active TrackedWallets, fetch {Name} positions, store snapshots."""
-    wallets = (
-        db.query(TrackedWallet)
-        .filter(TrackedWallet.is_active.is_(True))
-        .all()
-    )
-    if not wallets:
-        logger.info("No tracked wallets for {Name} snapshot")
-        return 0
-
-    logger.info("Snapshotting {Name} positions for %d wallets", len(wallets))
-    now = snapshot_at or datetime.now(timezone.utc)
-    total_snapshots = 0
-
-    with httpx.Client() as client:
-        for wallet in wallets:
-            try:
-                result = fetch_wallet_positions(wallet.wallet_address, db)
-                total_snapshots += store_position_rows(db, result["positions"], now)
-                wallet.last_fetched_at = now
-                db.flush()
-
-                logger.info(
-                    "{Name} wallet %s: %d positions snapshotted",
-                    wallet.wallet_address[:8],
-                    len(result["positions"]),
-                )
-            except Exception as exc:
-                logger.error(
-                    "Failed to snapshot {Name} wallet %s: %s",
-                    wallet.wallet_address[:8],
-                    exc,
-                )
-                continue
-
-    db.commit()
-    logger.info("{Name} position snapshot complete: %d total snapshots", total_snapshots)
-    return total_snapshots
-```
-
-**Key patterns:**
-- Must expose: `snapshot_all_wallets(db, snapshot_at) → int` and `fetch_wallet_positions(wallet, db) → dict`
-- Import `safe_float, get_or_none, cached, parse_timestamp, store_position_rows` from utils
-- Aliases: `_float = safe_float`, `_cached = cached`, `_parse_timestamp = parse_timestamp`
-- Private `_get()` wrapper, `_match_opportunity_by_external()` helper
-- Position dict must include: `wallet_address`, `protocol_slug`, `product_type`, `external_id`, `opportunity_id`, `deposit_amount`, `deposit_amount_usd`, `pnl_usd`, `pnl_pct`, `initial_deposit_usd`, `opened_at`, `held_days`, `apy`, `is_closed`, `token_symbol`, `extra_data`, `snapshot_at`
-- Background jobs own their DB session — `SessionLocal()`, try/finally close
-
----
-
-## Step 3: Register in `backend/app/main.py`
-
-Three changes needed:
-
-### 3a. Add import and register yield fetcher
-```python
-from app.services.{slug}_fetcher import fetch_{slug}_yields  # noqa: E402
-from app.services.{slug}_position_fetcher import snapshot_all_wallets as snapshot_all_wallets_{slug}  # noqa: E402
-```
-
-Add `fetch_{slug}_yields` to the `YIELD_FETCHERS` list.
-
-### 3b. Add to `snapshot_all_positions_job()`
-```python
-{slug}_count = snapshot_all_wallets_{slug}(db, snapshot_at=now)
-```
-Update the logger.info call to include the new count.
-
-### 3c. Add seed protocol entry
-Add to `SEED_PROTOCOLS` list:
-```python
-{
-    "slug": "{slug}",
-    "name": "{Name}",
-    "description": "{description}",
-    "website_url": "{website_url}",
-    "audit_status": "{audit_status}",
-    "auditors": {auditors},
-    "integration": "full",
-},
-```
-
----
-
-## Step 4: Frontend adapter
-
-Create `frontend/src/lib/protocols/{slug}.ts`:
+Create `backend-ts/src/discover/services/{slug}-fetcher.ts`:
 
 ```typescript
-import type { Instruction } from "@solana/kit";
-import type { ProtocolAdapter, BuildTxParams, BuildTxResult } from "./types";
-import { HELIUS_RPC_URL } from "../constants";
+import { fetchWithRetry, fetchOrNull } from './utils';
+import { upsertOpportunity } from './utils';
+import type { DrizzleDB } from '../db/connection';
 
-// If the protocol SDK uses legacy @solana/web3.js:
-import { convertLegacyInstruction as convertIx } from "../instruction-converter";
+const API_BASE = '{api_base_url}';
 
-async function buildDeposit(params: BuildTxParams): Promise<Instruction[]> {
-  // TODO: load protocol SDK, build deposit instructions
-  // Use convertIx() to convert legacy web3.js instructions to @solana/kit format
-  throw new Error("{Name} deposit not yet implemented");
+export async function fetch{Name}Yields(db: DrizzleDB): Promise<number> {
+  // Fetch yield data from protocol API
+  // Use upsertOpportunity() to create/update in discover schema
+  // Return count of opportunities updated
+  return 0;
+}
+```
+
+Register in `backend-ts/src/discover/scheduler.ts`.
+
+### Step 2: Monitor — position fetcher
+
+Create `backend-ts/src/monitor/services/{slug}-position-fetcher.ts`:
+
+```typescript
+import type { DrizzleDB } from '../db/connection';
+
+export async function snapshotAllWallets(db: DrizzleDB, snapshotAt: Date): Promise<number> {
+  // Fetch positions for all tracked wallets
+  // Store via storePositionRows()
+  return 0;
 }
 
-async function buildWithdraw(params: BuildTxParams): Promise<Instruction[]> {
-  // TODO: load protocol SDK, build withdraw instructions
-  throw new Error("{Name} withdraw not yet implemented");
+export async function fetchWalletPositions(wallet: string, db: DrizzleDB) {
+  // Fetch positions for a single wallet
+  return { positions: [], events: [] };
 }
+```
+
+Register in `backend-ts/src/monitor/scheduler.ts`.
+
+### Step 3: Manage — protocol adapter
+
+Create `backend-ts/src/manage/protocols/{slug}.ts`:
+
+```typescript
+import type { ProtocolAdapter, BuildTxParams, SerializableInstruction } from './types';
 
 export const {slug}Adapter: ProtocolAdapter = {
-  async buildDepositTx(params) {
-    return buildDeposit(params);
+  async buildDepositInstructions(params: BuildTxParams): Promise<SerializableInstruction[]> {
+    // Build unsigned deposit instructions using protocol SDK
+    // Return JSON-serializable instruction format
+    throw new Error('{Name} deposit not yet implemented');
   },
 
-  async buildWithdrawTx(params) {
-    return buildWithdraw(params);
+  async buildWithdrawInstructions(params: BuildTxParams): Promise<SerializableInstruction[]> {
+    throw new Error('{Name} withdraw not yet implemented');
   },
-
-  // Optional: protocol-specific balance fetching (e.g. vault shares → USD)
-  // async getBalance({ walletAddress, depositAddress, category }) {
-  //   return null;
-  // },
 };
 ```
 
-**Key patterns:**
-- Implement `ProtocolAdapter` from `./types`
-- `buildDepositTx` and `buildWithdrawTx` return `Promise<BuildTxResult>` (either `Instruction[]` or `BuildTxResultWithLookups`)
-- Optional `getBalance` method for protocol-specific balance fetching (e.g. vault share → USD conversion)
-- Use `convertLegacyInstruction` from `../instruction-converter` if SDK uses legacy web3.js
-- Dynamic import SDKs to avoid bundling at compile time
-- Export as `{slug}Adapter`
-- Never sign or submit — only build instructions (non-custodial constraint)
-- Category-specific UI is handled by the category registry — no UI changes needed when adding a protocol to an existing category
-- Currently all protocols are Solana-based. When multi-chain support is added, the adapter will need a `chain` field and chain-specific signer/instruction types
+Register in `backend-ts/src/manage/protocols/index.ts`.
 
----
+### Step 4: Seed protocol
 
-## Step 5: Register frontend adapter
-
-Edit `frontend/src/lib/protocols/index.ts`:
-
-### 5a. Add slug to SUPPORTED_ADAPTERS
+Add to `backend-ts/src/discover/db/seed.ts`:
 ```typescript
-const SUPPORTED_ADAPTERS = new Set(["kamino", "jupiter", "drift", "{slug}"]);
+{ slug: '{slug}', name: '{Name}', description: '...', websiteUrl: '...', auditStatus: '...', auditors: [...], integration: 'full' }
 ```
 
-### 5b. Add lazy-load block in `getAdapter()`
-```typescript
-if (key === "{slug}") {
-  const { {slug}Adapter } = await import("./{slug}");
-  adapterCache.set(key, {slug}Adapter);
-  return {slug}Adapter;
-}
-```
+### Step 5: Verify
+
+1. Health check: `curl http://localhost:8001/api/health`
+2. Frontend build: `cd frontend && npm run build`
+3. Manual fetcher test: run the fetcher function directly
 
 ---
 
-## Step 6: Verify category compatibility
+## For legacy Python backend (`backend/`) — if `backend-ts/` doesn't exist yet
 
-Ensure the protocol's yield categories are already registered in the category registry (`frontend/src/lib/categories/`). If the protocol introduces a new category, run the `add-category` skill first.
+### Step 1: Backend yield fetcher
+Create `backend/app/services/{slug}_fetcher.py` — see `backend/CLAUDE.md` for the fetcher pattern (import utils, _get wrapper, upsert_opportunity).
 
----
+### Step 2: Backend position fetcher
+Create `backend/app/services/{slug}_position_fetcher.py` — must expose `snapshot_all_wallets(db, snapshot_at)` and `fetch_wallet_positions(wallet, db)`.
 
-## Step 7: Verify
+### Step 3: Register in `backend/app/main.py`
+- Import fetcher + position fetcher
+- Add to `YIELD_FETCHERS` list
+- Add to `snapshot_all_positions_job()`
+- Add seed entry to `SEED_PROTOCOLS`
 
-1. **Backend health check:** `curl http://localhost:8000/api/health` → `{"status":"ok"}`
-2. **Frontend build:** `cd frontend && npm run build` → no errors
-3. **Manual fetcher test:** `cd backend && python -c "from app.services.{slug}_fetcher import fetch_{slug}_yields; fetch_{slug}_yields()"`
-4. Update the protocol table in root `CLAUDE.md` (Protocol Integrations section)
+### Step 4: Frontend adapter (temporary — will move to backend)
+Create `frontend/src/lib/protocols/{slug}.ts` implementing `ProtocolAdapter` from `./types`.
+Register in `frontend/src/lib/protocols/index.ts` (SUPPORTED_ADAPTERS + getAdapter).
 
 ---
 
 ## Checklist
 
-- [ ] `backend/app/services/{slug}_fetcher.py` — yield fetcher
-- [ ] `backend/app/services/{slug}_position_fetcher.py` — position fetcher
-- [ ] `backend/app/main.py` — import, YIELD_FETCHERS, snapshot_all_positions_job, SEED_PROTOCOLS
-- [ ] `frontend/src/lib/protocols/{slug}.ts` — adapter
-- [ ] `frontend/src/lib/protocols/index.ts` — SUPPORTED_ADAPTERS + getAdapter()
+- [ ] Discover: yield fetcher created + registered in scheduler
+- [ ] Monitor: position fetcher created + registered in scheduler
+- [ ] Manage: protocol adapter created + registered
+- [ ] Protocol seed entry added
 - [ ] Health check passes
 - [ ] Frontend builds
