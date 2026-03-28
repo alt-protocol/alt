@@ -47,6 +47,17 @@ export async function buildApp() {
     }
   });
 
+  // Temporary diagnostic endpoint — check monitor schema columns
+  app.get("/api/debug/schema", async () => {
+    const result = await db.execute(sql`
+      SELECT table_name, column_name, data_type
+      FROM information_schema.columns
+      WHERE table_schema = 'monitor'
+      ORDER BY table_name, ordinal_position
+    `);
+    return result.rows;
+  });
+
   // Discover module
   await app.register(discoverPlugin, { prefix: "/api/discover" });
 

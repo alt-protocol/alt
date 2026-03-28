@@ -59,39 +59,44 @@ async function latestPositions(
   protocol?: string,
   productType?: string,
 ) {
-  const latestSub = db
-    .select({
-      protocol_slug: userPositions.protocol_slug,
-      latest_at: sql<Date>`MAX(${userPositions.snapshot_at})`.as("latest_at"),
-    })
-    .from(userPositions)
-    .where(eq(userPositions.wallet_address, walletAddress))
-    .groupBy(userPositions.protocol_slug)
-    .as("latest_sub");
+  try {
+    const latestSub = db
+      .select({
+        protocol_slug: userPositions.protocol_slug,
+        latest_at: sql<Date>`MAX(${userPositions.snapshot_at})`.as("latest_at"),
+      })
+      .from(userPositions)
+      .where(eq(userPositions.wallet_address, walletAddress))
+      .groupBy(userPositions.protocol_slug)
+      .as("latest_sub");
 
-  let query = db
-    .select({ pos: userPositions })
-    .from(userPositions)
-    .innerJoin(
-      latestSub,
-      and(
-        eq(userPositions.protocol_slug, latestSub.protocol_slug),
-        eq(userPositions.snapshot_at, latestSub.latest_at),
-        eq(userPositions.wallet_address, walletAddress),
-      ),
-    );
+    let query = db
+      .select({ pos: userPositions })
+      .from(userPositions)
+      .innerJoin(
+        latestSub,
+        and(
+          eq(userPositions.protocol_slug, latestSub.protocol_slug),
+          eq(userPositions.snapshot_at, latestSub.latest_at),
+          eq(userPositions.wallet_address, walletAddress),
+        ),
+      );
 
-  const allConditions = [];
-  if (protocol)
-    allConditions.push(eq(userPositions.protocol_slug, protocol));
-  if (productType)
-    allConditions.push(eq(userPositions.product_type, productType));
-  if (allConditions.length > 0) {
-    query = query.where(and(...allConditions)) as typeof query;
+    const allConditions = [];
+    if (protocol)
+      allConditions.push(eq(userPositions.protocol_slug, protocol));
+    if (productType)
+      allConditions.push(eq(userPositions.product_type, productType));
+    if (allConditions.length > 0) {
+      query = query.where(and(...allConditions)) as typeof query;
+    }
+
+    const result = await query;
+    return result.map((r) => r.pos);
+  } catch (err) {
+    logger.error({ err, wallet: walletAddress.slice(0, 8) }, "latestPositions query failed");
+    throw err;
   }
-
-  const result = await query;
-  return result.map((r) => r.pos);
 }
 
 // ---------------------------------------------------------------------------
