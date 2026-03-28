@@ -149,6 +149,56 @@ async function fetchVaultApys(): Promise<
 }
 
 // ---------------------------------------------------------------------------
+// Insurance Fund — historical share-price-based APY
+// ---------------------------------------------------------------------------
+
+async function fetchIfRecordsForDate(
+  symbol: string,
+  date: Date,
+): Promise<Record<string, unknown>[]> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const d = new Date(date.getTime() - attempt * 86_400_000);
+    const y = d.getFullYear();
+    const m = d.getMonth() + 1;
+    const day = d.getDate();
+    const resp = await dGet(`/market/${symbol}/insuranceFund/${y}/${m}/${day}`);
+    const records = (resp as Record<string, unknown> | null)?.records;
+    if (Array.isArray(records) && records.length > 0) {
+      return records as Record<string, unknown>[];
+    }
+  }
+  return [];
+}
+
+async function computeIfTrailingApy(
+  symbol: string,
+  days: number,
+): Promise<number | null> {
+  const oldDate = new Date(Date.now() - days * 86_400_000);
+  const [oldRecords, newRecords] = await Promise.all([
+    fetchIfRecordsForDate(symbol, oldDate),
+    fetchIfRecordsForDate(symbol, new Date()),
+  ]);
+  if (oldRecords.length === 0 || newRecords.length === 0) return null;
+
+  const oldRec = oldRecords[oldRecords.length - 1];
+  const newRec = newRecords[newRecords.length - 1];
+
+  const oldShares = Number(oldRec.totalIfSharesBefore);
+  const newShares = Number(newRec.totalIfSharesBefore);
+  if (oldShares === 0 || newShares === 0) return null;
+
+  const oldPrice =
+    Number(oldRec.insuranceVaultAmountBefore) / oldShares;
+  const newPrice =
+    Number(newRec.insuranceVaultAmountBefore) / newShares;
+  if (oldPrice <= 0) return null;
+
+  const apy = (Math.pow(newPrice / oldPrice, 365 / days) - 1) * 100;
+  return apy >= 0 ? apy : null;
+}
+
+// ---------------------------------------------------------------------------
 // Insurance Fund
 // ---------------------------------------------------------------------------
 
@@ -240,12 +290,14 @@ async function fetchInsuranceFund(
       // Compute 7d/30d averages from stored snapshots
       const avg7d = await snapshotAvg(database, opp.id, 7);
       const avg30d = await snapshotAvg(database, opp.id, 30);
-      if (avg7d !== null || avg30d !== null) {
+      // Fallback: compute 30d trailing APY from historical share price
+      const final30d = avg30d ?? await computeIfTrailingApy(symbol, 30);
+      if (avg7d !== null || final30d !== null) {
         await database
           .update(yieldOpportunities)
           .set({
             apy_7d_avg: avg7d?.toString() ?? null,
-            apy_30d_avg: avg30d?.toString() ?? null,
+            apy_30d_avg: final30d?.toString() ?? null,
           })
           .where(eq(yieldOpportunities.id, opp.id));
       }

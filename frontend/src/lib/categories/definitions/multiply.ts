@@ -1,4 +1,4 @@
-import type { CategoryDefinition } from "../registry";
+import type { CategoryDefinition, ChartReferenceLine } from "../registry";
 import { fmtApy, fmtTvl, fmtVaultTag } from "@/lib/format";
 import { getMultiplyExtra } from "../extra-data";
 
@@ -21,9 +21,14 @@ export const multiplyCategory: CategoryDefinition = {
 
   statsGrid: (y) => {
     const extra = getMultiplyExtra(y.extra_data, y.tokens);
+    const maxLev = y.max_leverage
+      ?? extra.max_leverage
+      ?? (extra.leverage_table
+        ? Math.max(...Object.keys(extra.leverage_table).map(Number).filter(Number.isFinite))
+        : null);
     return [
       { label: "Liquidity Available", value: fmtTvl(y.liquidity_available_usd) },
-      { label: "Max Leverage", value: y.max_leverage != null ? `${y.max_leverage}x` : "\u2014" },
+      { label: "Max Leverage", value: maxLev != null && maxLev > 0 ? `${maxLev}x` : "\u2014" },
       { label: "Max Leverage APY", value: fmtApy(extra.net_apy_current_pct), colorClass: "text-neon" },
     ];
   },
@@ -59,4 +64,24 @@ export const multiplyCategory: CategoryDefinition = {
   actionPanelType: "custom",
   actionPanelComponent: () => import("@/components/MultiplyPanel"),
   transactionType: "multi-step",
+
+  chartReferenceLines: (y) => {
+    const extra = getMultiplyExtra(y.extra_data, y.tokens);
+    const lines: ChartReferenceLine[] = [];
+    if (extra.borrow_apy_current_pct != null) {
+      lines.push({ value: extra.borrow_apy_current_pct, label: "Borrow", color: "var(--foreground-muted)" });
+    }
+    return lines;
+  },
+
+  strategyDescription: (y) => {
+    const extra = getMultiplyExtra(y.extra_data, y.tokens);
+    const liqPct = extra.collateral_liquidation_threshold != null
+      ? `${(extra.collateral_liquidation_threshold * 100).toFixed(0)}%` : null;
+    let desc = `Deposits ${extra.collateral_symbol}, borrows ${extra.debt_symbol}, and loops to amplify yield exposure.`;
+    if (liqPct) desc += ` Liquidation threshold: ${liqPct} LTV.`;
+    desc += ` If ${extra.debt_symbol} depegs, effective LTV may spike, triggering liquidation.`;
+    desc += ` Higher leverage increases both yield and risk.`;
+    return desc;
+  },
 };

@@ -10,6 +10,7 @@ export interface MultiplyExtraData {
   collateral_liquidation_threshold: number | null;
   leverage_used: number | null;
   borrow_apy_current_pct: number | null;
+  max_leverage: number | null;
   leverage_table: Record<string, { net_apy_current_pct: number }> | null;
 }
 
@@ -27,6 +28,7 @@ export function getMultiplyExtra(
     collateral_liquidation_threshold: (r.collateral_liquidation_threshold as number) ?? null,
     leverage_used: (r.leverage_used as number) ?? null,
     borrow_apy_current_pct: (r.borrow_apy_current_pct as number) ?? null,
+    max_leverage: (r.max_leverage as number) ?? null,
     leverage_table: (r.leverage_table as MultiplyExtraData["leverage_table"]) ?? null,
   };
 }

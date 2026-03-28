@@ -10,6 +10,7 @@
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { getWithRetry } from "../../shared/http.js";
 import { logger } from "../../shared/logger.js";
+import { getDefiLlama30dAvg } from "./defillama.js";
 import { computeDepeg } from "../../shared/constants.js";
 import { db } from "../db/connection.js";
 import {
@@ -106,7 +107,7 @@ async function fetchEarnTokens(
       isAutomated: true,
       depeg: computeDepeg(symbol, price),
       apy7dAvg: oppAvgs["7d"] ?? null,
-      apy30dAvg: oppAvgs["30d"] ?? null,
+      apy30dAvg: oppAvgs["30d"] ?? await getDefiLlama30dAvg("jupiter-lend", symbol, "Earn"),
     });
 
     upsertedIds.add(externalId);

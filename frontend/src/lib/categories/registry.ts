@@ -22,6 +22,12 @@ export interface ActionPanelProps {
   protocolSlug: string;
 }
 
+export interface ChartReferenceLine {
+  value: number;
+  label: string;
+  color: string;
+}
+
 export interface CategoryDefinition {
   slug: string;
   displayName: string;
@@ -42,6 +48,12 @@ export interface CategoryDefinition {
 
   /* Transaction lifecycle */
   transactionType: "simple" | "multi-step";
+
+  /** Optional strategy description shown on detail page */
+  strategyDescription?: (y: YieldOpportunityDetail) => string | null;
+
+  /** Optional reference lines for the APY chart (e.g. borrow APY for multiply) */
+  chartReferenceLines?: (y: YieldOpportunityDetail) => ChartReferenceLine[];
 }
 
 /* ------------------------------------------------------------------ */

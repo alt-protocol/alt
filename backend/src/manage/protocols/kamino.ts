@@ -68,8 +68,18 @@ function addr(s: string): any {
 async function loadVault(depositAddress: string) {
   const { KaminoVault, Decimal } = await loadSdk();
   const vault = new KaminoVault(getRpc() as any, addr(depositAddress));
-  await vault.reloadState();
-  await vault.reloadVaultReserves();
+  try {
+    await vault.reloadState();
+    await vault.reloadVaultReserves();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw Object.assign(
+      new Error(
+        `Failed to load vault ${depositAddress.slice(0, 8)}: ${msg}`,
+      ),
+      { statusCode: 400 },
+    );
+  }
   return { vault, Decimal };
 }
 

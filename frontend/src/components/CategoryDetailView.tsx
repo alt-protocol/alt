@@ -127,7 +127,16 @@ export default function CategoryDetailView({ yield_: y, id }: Props) {
         )}
       </div>
 
-      <ApyHistorySection id={id} initialSnapshots={y.recent_snapshots} />
+      {categoryDef?.strategyDescription?.(y) && (
+        <div className="bg-surface-low rounded-sm px-6 py-5 mb-[1.5rem]">
+          <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-2">Strategy</p>
+          <p className="font-sans text-[0.8rem] text-foreground-muted leading-relaxed">
+            {categoryDef.strategyDescription(y)}
+          </p>
+        </div>
+      )}
+
+      <ApyHistorySection id={id} initialSnapshots={y.recent_snapshots} referenceLines={categoryDef?.chartReferenceLines?.(y)} />
     </>
   );
 }

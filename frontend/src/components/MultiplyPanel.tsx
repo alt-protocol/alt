@@ -161,13 +161,13 @@ function ConnectedMultiplyPanel({
                 step={0.1}
                 value={leverage}
                 onChange={(e) => setLeverage(parseFloat(e.target.value))}
-                className="w-full h-1.5 rounded-sm appearance-none cursor-pointer
+                className="w-full h-2 rounded-sm appearance-none cursor-pointer
                   [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
                   [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-foreground [&::-webkit-slider-thumb]:relative [&::-webkit-slider-thumb]:z-10
                   [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full
                   [&::-moz-range-thumb]:bg-foreground [&::-moz-range-thumb]:border-0"
                 style={{
-                  background: `linear-gradient(to right, var(--neon-primary) 0%, var(--neon-primary) ${fillPct}%, var(--surface-high) ${fillPct}%, var(--surface-high) 100%)`,
+                  background: `linear-gradient(to right, var(--neon-primary) 0%, var(--neon-primary) ${fillPct}%, rgba(255,255,255,0.12) ${fillPct}%, rgba(255,255,255,0.12) 100%)`,
                 }}
               />
             </div>
@@ -249,40 +249,59 @@ function ConnectedMultiplyPanel({
         <p className="mt-3 text-red-400 text-[0.7rem] font-sans text-center">{error}</p>
       )}
 
-      {/* Transaction Settings */}
-      <div className="flex items-center justify-between mt-4 pt-3 border-t border-outline-ghost">
-        <span className="text-foreground-muted text-[0.65rem] font-sans">Transaction Settings</span>
-        <div className="flex items-center gap-1.5">
-          {editingSlippage ? (
-            <input
-              type="text"
-              inputMode="decimal"
-              autoFocus
-              defaultValue={(slippageBps / 100).toFixed(2)}
-              onBlur={(e) => {
-                const val = parseFloat(e.target.value);
-                if (!isNaN(val) && val > 0) setSlippage(Math.round(val * 100));
-                setEditingSlippage(false);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                if (e.key === "Escape") setEditingSlippage(false);
-              }}
-              className="w-14 bg-surface-high rounded-sm px-1.5 py-0.5 text-[0.65rem] font-sans text-foreground text-right outline-none focus:shadow-[0_1px_0_0_var(--neon-primary)]"
-            />
-          ) : (
-            <span className="text-foreground text-[0.65rem] font-sans tabular-nums">{(slippageBps / 100).toFixed(2)}%</span>
-          )}
+      {/* Slippage Tolerance */}
+      <div className="mt-4 pt-3 border-t border-outline-ghost">
+        <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans block mb-2">Slippage Tolerance</span>
+        <div className="flex gap-1">
+          {[{ label: "0.5%", bps: 50 }, { label: "1%", bps: 100 }, { label: "2%", bps: 200 }].map((p) => (
+            <button
+              key={p.bps}
+              onClick={() => { setSlippage(p.bps); setEditingSlippage(false); }}
+              className={`rounded-sm px-3 py-1 text-[0.65rem] font-sans transition-colors ${
+                slippageBps === p.bps && !editingSlippage
+                  ? "bg-neon text-on-neon"
+                  : "bg-surface-high text-foreground-muted hover:text-foreground"
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
           <button
             onClick={() => setEditingSlippage(!editingSlippage)}
-            className="text-foreground-muted hover:text-foreground transition-colors"
-            title="Edit slippage"
+            className={`rounded-sm px-3 py-1 text-[0.65rem] font-sans transition-colors flex items-center gap-1 ${
+              editingSlippage || ![50, 100, 200].includes(slippageBps)
+                ? "bg-neon text-on-neon"
+                : "bg-surface-high text-foreground-muted hover:text-foreground"
+            }`}
           >
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
-              <path fillRule="evenodd" d="M6.455 1.45A.5.5 0 0 1 6.952 1h2.096a.5.5 0 0 1 .497.45l.186 1.858a4.996 4.996 0 0 1 1.466.848l1.703-.769a.5.5 0 0 1 .639.206l1.048 1.814a.5.5 0 0 1-.142.656l-1.517 1.09a5.026 5.026 0 0 1 0 1.694l1.517 1.09a.5.5 0 0 1 .142.656l-1.048 1.814a.5.5 0 0 1-.639.206l-1.703-.769a4.996 4.996 0 0 1-1.466.848l-.186 1.858a.5.5 0 0 1-.497.45H6.952a.5.5 0 0 1-.497-.45l-.186-1.858a4.993 4.993 0 0 1-1.466-.848l-1.703.769a.5.5 0 0 1-.639-.206L1.413 12.7a.5.5 0 0 1 .142-.656l1.517-1.09a5.026 5.026 0 0 1 0-1.694l-1.517-1.09a.5.5 0 0 1-.142-.656l1.048-1.814a.5.5 0 0 1 .639-.206l1.703.769a4.993 4.993 0 0 1 1.466-.848L6.455 1.45ZM8 10.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z" clipRule="evenodd" />
-            </svg>
+            {editingSlippage ? "Custom" : ![50, 100, 200].includes(slippageBps) ? `${(slippageBps / 100).toFixed(1)}%` : "Custom"}
           </button>
         </div>
+        {editingSlippage && (
+          <input
+            type="text"
+            inputMode="decimal"
+            autoFocus
+            placeholder={(slippageBps / 100).toFixed(2)}
+            defaultValue={(slippageBps / 100).toFixed(2)}
+            onBlur={(e) => {
+              const val = parseFloat(e.target.value);
+              if (!isNaN(val) && val > 0) setSlippage(Math.round(val * 100));
+              setEditingSlippage(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") setEditingSlippage(false);
+            }}
+            className="mt-2 w-full bg-surface-high rounded-sm px-3 py-1.5 text-[0.65rem] font-sans text-foreground outline-none focus:shadow-[0_1px_0_0_var(--neon-primary)]"
+          />
+        )}
+        {slippageBps < 10 && (
+          <p className="text-yellow-400 text-[0.6rem] font-sans mt-1.5">Low — transaction may fail</p>
+        )}
+        {slippageBps > 300 && (
+          <p className="text-yellow-400 text-[0.6rem] font-sans mt-1.5">High — may result in unfavorable execution</p>
+        )}
       </div>
     </>
   );

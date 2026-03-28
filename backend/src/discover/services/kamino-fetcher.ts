@@ -318,6 +318,10 @@ async function fetchLendingReserves(
   logger.info({ count: primaryMarkets.length }, "Kamino lending primary markets");
 
   const avgMap = await batchSnapshotAvg(database, protocol.id, "lending");
+  const endStr = now.toISOString().slice(0, 10);
+  const start30d = new Date(now.getTime() - 30 * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
 
   let count = 0;
   for (const market of primaryMarkets) {
@@ -331,6 +335,9 @@ async function fetchLendingReserves(
       `/kamino-market/${marketPubkey}/reserves/metrics`,
     );
     if (!Array.isArray(reserves)) continue;
+
+    // Cache reserve history per market (same pattern as multiply flow)
+    const reserveHistories: Record<string, unknown[]> = {};
 
     for (const reserve of reserves) {
       try {
@@ -349,6 +356,18 @@ async function fetchLendingReserves(
         const externalId = `klend-${marketPubkey.slice(0, 8)}-${reservePubkey.slice(0, 8)}`;
         const avgs = avgMap[externalId] ?? {};
 
+        // Fallback: fetch 30d supply APY from Kamino reserve history
+        let apy30d = avgs["30d"] ?? null;
+        if (apy30d === null) {
+          if (!reserveHistories[reservePubkey]) {
+            reserveHistories[reservePubkey] = await fetchReserveHistory(
+              marketPubkey, reservePubkey, start30d, endStr,
+            );
+          }
+          const avg = avgFromHistory(reserveHistories[reservePubkey], "supplyInterestAPY", 720);
+          if (avg !== null) apy30d = avg * 100;
+        }
+
         await upsertOpportunity(database, {
           protocolId: protocol.id,
           protocolName: protocol.name,
@@ -358,7 +377,7 @@ async function fetchLendingReserves(
           tokens: [symbol],
           apyCurrent: supplyApy,
           apy7dAvg: avgs["7d"] ?? null,
-          apy30dAvg: avgs["30d"] ?? null,
+          apy30dAvg: apy30d,
           tvlUsd: tvl,
           depositAddress: reservePubkey,
           riskTier: "low",

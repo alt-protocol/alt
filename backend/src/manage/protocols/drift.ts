@@ -201,8 +201,11 @@ async function buildInsuranceFundWithdraw(
     const marketIndex = getMarketIndex(params.extraData);
     const stake = await readIfStake(ctx, marketIndex);
     if (!stake)
-      throw new Error(
-        "No insurance fund stake account found — deposit first.",
+      throw Object.assign(
+        new Error(
+          "No insurance fund stake account found. The position may have been fully withdrawn.",
+        ),
+        { statusCode: 400 },
       );
 
     const cuIxs = computeBudgetIxs(ctx.web3);
@@ -243,8 +246,11 @@ async function buildInsuranceFundWithdraw(
       unstakingSeconds,
     );
     if (!cooldown.redeemable) {
-      throw new Error(
-        `Unstaking pending — redeemable at ${cooldown.redeemableAt.toLocaleString()}. Please return then to complete.`,
+      throw Object.assign(
+        new Error(
+          `Unstaking pending — redeemable at ${cooldown.redeemableAt.toLocaleString()}. Please return then to complete.`,
+        ),
+        { statusCode: 400 },
       );
     }
 
@@ -457,8 +463,11 @@ async function buildVaultWithdraw(
       ctx.vaultDepositor,
     );
     if (!depositorAccount)
-      throw new Error(
-        "No vault depositor account found — deposit first.",
+      throw Object.assign(
+        new Error(
+          "No vault depositor account found. The position may have been fully withdrawn.",
+        ),
+        { statusCode: 400 },
       );
 
     const depositor = await ctx.vaultClient.getVaultDepositor(
@@ -487,8 +496,11 @@ async function buildVaultWithdraw(
       vault.redeemPeriod.toNumber(),
     );
     if (!cooldown.redeemable) {
-      throw new Error(
-        `Withdrawal pending — redeemable at ${cooldown.redeemableAt.toLocaleString()}. Please return then to complete.`,
+      throw Object.assign(
+        new Error(
+          `Withdrawal pending — redeemable at ${cooldown.redeemableAt.toLocaleString()}. Please return then to complete.`,
+        ),
+        { statusCode: 400 },
       );
     }
 

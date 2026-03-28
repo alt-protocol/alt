@@ -61,8 +61,7 @@ export const discoverService: DiscoverService = {
         tvl_usd: yieldOpportunities.tvl_usd,
         tokens: yieldOpportunities.tokens,
       })
-      .from(yieldOpportunities)
-      .where(eq(yieldOpportunities.is_active, true));
+      .from(yieldOpportunities);
 
     const result: Record<string, OpportunityMapEntry> = {};
     for (const row of rows) {

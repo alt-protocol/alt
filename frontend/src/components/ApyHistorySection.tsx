@@ -9,15 +9,17 @@ import { fmtDateShort } from "@/lib/format";
 import { queryKeys } from "@/lib/queryKeys";
 import PeriodSelector from "@/components/PeriodSelector";
 import type { Period } from "@/components/PeriodSelector";
+import type { ChartReferenceLine } from "@/lib/categories/registry";
 
 const ApyChart = dynamic(() => import("@/components/ApyChart"), { ssr: false });
 
 interface Props {
   id: string;
   initialSnapshots?: YieldHistoryPoint[];
+  referenceLines?: ChartReferenceLine[];
 }
 
-export default function ApyHistorySection({ id, initialSnapshots }: Props) {
+export default function ApyHistorySection({ id, initialSnapshots, referenceLines }: Props) {
   const [period, setPeriod] = useState<Period>("7d");
 
   const historyQuery = useQuery({
@@ -53,7 +55,7 @@ export default function ApyHistorySection({ id, initialSnapshots }: Props) {
       )}
 
       {!historyQuery.isLoading && chartData.length > 0 && (
-        <ApyChart data={chartData} />
+        <ApyChart data={chartData} referenceLines={referenceLines} />
       )}
     </div>
   );

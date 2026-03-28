@@ -650,9 +650,24 @@ async function fetchObligationPositions(
       }));
 
       let opportunityId: number | null = null;
-      if (collateralReserves.length > 0) {
-        opportunityId =
-          oppMap[collateralReserves[0]]?.id ?? null;
+      if (
+        productType === "multiply" &&
+        collateralReserves.length > 0 &&
+        borrowReserves.length > 0
+      ) {
+        const mulExtId = `kmul-${marketPk.slice(0, 8)}-${collateralReserves[0].slice(0, 6)}-${borrowReserves[0].slice(0, 6)}`;
+        opportunityId = oppMap[mulExtId]?.id ?? null;
+      }
+      if (
+        opportunityId === null &&
+        productType === "lending" &&
+        collateralReserves.length > 0
+      ) {
+        const lendExtId = `klend-${marketPk.slice(0, 8)}-${collateralReserves[0].slice(0, 8)}`;
+        opportunityId = oppMap[lendExtId]?.id ?? null;
+      }
+      if (opportunityId === null && collateralReserves.length > 0) {
+        opportunityId = oppMap[collateralReserves[0]]?.id ?? null;
       }
 
       // PnL from tx history
