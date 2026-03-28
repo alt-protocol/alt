@@ -197,59 +197,64 @@ async function fetchInsuranceFund(
   let count = 0;
   const upsertedIds = new Set<string>();
   for (const entry of data) {
-    const e = entry as Record<string, unknown>;
-    const idx = e.marketIndex;
-    const symbol = (e.symbol as string) ?? "";
-    const apy = safeFloat(e.apy);
+    try {
+      const e = entry as Record<string, unknown>;
+      const idx = e.marketIndex;
+      const symbol = (e.symbol as string) ?? "";
+      const apy = safeFloat(e.apy);
 
-    if (!STABLE_SYMBOLS.has(symbol) || apy === null || idx === undefined)
-      continue;
+      if (!STABLE_SYMBOLS.has(symbol) || apy === null || idx === undefined)
+        continue;
 
-    const depositAddress = stableVaults[Number(idx)] ?? null;
-    const tvlUsd = vaultBalances[Number(idx)] ?? null;
+      const depositAddress = stableVaults[Number(idx)] ?? null;
+      const tvlUsd = vaultBalances[Number(idx)] ?? null;
 
-    const externalId = `drift-if-${idx}`;
-    upsertedIds.add(externalId);
-    const opp = await upsertOpportunity(database, {
-      protocolId: protocol.id,
-      protocolName: protocol.name,
-      externalId,
-      name: `Drift Insurance Fund — ${symbol}`,
-      category: "insurance_fund",
-      tokens: symbol ? [symbol] : [],
-      apyCurrent: apy,
-      tvlUsd,
-      depositAddress,
-      riskTier: "low",
-      extra: {
-        market_index: idx,
+      const externalId = `drift-if-${idx}`;
+      upsertedIds.add(externalId);
+      const opp = await upsertOpportunity(database, {
+        protocolId: protocol.id,
+        protocolName: protocol.name,
+        externalId,
+        name: `Drift Insurance Fund — ${symbol}`,
+        category: "insurance_fund",
+        tokens: symbol ? [symbol] : [],
+        apyCurrent: apy,
+        tvlUsd,
+        depositAddress,
+        riskTier: "low",
+        extra: {
+          market_index: idx,
+          source: "drift_api",
+          type: "insurance_fund",
+          vault_balance_tokens: tvlUsd,
+          deposit_address: depositAddress,
+          unstaking_period_days: IF_UNSTAKING_PERIOD_DAYS,
+          protocol_url: `${DRIFT_BASE}/vaults/insurance-fund-vaults`,
+        },
+        now,
         source: "drift_api",
-        type: "insurance_fund",
-        vault_balance_tokens: tvlUsd,
-        deposit_address: depositAddress,
-        unstaking_period_days: IF_UNSTAKING_PERIOD_DAYS,
-        protocol_url: `${DRIFT_BASE}/vaults/insurance-fund-vaults`,
-      },
-      now,
-      source: "drift_api",
-      lockPeriodDays: IF_UNSTAKING_PERIOD_DAYS,
-      isAutomated: true,
-    });
+        lockPeriodDays: IF_UNSTAKING_PERIOD_DAYS,
+        isAutomated: true,
+      });
 
-    // Compute 7d/30d averages from stored snapshots
-    const avg7d = await snapshotAvg(database, opp.id, 7);
-    const avg30d = await snapshotAvg(database, opp.id, 30);
-    if (avg7d !== null || avg30d !== null) {
-      await database
-        .update(yieldOpportunities)
-        .set({
-          apy_7d_avg: avg7d?.toString() ?? null,
-          apy_30d_avg: avg30d?.toString() ?? null,
-        })
-        .where(eq(yieldOpportunities.id, opp.id));
+      // Compute 7d/30d averages from stored snapshots
+      const avg7d = await snapshotAvg(database, opp.id, 7);
+      const avg30d = await snapshotAvg(database, opp.id, 30);
+      if (avg7d !== null || avg30d !== null) {
+        await database
+          .update(yieldOpportunities)
+          .set({
+            apy_7d_avg: avg7d?.toString() ?? null,
+            apy_30d_avg: avg30d?.toString() ?? null,
+          })
+          .where(eq(yieldOpportunities.id, opp.id));
+      }
+
+      count++;
+    } catch (err) {
+      const e = entry as Record<string, unknown>;
+      logger.warn({ err, marketIndex: e.marketIndex }, "Drift IF: skipping item");
     }
-
-    count++;
   }
 
   // Deactivate stale insurance fund entries
@@ -291,98 +296,103 @@ async function fetchVaults(
   const upsertedIds = new Set<string>();
 
   for (const vault of data) {
-    const v = vault as Record<string, unknown>;
-    const netDeposits = safeFloat(v.netDeposits);
-    if (netDeposits === null || netDeposits <= 0) continue;
+    try {
+      const v = vault as Record<string, unknown>;
+      const netDeposits = safeFloat(v.netDeposits);
+      if (netDeposits === null || netDeposits <= 0) continue;
 
-    const pubkey = (v.pubkey as string) ?? "";
-    if (!pubkey) continue;
+      const pubkey = (v.pubkey as string) ?? "";
+      if (!pubkey) continue;
 
-    const spotMarketIndex = Number(v.spotMarketIndex ?? 0);
-    if (spotMarketIndex !== 0) continue; // USDC only
+      const spotMarketIndex = Number(v.spotMarketIndex ?? 0);
+      if (spotMarketIndex !== 0) continue; // USDC only
 
-    const tvlUsd = netDeposits;
-    if (tvlUsd < MIN_VAULT_TVL_USD) continue;
+      const tvlUsd = netDeposits;
+      if (tvlUsd < MIN_VAULT_TVL_USD) continue;
 
-    const externalId = `drift-vault-${pubkey}`;
-    const name = `Drift Vault — USDC (${pubkey.slice(0, 6)})`;
+      const externalId = `drift-vault-${pubkey}`;
+      const name = `Drift Vault — USDC (${pubkey.slice(0, 6)})`;
 
-    const apyInfo = vaultApys[pubkey] ?? {};
-    let apy7d = safeFloat(apyInfo.apy_7d);
-    let apy30d = safeFloat(apyInfo.apy_30d);
-    const apy90d = safeFloat(apyInfo.apy_90d);
-    const apyCurrent = apy90d; // Use 90d as current (most stable)
+      const apyInfo = vaultApys[pubkey] ?? {};
+      let apy7d = safeFloat(apyInfo.apy_7d);
+      let apy30d = safeFloat(apyInfo.apy_30d);
+      const apy90d = safeFloat(apyInfo.apy_90d);
+      const apyCurrent = apy90d; // Use 90d as current (most stable)
 
-    const minDepositRaw = safeFloat(v.minDepositAmount);
-    const maxTokens = safeFloat(v.maxTokens);
-    const vaultLiqUsd =
-      maxTokens && maxTokens > 0 ? maxTokens - netDeposits : null;
+      const minDepositRaw = safeFloat(v.minDepositAmount);
+      const maxTokens = safeFloat(v.maxTokens);
+      const vaultLiqUsd =
+        maxTokens && maxTokens > 0 ? maxTokens - netDeposits : null;
 
-    const opp = await upsertOpportunity(database, {
-      protocolId: protocol.id,
-      protocolName: protocol.name,
-      externalId,
-      name,
-      category: "vault",
-      tokens: ["USDC"],
-      apyCurrent,
-      tvlUsd,
-      depositAddress: pubkey,
-      riskTier: "low",
-      extra: {
-        market_index: spotMarketIndex,
-        net_deposits_tokens: netDeposits,
-        max_tokens: maxTokens,
-        profit_share: v.profitShare,
-        management_fee: v.managementFee,
-        hurdle_rate: v.hurdleRate,
-        permissioned: v.permissioned,
-        total_deposits: safeFloat(v.totalDeposits),
-        total_withdraws: safeFloat(v.totalWithdraws),
+      const opp = await upsertOpportunity(database, {
+        protocolId: protocol.id,
+        protocolName: protocol.name,
+        externalId,
+        name,
+        category: "vault",
+        tokens: ["USDC"],
+        apyCurrent,
+        tvlUsd,
+        depositAddress: pubkey,
+        riskTier: "low",
+        extra: {
+          market_index: spotMarketIndex,
+          net_deposits_tokens: netDeposits,
+          max_tokens: maxTokens,
+          profit_share: v.profitShare,
+          management_fee: v.managementFee,
+          hurdle_rate: v.hurdleRate,
+          permissioned: v.permissioned,
+          total_deposits: safeFloat(v.totalDeposits),
+          total_withdraws: safeFloat(v.totalWithdraws),
+          source: "drift_api",
+          type: "vault",
+          apy_7d: apy7d,
+          apy_30d: apy30d,
+          apy_90d: apy90d,
+          apy_180d: safeFloat(apyInfo.apy_180d),
+          apy_365d: safeFloat(apyInfo.apy_365d),
+          max_drawdown_pct: safeFloat(apyInfo.max_drawdown_pct),
+          num_snapshots: apyInfo.num_snapshots,
+          protocol_url: `${DRIFT_BASE}/vaults/strategy-vaults/${pubkey}`,
+        },
+        now,
         source: "drift_api",
-        type: "vault",
-        apy_7d: apy7d,
-        apy_30d: apy30d,
-        apy_90d: apy90d,
-        apy_180d: safeFloat(apyInfo.apy_180d),
-        apy_365d: safeFloat(apyInfo.apy_365d),
-        max_drawdown_pct: safeFloat(apyInfo.max_drawdown_pct),
-        num_snapshots: apyInfo.num_snapshots,
-        protocol_url: `${DRIFT_BASE}/vaults/strategy-vaults/${pubkey}`,
-      },
-      now,
-      source: "drift_api",
-      apy7dAvg: apy7d,
-      apy30dAvg: apy30d,
-      minDeposit: minDepositRaw,
-      liquidityAvailableUsd:
-        vaultLiqUsd !== null
-          ? Math.round(vaultLiqUsd * 100) / 100
-          : null,
-      isAutomated: true,
-    });
+        apy7dAvg: apy7d,
+        apy30dAvg: apy30d,
+        minDeposit: minDepositRaw,
+        liquidityAvailableUsd:
+          vaultLiqUsd !== null
+            ? Math.round(vaultLiqUsd * 100) / 100
+            : null,
+        isAutomated: true,
+      });
 
-    // Fall back to snapshot averages if API didn't provide
-    if (apy7d === null || apy30d === null) {
-      const updates: Record<string, unknown> = {};
-      if (apy7d === null) {
-        const avg = await snapshotAvg(database, opp.id, 7);
-        if (avg !== null) updates.apy_7d_avg = avg.toString();
+      // Fall back to snapshot averages if API didn't provide
+      if (apy7d === null || apy30d === null) {
+        const updates: Record<string, unknown> = {};
+        if (apy7d === null) {
+          const avg = await snapshotAvg(database, opp.id, 7);
+          if (avg !== null) updates.apy_7d_avg = avg.toString();
+        }
+        if (apy30d === null) {
+          const avg = await snapshotAvg(database, opp.id, 30);
+          if (avg !== null) updates.apy_30d_avg = avg.toString();
+        }
+        if (Object.keys(updates).length > 0) {
+          await database
+            .update(yieldOpportunities)
+            .set(updates)
+            .where(eq(yieldOpportunities.id, opp.id));
+        }
       }
-      if (apy30d === null) {
-        const avg = await snapshotAvg(database, opp.id, 30);
-        if (avg !== null) updates.apy_30d_avg = avg.toString();
-      }
-      if (Object.keys(updates).length > 0) {
-        await database
-          .update(yieldOpportunities)
-          .set(updates)
-          .where(eq(yieldOpportunities.id, opp.id));
-      }
+
+      upsertedIds.add(externalId);
+      count++;
+    } catch (err) {
+      const v = vault as Record<string, unknown>;
+      logger.warn({ err, pubkey: v.pubkey }, "Drift vault: skipping item");
     }
-
-    upsertedIds.add(externalId);
-    count++;
   }
 
   // Deactivate stale vault entries

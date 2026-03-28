@@ -386,12 +386,17 @@ export async function portfolioRoutes(app: FastifyInstance) {
       validateWallet(wallet);
       const q = PositionsQuery.parse(request.query);
 
-      const positions = await latestPositions(
-        wallet,
-        q.protocol,
-        q.product_type,
-      );
-      return positions.map(formatPosition);
+      try {
+        const positions = await latestPositions(
+          wallet,
+          q.protocol,
+          q.product_type,
+        );
+        return positions.map(formatPosition);
+      } catch (err) {
+        logger.error({ err, wallet: wallet.slice(0, 8) }, "Positions query failed");
+        throw err;
+      }
     },
   });
 
@@ -407,68 +412,80 @@ export async function portfolioRoutes(app: FastifyInstance) {
         validateWallet(wallet);
         const q = PositionHistoryQuery.parse(request.query);
 
-        const days = { "7d": 7, "30d": 30, "90d": 90 }[q.period] ?? 7;
-        const cutoff = new Date(Date.now() - days * 86_400_000);
+        try {
+          const days = { "7d": 7, "30d": 30, "90d": 90 }[q.period] ?? 7;
+          const cutoff = new Date(Date.now() - days * 86_400_000);
 
-        // Per-position history
-        if (q.external_id) {
-          const rows = await db
-            .select()
-            .from(userPositions)
-            .where(
-              and(
-                eq(userPositions.wallet_address, wallet),
-                gte(userPositions.snapshot_at, cutoff),
-                eq(userPositions.external_id, q.external_id),
-              ),
+          // Per-position history
+          if (q.external_id) {
+            const rows = await db
+              .select()
+              .from(userPositions)
+              .where(
+                and(
+                  eq(userPositions.wallet_address, wallet),
+                  gte(userPositions.snapshot_at, cutoff),
+                  eq(userPositions.external_id, q.external_id),
+                ),
+              )
+              .orderBy(asc(userPositions.snapshot_at))
+              .offset(q.offset)
+              .limit(q.limit);
+
+            return rows.map((r) => ({
+              snapshot_at: r.snapshot_at,
+              deposit_amount_usd: numOrNull(r.deposit_amount_usd),
+              pnl_usd: numOrNull(r.pnl_usd),
+              pnl_pct: numOrNull(r.pnl_pct),
+            }));
+          }
+
+          // Aggregate history with time bucketing
+          const bucketInterval = {
+            "7d": "1 hour",
+            "30d": "4 hours",
+            "90d": "12 hours",
+          }[q.period] ?? "1 hour";
+
+          const rows = await db.execute(sql`
+            WITH per_snapshot AS (
+              SELECT
+                snapshot_at,
+                SUM(deposit_amount_usd::numeric) as total_usd,
+                SUM(pnl_usd::numeric) as total_pnl
+              FROM monitor.user_positions
+              WHERE wallet_address = ${wallet}
+                AND snapshot_at >= ${cutoff}
+              GROUP BY snapshot_at
+            ),
+            bucketed AS (
+              SELECT
+                date_bin(${sql.raw(`'${bucketInterval}'`)}, snapshot_at, ${cutoff}::timestamp) as bucket,
+                total_usd,
+                total_pnl,
+                snapshot_at
+              FROM per_snapshot
             )
-            .orderBy(asc(userPositions.snapshot_at))
-            .offset(q.offset)
-            .limit(q.limit);
+            SELECT DISTINCT ON (bucket)
+              bucket,
+              total_usd as deposit_amount_usd,
+              total_pnl as pnl_usd
+            FROM bucketed
+            ORDER BY bucket, snapshot_at DESC
+          `);
 
-          return rows.map((r) => ({
-            snapshot_at: r.snapshot_at,
-            deposit_amount_usd: numOrNull(r.deposit_amount_usd),
-            pnl_usd: numOrNull(r.pnl_usd),
-            pnl_pct: numOrNull(r.pnl_pct),
+          return rows.rows.map((r: Record<string, unknown>) => ({
+            snapshot_at: r.bucket as Date,
+            deposit_amount_usd: r.deposit_amount_usd
+              ? Number(r.deposit_amount_usd)
+              : 0,
+            pnl_usd: r.pnl_usd ? Number(r.pnl_usd) : 0,
+            pnl_pct: null,
           }));
+        } catch (err) {
+          logger.error({ err, wallet: wallet.slice(0, 8) }, "Position history query failed");
+          throw err;
         }
-
-        // Aggregate history with time bucketing
-        const bucketInterval = {
-          "7d": "1 hour",
-          "30d": "4 hours",
-          "90d": "12 hours",
-        }[q.period] ?? "1 hour";
-
-        const rows = await db.execute(sql`
-          WITH per_snapshot AS (
-            SELECT
-              snapshot_at,
-              SUM(deposit_amount_usd::numeric) as total_usd,
-              SUM(pnl_usd::numeric) as total_pnl
-            FROM monitor.user_positions
-            WHERE wallet_address = ${wallet}
-              AND snapshot_at >= ${cutoff}
-            GROUP BY snapshot_at
-          )
-          SELECT DISTINCT ON (date_bin(${sql.raw(`'${bucketInterval}'`)}, snapshot_at, ${cutoff}::timestamp))
-            date_bin(${sql.raw(`'${bucketInterval}'`)}, snapshot_at, ${cutoff}::timestamp) as bucket,
-            total_usd as deposit_amount_usd,
-            total_pnl as pnl_usd
-          FROM per_snapshot
-          ORDER BY date_bin(${sql.raw(`'${bucketInterval}'`)}, snapshot_at, ${cutoff}::timestamp),
-                   snapshot_at DESC
-        `);
-
-        return rows.rows.map((r: Record<string, unknown>) => ({
-          snapshot_at: r.bucket as Date,
-          deposit_amount_usd: r.deposit_amount_usd
-            ? Number(r.deposit_amount_usd)
-            : 0,
-          pnl_usd: r.pnl_usd ? Number(r.pnl_usd) : 0,
-          pnl_pct: null,
-        }));
       },
     },
   );

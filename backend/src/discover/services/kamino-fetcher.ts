@@ -232,61 +232,66 @@ async function fetchEarnVaults(
 
   let count = 0;
   for (const vault of activeVaults) {
-    const pubkey = (vault as Record<string, unknown>).address as string;
-    const metrics = vaultMetrics[pubkey];
-    if (!metrics) continue;
+    try {
+      const pubkey = (vault as Record<string, unknown>).address as string;
+      const metrics = vaultMetrics[pubkey];
+      if (!metrics) continue;
 
-    const tvl =
-      (safeFloat(metrics.tokensInvestedUsd) ?? 0) +
-      (safeFloat(metrics.tokensAvailableUsd) ?? 0);
-    if (tvl < MIN_TVL_USD) continue;
+      const tvl =
+        (safeFloat(metrics.tokensInvestedUsd) ?? 0) +
+        (safeFloat(metrics.tokensAvailableUsd) ?? 0);
+      if (tvl < MIN_TVL_USD) continue;
 
-    const state = (vault as Record<string, unknown>).state as Record<
-      string,
-      unknown
-    >;
-    const tokenMint = (state?.tokenMint as string) ?? "";
-    const symbol = mintMap[tokenMint] ?? tokenMint.slice(0, 8);
-    const name = `Kamino Earn — ${symbol} (${pubkey.slice(0, 6)})`;
+      const state = (vault as Record<string, unknown>).state as Record<
+        string,
+        unknown
+      >;
+      const tokenMint = (state?.tokenMint as string) ?? "";
+      const symbol = mintMap[tokenMint] ?? tokenMint.slice(0, 8);
+      const name = `Kamino Earn — ${symbol} (${pubkey.slice(0, 6)})`;
 
-    let apyCurrent = safeFloat(metrics.apy);
-    let apy7d = safeFloat(metrics.apy7d);
-    let apy30d = safeFloat(metrics.apy30d);
+      let apyCurrent = safeFloat(metrics.apy);
+      let apy7d = safeFloat(metrics.apy7d);
+      let apy30d = safeFloat(metrics.apy30d);
 
-    if (apyCurrent !== null) apyCurrent *= 100;
-    if (apy7d !== null) apy7d *= 100;
-    if (apy30d !== null) apy30d *= 100;
+      if (apyCurrent !== null) apyCurrent *= 100;
+      if (apy7d !== null) apy7d *= 100;
+      if (apy30d !== null) apy30d *= 100;
 
-    const tokensAvailableUsd = safeFloat(metrics.tokensAvailableUsd);
+      const tokensAvailableUsd = safeFloat(metrics.tokensAvailableUsd);
 
-    await upsertOpportunity(database, {
-      protocolId: protocol.id,
-      protocolName: protocol.name,
-      externalId: pubkey,
-      name,
-      category: "vault",
-      tokens: [symbol],
-      apyCurrent,
-      apy7dAvg: apy7d,
-      apy30dAvg: apy30d,
-      tvlUsd: tvl,
-      depositAddress: pubkey,
-      riskTier: "low",
-      extra: {
-        token_mint: tokenMint,
-        shares_mint: state?.sharesMint ?? null,
-        protocol_url: `${KAMINO_APP}/lending/earn/${pubkey}`,
+      await upsertOpportunity(database, {
+        protocolId: protocol.id,
+        protocolName: protocol.name,
+        externalId: pubkey,
+        name,
+        category: "vault",
+        tokens: [symbol],
+        apyCurrent,
+        apy7dAvg: apy7d,
+        apy30dAvg: apy30d,
+        tvlUsd: tvl,
+        depositAddress: pubkey,
+        riskTier: "low",
+        extra: {
+          token_mint: tokenMint,
+          shares_mint: state?.sharesMint ?? null,
+          protocol_url: `${KAMINO_APP}/lending/earn/${pubkey}`,
+          source: "kamino_api",
+          type: "earn_vault",
+        },
+        now,
         source: "kamino_api",
-        type: "earn_vault",
-      },
-      now,
-      source: "kamino_api",
-      liquidityAvailableUsd:
-        tokensAvailableUsd !== null
-          ? Math.round(tokensAvailableUsd * 100) / 100
-          : null,
-    });
-    count++;
+        liquidityAvailableUsd:
+          tokensAvailableUsd !== null
+            ? Math.round(tokensAvailableUsd * 100) / 100
+            : null,
+      });
+      count++;
+    } catch (err) {
+      const pubkey = (vault as Record<string, unknown>).address;
+      logger.warn({ err, pubkey }, "Kamino earn vault: skipping item");
+    }
   }
   return count;
 }
@@ -328,55 +333,60 @@ async function fetchLendingReserves(
     if (!Array.isArray(reserves)) continue;
 
     for (const reserve of reserves) {
-      const r = reserve as Record<string, unknown>;
-      const symbol = (r.liquidityToken as string) ?? "";
-      const tokenMint = (r.liquidityTokenMint as string) ?? "";
-      const tvl = safeFloat(r.totalSupplyUsd) ?? 0;
-      if (tvl < MIN_TVL_USD) continue;
+      try {
+        const r = reserve as Record<string, unknown>;
+        const symbol = (r.liquidityToken as string) ?? "";
+        const tokenMint = (r.liquidityTokenMint as string) ?? "";
+        const tvl = safeFloat(r.totalSupplyUsd) ?? 0;
+        if (tvl < MIN_TVL_USD) continue;
 
-      let supplyApy = safeFloat(r.supplyApy);
-      let borrowApy = safeFloat(r.borrowApy);
-      if (supplyApy !== null) supplyApy *= 100;
-      if (borrowApy !== null) borrowApy *= 100;
+        let supplyApy = safeFloat(r.supplyApy);
+        let borrowApy = safeFloat(r.borrowApy);
+        if (supplyApy !== null) supplyApy *= 100;
+        if (borrowApy !== null) borrowApy *= 100;
 
-      const reservePubkey = (r.reserve as string) ?? "";
-      const externalId = `klend-${marketPubkey.slice(0, 8)}-${reservePubkey.slice(0, 8)}`;
-      const avgs = avgMap[externalId] ?? {};
+        const reservePubkey = (r.reserve as string) ?? "";
+        const externalId = `klend-${marketPubkey.slice(0, 8)}-${reservePubkey.slice(0, 8)}`;
+        const avgs = avgMap[externalId] ?? {};
 
-      await upsertOpportunity(database, {
-        protocolId: protocol.id,
-        protocolName: protocol.name,
-        externalId,
-        name: `Kamino Lend — ${symbol} (${marketName})`,
-        category: "lending",
-        tokens: [symbol],
-        apyCurrent: supplyApy,
-        apy7dAvg: avgs["7d"] ?? null,
-        apy30dAvg: avgs["30d"] ?? null,
-        tvlUsd: tvl,
-        depositAddress: reservePubkey,
-        riskTier: "low",
-        extra: {
-          token_mint: tokenMint,
-          reserve: reservePubkey,
-          protocol_url: `${KAMINO_APP}/lending/reserve/${reservePubkey}/${marketPubkey}`,
-          supply_apy_raw: r.supplyApy,
-          borrow_apy_raw: r.borrowApy,
-          borrow_apy_pct: borrowApy,
-          max_ltv: r.maxLtv,
-          total_supply: r.totalSupply,
-          total_borrow: r.totalBorrow,
-          total_supply_usd: r.totalSupplyUsd,
-          total_borrow_usd: r.totalBorrowUsd,
-          market: marketPubkey,
-          market_name: marketName,
+        await upsertOpportunity(database, {
+          protocolId: protocol.id,
+          protocolName: protocol.name,
+          externalId,
+          name: `Kamino Lend — ${symbol} (${marketName})`,
+          category: "lending",
+          tokens: [symbol],
+          apyCurrent: supplyApy,
+          apy7dAvg: avgs["7d"] ?? null,
+          apy30dAvg: avgs["30d"] ?? null,
+          tvlUsd: tvl,
+          depositAddress: reservePubkey,
+          riskTier: "low",
+          extra: {
+            token_mint: tokenMint,
+            reserve: reservePubkey,
+            protocol_url: `${KAMINO_APP}/lending/reserve/${reservePubkey}/${marketPubkey}`,
+            supply_apy_raw: r.supplyApy,
+            borrow_apy_raw: r.borrowApy,
+            borrow_apy_pct: borrowApy,
+            max_ltv: r.maxLtv,
+            total_supply: r.totalSupply,
+            total_borrow: r.totalBorrow,
+            total_supply_usd: r.totalSupplyUsd,
+            total_borrow_usd: r.totalBorrowUsd,
+            market: marketPubkey,
+            market_name: marketName,
+            source: "kamino_api",
+            type: "lending",
+          },
+          now,
           source: "kamino_api",
-          type: "lending",
-        },
-        now,
-        source: "kamino_api",
-      });
-      count++;
+        });
+        count++;
+      } catch (err) {
+        const r = reserve as Record<string, unknown>;
+        logger.warn({ err, reserve: r.reserve }, "Kamino lending: skipping reserve");
+      }
     }
   }
   return count;
@@ -497,252 +507,256 @@ async function fetchMultiplyMarkets(
     const maxLeverageFromDesc = parseMaxLeverage(marketDescription);
 
     for (const [collReserve, debtReserve] of pairs) {
-      const collSymbol = collReserve.liquidityToken;
-      const debtSymbol = debtReserve.liquidityToken;
-      const collPk = collReserve.reserve;
-      const debtPk = debtReserve.reserve;
+      try {
+        const collSymbol = collReserve.liquidityToken;
+        const debtSymbol = debtReserve.liquidityToken;
+        const collPk = collReserve.reserve;
+        const debtPk = debtReserve.reserve;
 
-      const collLtvVal = safeFloat(collReserve.maxLtv);
-      let maxLeverage: number | null;
-      if (maxLeverageFromDesc && pairs.length === 1) {
-        maxLeverage = maxLeverageFromDesc;
-      } else {
-        maxLeverage = maxLeverageFromLtv(collLtvVal);
-      }
+        const collLtvVal = safeFloat(collReserve.maxLtv);
+        let maxLeverage: number | null;
+        if (maxLeverageFromDesc && pairs.length === 1) {
+          maxLeverage = maxLeverageFromDesc;
+        } else {
+          maxLeverage = maxLeverageFromLtv(collLtvVal);
+        }
 
-      const borrowApyCurrent = safeFloat(debtReserve.borrowApy);
+        const borrowApyCurrent = safeFloat(debtReserve.borrowApy);
 
-      const collHistory = await getHistory(collPk);
-      const debtHistory = await getHistory(debtPk);
+        const collHistory = await getHistory(collPk);
+        const debtHistory = await getHistory(debtPk);
 
-      const borrowAvg7d = avgFromHistory(debtHistory, "borrowInterestAPY", 168);
-      const borrowAvg30d = avgFromHistory(
-        debtHistory,
-        "borrowInterestAPY",
-        720,
-      );
+        const borrowAvg7d = avgFromHistory(debtHistory, "borrowInterestAPY", 168);
+        const borrowAvg30d = avgFromHistory(
+          debtHistory,
+          "borrowInterestAPY",
+          720,
+        );
 
-      const [collYield7d, apySource] = getCollateralYield(
-        collSymbol,
-        collHistory,
-        debtHistory,
-        collReserve as unknown as Record<string, unknown>,
-        168,
-      );
-      const [collYield30d] = getCollateralYield(
-        collSymbol,
-        collHistory,
-        debtHistory,
-        collReserve as unknown as Record<string, unknown>,
-        720,
-      );
+        const [collYield7d, apySource] = getCollateralYield(
+          collSymbol,
+          collHistory,
+          debtHistory,
+          collReserve as unknown as Record<string, unknown>,
+          168,
+        );
+        const [collYield30d] = getCollateralYield(
+          collSymbol,
+          collHistory,
+          debtHistory,
+          collReserve as unknown as Record<string, unknown>,
+          720,
+        );
 
-      const effectiveLeverage = maxLeverage ?? 3;
-      const netApyCurrent = computeNetApy(
-        collYield30d,
-        borrowApyCurrent,
-        effectiveLeverage,
-      );
-      const netApy7d = computeNetApy(
-        collYield30d,
-        borrowAvg7d,
-        effectiveLeverage,
-      );
-      const netApy30d = computeNetApy(
-        collYield30d,
-        borrowAvg30d,
-        effectiveLeverage,
-      );
+        const effectiveLeverage = maxLeverage ?? 3;
+        const netApyCurrent = computeNetApy(
+          collYield30d,
+          borrowApyCurrent,
+          effectiveLeverage,
+        );
+        const netApy7d = computeNetApy(
+          collYield30d,
+          borrowAvg7d,
+          effectiveLeverage,
+        );
+        const netApy30d = computeNetApy(
+          collYield30d,
+          borrowAvg30d,
+          effectiveLeverage,
+        );
 
-      const netApyCurrentPct = toPct(netApyCurrent);
-      const netApy7dPct = toPct(netApy7d);
-      const netApy30dPct = toPct(netApy30d);
+        const netApyCurrentPct = toPct(netApyCurrent);
+        const netApy7dPct = toPct(netApy7d);
+        const netApy30dPct = toPct(netApy30d);
 
-      // Build leverage table
-      const leverageTable: Record<
-        string,
-        Record<string, number | null>
-      > = {};
-      const levSteps = [2, 3, 5, 8, 10];
-      if (effectiveLeverage && !levSteps.includes(effectiveLeverage)) {
-        levSteps.push(effectiveLeverage);
-        levSteps.sort((a, b) => a - b);
-      }
-      for (const lev of levSteps) {
-        if (maxLeverage && lev > maxLeverage + 0.1) continue;
-        leverageTable[`${lev}x`] = {
-          net_apy_current_pct: toPct(
-            computeNetApy(collYield30d, borrowApyCurrent, lev),
-          ),
-          net_apy_7d_pct: toPct(
-            computeNetApy(collYield30d, borrowAvg7d, lev),
-          ),
-          net_apy_30d_pct: toPct(
-            computeNetApy(collYield30d, borrowAvg30d, lev),
-          ),
+        // Build leverage table
+        const leverageTable: Record<
+          string,
+          Record<string, number | null>
+        > = {};
+        const levSteps = [2, 3, 5, 8, 10];
+        if (effectiveLeverage && !levSteps.includes(effectiveLeverage)) {
+          levSteps.push(effectiveLeverage);
+          levSteps.sort((a, b) => a - b);
+        }
+        for (const lev of levSteps) {
+          if (maxLeverage && lev > maxLeverage + 0.1) continue;
+          leverageTable[`${lev}x`] = {
+            net_apy_current_pct: toPct(
+              computeNetApy(collYield30d, borrowApyCurrent, lev),
+            ),
+            net_apy_7d_pct: toPct(
+              computeNetApy(collYield30d, borrowAvg7d, lev),
+            ),
+            net_apy_30d_pct: toPct(
+              computeNetApy(collYield30d, borrowAvg30d, lev),
+            ),
+          };
+        }
+
+        // Rich data from reserve history
+        const latestCollMetrics =
+          collHistory.length > 0
+            ? ((collHistory[collHistory.length - 1] as Record<string, unknown>)
+                .metrics as Record<string, unknown>) ?? {}
+            : {};
+        const latestDebtMetrics =
+          debtHistory.length > 0
+            ? ((debtHistory[debtHistory.length - 1] as Record<string, unknown>)
+                .metrics as Record<string, unknown>) ?? {}
+            : {};
+
+        const collTotalSupplyTokens = safeFloat(
+          latestCollMetrics.totalSupply,
+        );
+        const collPrice = safeFloat(latestCollMetrics.assetPriceUSD);
+        const collateralSuppliedUsd =
+          collTotalSupplyTokens !== null && collPrice !== null
+            ? collTotalSupplyTokens * collPrice
+            : safeFloat(collReserve.totalSupplyUsd) ?? 0;
+
+        const debtTotalSupply =
+          safeFloat(latestDebtMetrics.totalSupply) ??
+          safeFloat(debtReserve.totalSupply) ??
+          0;
+        const debtTotalBorrow =
+          safeFloat(latestDebtMetrics.totalBorrows) ??
+          safeFloat(debtReserve.totalBorrow) ??
+          0;
+        const debtDecimals = Number(latestDebtMetrics.decimals ?? 6);
+        const debtBorrowLimitRaw =
+          safeFloat(latestDebtMetrics.reserveBorrowLimit) ?? 0;
+        const debtBorrowLimit =
+          debtBorrowLimitRaw > 0
+            ? debtBorrowLimitRaw / 10 ** debtDecimals
+            : Infinity;
+        const debtPrice =
+          safeFloat(latestDebtMetrics.assetPriceUSD) ?? 1.0;
+
+        const supplyAvailable = debtTotalSupply - debtTotalBorrow;
+        const borrowLimitRemaining = debtBorrowLimit - debtTotalBorrow;
+        const liqAvailableTokens = Math.max(
+          0,
+          Math.min(supplyAvailable, borrowLimitRemaining),
+        );
+        const liqAvailableUsd = liqAvailableTokens * debtPrice;
+
+        const collDepositLimitRaw =
+          safeFloat(latestCollMetrics.reserveDepositLimit) ?? 0;
+        const collDecimals = Number(latestCollMetrics.decimals ?? 6);
+        const collDepositLimit =
+          collDepositLimitRaw > 0
+            ? collDepositLimitRaw / 10 ** collDecimals
+            : null;
+
+        const utilization =
+          debtTotalSupply > 0
+            ? (debtTotalBorrow / debtTotalSupply) * 100
+            : 0;
+
+        const collLtvHistory =
+          latestCollMetrics.loanToValue ?? collLtvVal;
+        const collLiqThreshold =
+          latestCollMetrics.liquidationThreshold ?? null;
+        const borrowCurve = latestDebtMetrics.borrowCurve ?? null;
+
+        const vaultTag = classifyMultiplyPair(collSymbol, debtSymbol);
+        const externalId = `kmul-${marketPubkey.slice(0, 8)}-${collPk.slice(0, 6)}-${debtPk.slice(0, 6)}`;
+        const name = `Kamino Multiply — ${collSymbol}/${debtSymbol} (${marketName})`;
+
+        const extra: Record<string, unknown> = {
+          protocol_url: "https://kamino.com/multiply",
+          market: marketPubkey,
+          market_name: marketName,
+          market_description: marketDescription,
+          market_lookup_table: (m as Record<string, unknown>).lookupTable ?? "",
+          market_is_curated: (m as Record<string, unknown>).isCurated ?? false,
+          max_leverage: maxLeverage,
+          vault_tag: vaultTag,
+          apy_source: apySource,
+          collateral_symbol: collSymbol,
+          collateral_mint: collReserve.liquidityTokenMint,
+          collateral_reserve: collPk,
+          collateral_reserve_supply_usd: collateralSuppliedUsd,
+          collateral_supply_tokens: collTotalSupplyTokens,
+          collateral_price_usd: collPrice,
+          collateral_deposit_limit: collDepositLimit,
+          debt_available_usd: liqAvailableUsd,
+          debt_available_tokens: liqAvailableTokens,
+          debt_borrow_limit:
+            debtBorrowLimit !== Infinity ? debtBorrowLimit : null,
+          debt_borrow_limit_remaining:
+            debtBorrowLimit !== Infinity ? borrowLimitRemaining : null,
+          debt_price_usd: debtPrice,
+          collateral_ltv: collLtvHistory,
+          collateral_liquidation_threshold: collLiqThreshold,
+          collateral_yield_7d_pct: toPct(collYield7d),
+          collateral_yield_30d_pct: toPct(collYield30d),
+          debt_symbol: debtSymbol,
+          debt_mint: debtReserve.liquidityTokenMint,
+          debt_reserve: debtPk,
+          debt_supply_usd: debtTotalSupply * debtPrice,
+          debt_borrow_usd: debtTotalBorrow * debtPrice,
+          borrow_apy_current_pct: toPct(borrowApyCurrent),
+          borrow_apy_7d_pct: toPct(borrowAvg7d),
+          borrow_apy_30d_pct: toPct(borrowAvg30d),
+          utilization_pct: Math.round(utilization * 100) / 100,
+          borrow_curve: borrowCurve,
+          net_apy_current_pct: netApyCurrentPct,
+          net_apy_7d_pct: netApy7dPct,
+          net_apy_30d_pct: netApy30dPct,
+          leverage_used: effectiveLeverage,
+          leverage_table: leverageTable,
+          all_reserves: typedReserves.map((r) => ({
+            symbol: r.liquidityToken,
+            mint: r.liquidityTokenMint,
+            reserve: r.reserve,
+            max_ltv: r.maxLtv,
+            supply_apy: r.supplyApy,
+            borrow_apy: r.borrowApy,
+            total_supply_usd: r.totalSupplyUsd,
+            total_borrow_usd: r.totalBorrowUsd,
+          })),
+          source: "kamino_api",
+          type: "multiply",
         };
-      }
 
-      // Rich data from reserve history
-      const latestCollMetrics =
-        collHistory.length > 0
-          ? ((collHistory[collHistory.length - 1] as Record<string, unknown>)
-              .metrics as Record<string, unknown>) ?? {}
-          : {};
-      const latestDebtMetrics =
-        debtHistory.length > 0
-          ? ((debtHistory[debtHistory.length - 1] as Record<string, unknown>)
-              .metrics as Record<string, unknown>) ?? {}
-          : {};
-
-      const collTotalSupplyTokens = safeFloat(
-        latestCollMetrics.totalSupply,
-      );
-      const collPrice = safeFloat(latestCollMetrics.assetPriceUSD);
-      const collateralSuppliedUsd =
-        collTotalSupplyTokens !== null && collPrice !== null
-          ? collTotalSupplyTokens * collPrice
-          : safeFloat(collReserve.totalSupplyUsd) ?? 0;
-
-      const debtTotalSupply =
-        safeFloat(latestDebtMetrics.totalSupply) ??
-        safeFloat(debtReserve.totalSupply) ??
-        0;
-      const debtTotalBorrow =
-        safeFloat(latestDebtMetrics.totalBorrows) ??
-        safeFloat(debtReserve.totalBorrow) ??
-        0;
-      const debtDecimals = Number(latestDebtMetrics.decimals ?? 6);
-      const debtBorrowLimitRaw =
-        safeFloat(latestDebtMetrics.reserveBorrowLimit) ?? 0;
-      const debtBorrowLimit =
-        debtBorrowLimitRaw > 0
-          ? debtBorrowLimitRaw / 10 ** debtDecimals
-          : Infinity;
-      const debtPrice =
-        safeFloat(latestDebtMetrics.assetPriceUSD) ?? 1.0;
-
-      const supplyAvailable = debtTotalSupply - debtTotalBorrow;
-      const borrowLimitRemaining = debtBorrowLimit - debtTotalBorrow;
-      const liqAvailableTokens = Math.max(
-        0,
-        Math.min(supplyAvailable, borrowLimitRemaining),
-      );
-      const liqAvailableUsd = liqAvailableTokens * debtPrice;
-
-      const collDepositLimitRaw =
-        safeFloat(latestCollMetrics.reserveDepositLimit) ?? 0;
-      const collDecimals = Number(latestCollMetrics.decimals ?? 6);
-      const collDepositLimit =
-        collDepositLimitRaw > 0
-          ? collDepositLimitRaw / 10 ** collDecimals
-          : null;
-
-      const utilization =
-        debtTotalSupply > 0
-          ? (debtTotalBorrow / debtTotalSupply) * 100
-          : 0;
-
-      const collLtvHistory =
-        latestCollMetrics.loanToValue ?? collLtvVal;
-      const collLiqThreshold =
-        latestCollMetrics.liquidationThreshold ?? null;
-      const borrowCurve = latestDebtMetrics.borrowCurve ?? null;
-
-      const vaultTag = classifyMultiplyPair(collSymbol, debtSymbol);
-      const externalId = `kmul-${marketPubkey.slice(0, 8)}-${collPk.slice(0, 6)}-${debtPk.slice(0, 6)}`;
-      const name = `Kamino Multiply — ${collSymbol}/${debtSymbol} (${marketName})`;
-
-      const extra: Record<string, unknown> = {
-        protocol_url: "https://kamino.com/multiply",
-        market: marketPubkey,
-        market_name: marketName,
-        market_description: marketDescription,
-        market_lookup_table: (m as Record<string, unknown>).lookupTable ?? "",
-        market_is_curated: (m as Record<string, unknown>).isCurated ?? false,
-        max_leverage: maxLeverage,
-        vault_tag: vaultTag,
-        apy_source: apySource,
-        collateral_symbol: collSymbol,
-        collateral_mint: collReserve.liquidityTokenMint,
-        collateral_reserve: collPk,
-        collateral_reserve_supply_usd: collateralSuppliedUsd,
-        collateral_supply_tokens: collTotalSupplyTokens,
-        collateral_price_usd: collPrice,
-        collateral_deposit_limit: collDepositLimit,
-        debt_available_usd: liqAvailableUsd,
-        debt_available_tokens: liqAvailableTokens,
-        debt_borrow_limit:
-          debtBorrowLimit !== Infinity ? debtBorrowLimit : null,
-        debt_borrow_limit_remaining:
-          debtBorrowLimit !== Infinity ? borrowLimitRemaining : null,
-        debt_price_usd: debtPrice,
-        collateral_ltv: collLtvHistory,
-        collateral_liquidation_threshold: collLiqThreshold,
-        collateral_yield_7d_pct: toPct(collYield7d),
-        collateral_yield_30d_pct: toPct(collYield30d),
-        debt_symbol: debtSymbol,
-        debt_mint: debtReserve.liquidityTokenMint,
-        debt_reserve: debtPk,
-        debt_supply_usd: debtTotalSupply * debtPrice,
-        debt_borrow_usd: debtTotalBorrow * debtPrice,
-        borrow_apy_current_pct: toPct(borrowApyCurrent),
-        borrow_apy_7d_pct: toPct(borrowAvg7d),
-        borrow_apy_30d_pct: toPct(borrowAvg30d),
-        utilization_pct: Math.round(utilization * 100) / 100,
-        borrow_curve: borrowCurve,
-        net_apy_current_pct: netApyCurrentPct,
-        net_apy_7d_pct: netApy7dPct,
-        net_apy_30d_pct: netApy30dPct,
-        leverage_used: effectiveLeverage,
-        leverage_table: leverageTable,
-        all_reserves: typedReserves.map((r) => ({
-          symbol: r.liquidityToken,
-          mint: r.liquidityTokenMint,
-          reserve: r.reserve,
-          max_ltv: r.maxLtv,
-          supply_apy: r.supplyApy,
-          borrow_apy: r.borrowApy,
-          total_supply_usd: r.totalSupplyUsd,
-          total_borrow_usd: r.totalBorrowUsd,
-        })),
-        source: "kamino_api",
-        type: "multiply",
-      };
-
-      const opp = await upsertOpportunity(database, {
-        protocolId: protocol.id,
-        protocolName: protocol.name,
-        externalId,
-        name,
-        category: "multiply",
-        tokens: [collSymbol, debtSymbol],
-        apyCurrent: netApyCurrentPct,
-        apy7dAvg: netApy7dPct,
-        apy30dAvg: netApy30dPct,
-        tvlUsd: marketTvl,
-        depositAddress: collPk,
-        riskTier: (maxLeverage ?? 0) >= 8 ? "high" : "medium",
-        extra,
-        now,
-        source: "kamino_api",
-        liquidityAvailableUsd: liqAvailableUsd,
-      });
-
-      upsertedIds.add(externalId);
-      count++;
-
-      logger.debug(
-        {
+        const opp = await upsertOpportunity(database, {
+          protocolId: protocol.id,
+          protocolName: protocol.name,
+          externalId,
           name,
-          leverage: effectiveLeverage,
-          apySource,
-          borrowPct: borrowApyCurrent !== null ? (borrowApyCurrent * 100).toFixed(2) : "N/A",
-          collYield7dPct: collYield7d !== null ? (collYield7d * 100).toFixed(2) : "N/A",
-          netApy7dPct: netApy7dPct !== null ? netApy7dPct.toFixed(2) : "N/A",
-        },
-        "Multiply pair upserted",
-      );
+          category: "multiply",
+          tokens: [collSymbol, debtSymbol],
+          apyCurrent: netApyCurrentPct,
+          apy7dAvg: netApy7dPct,
+          apy30dAvg: netApy30dPct,
+          tvlUsd: marketTvl,
+          depositAddress: collPk,
+          riskTier: (maxLeverage ?? 0) >= 8 ? "high" : "medium",
+          extra,
+          now,
+          source: "kamino_api",
+          liquidityAvailableUsd: liqAvailableUsd,
+        });
+
+        upsertedIds.add(externalId);
+        count++;
+
+        logger.debug(
+          {
+            name,
+            leverage: effectiveLeverage,
+            apySource,
+            borrowPct: borrowApyCurrent !== null ? (borrowApyCurrent * 100).toFixed(2) : "N/A",
+            collYield7dPct: collYield7d !== null ? (collYield7d * 100).toFixed(2) : "N/A",
+            netApy7dPct: netApy7dPct !== null ? netApy7dPct.toFixed(2) : "N/A",
+          },
+          "Multiply pair upserted",
+        );
+      } catch (err) {
+        logger.warn({ err, coll: collReserve.liquidityToken, debt: debtReserve.liquidityToken }, "Kamino multiply: skipping pair");
+      }
     }
   }
 

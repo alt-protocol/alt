@@ -64,29 +64,33 @@ const SEED_PROTOCOLS = [
 ];
 
 async function seedProtocols() {
-  let upserted = 0;
-  for (const p of SEED_PROTOCOLS) {
-    const result = await db
-      .insert(protocols)
-      .values(p)
-      .onConflictDoUpdate({
-        target: protocols.slug,
-        set: {
-          name: p.name,
-          description: p.description,
-          website_url: p.website_url,
-          audit_status: p.audit_status,
-          auditors: p.auditors,
-          integration: p.integration,
-          updated_at: new Date(),
-        },
-      });
+  try {
+    let upserted = 0;
+    for (const p of SEED_PROTOCOLS) {
+      const result = await db
+        .insert(protocols)
+        .values(p)
+        .onConflictDoUpdate({
+          target: protocols.slug,
+          set: {
+            name: p.name,
+            description: p.description,
+            website_url: p.website_url,
+            audit_status: p.audit_status,
+            auditors: p.auditors,
+            integration: p.integration,
+            updated_at: new Date(),
+          },
+        });
 
-    if (result.rowCount && result.rowCount > 0) {
-      upserted++;
+      if (result.rowCount && result.rowCount > 0) {
+        upserted++;
+      }
     }
+    logger.info({ count: upserted }, "Seeded/updated protocols");
+  } catch (err) {
+    logger.error({ err }, "Protocol seeding failed — continuing with existing data");
   }
-  logger.info({ count: upserted }, "Seeded/updated protocols");
 }
 
 // ---------------------------------------------------------------------------
