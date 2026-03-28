@@ -78,6 +78,8 @@ Always check these before creating new functions — most common utilities alrea
 - `usePositionForOpportunity.ts` — `usePositionForOpportunity(walletAddress, opportunityId)` returns user's active position for a specific yield opportunity (used by withdraw tab)
 - `useSlippage.ts` — `useSlippage(defaultBps)` — persisted slippage preference in localStorage, used by MultiplyPanel
 - `usePortfolioData.ts` — wallet tracking, position fetching, history, events, summary computations
+- `useInvalidateAfterTransaction.ts` — optimistic cache updates + delayed backend re-fetch after deposit/withdraw transactions
+- `useWithdrawState.ts` — `useWithdrawState(walletAddress, opportunityId)` — protocol-agnostic withdrawal state query (e.g., Drift vault redeem period)
 
 ### Components (`src/components/`)
 - `CategoryDetailView.tsx` — shared detail page shell driven by category registry. Renders stats, detail fields, action panel, and APY history for any category.
@@ -96,6 +98,10 @@ Always check these before creating new functions — most common utilities alrea
 - `MultiplyPanel.tsx` — Kamino Multiply open/withdraw/close with leverage selector, projected APY, KSwap routing.
 - `EventsTable.tsx` — transaction history table with mobile card view + desktop table
 - `PortfolioStates.tsx` — `LoadingSkeleton`, `NoWalletState`, `ErrorState`, `SyncingState` for portfolio page
+- `RefreshButton.tsx` — spinning refresh button that invalidates specified TanStack Query keys
+- `QueryProvider.tsx` — TanStack QueryClientProvider wrapper with default staleTime/retry config
+- `SolanaProviders.tsx` — Solana wallet providers (`@solana/react` Wallet Standard)
+- `WalletButton.tsx` — wallet connect/disconnect button with address display and modal trigger
 - `ApyChart.tsx`, `PortfolioChart.tsx` — Recharts-based charts (dynamically imported)
 
 ## Coding Patterns

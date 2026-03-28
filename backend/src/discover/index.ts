@@ -1,5 +1,4 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
 import { db } from "./db/connection.js";
 import { protocols } from "./db/schema.js";
 import { logger } from "../shared/logger.js";
@@ -24,7 +23,7 @@ const SEED_PROTOCOLS = [
   },
   {
     slug: "drift",
-    name: "Drift Protocol",
+    name: "Drift",
     description:
       "Decentralized perpetuals exchange with earn vaults on Solana.",
     website_url: "https://drift.trade",
@@ -65,25 +64,29 @@ const SEED_PROTOCOLS = [
 ];
 
 async function seedProtocols() {
-  let added = 0;
+  let upserted = 0;
   for (const p of SEED_PROTOCOLS) {
-    const existing = await db
-      .select({ id: protocols.id })
-      .from(protocols)
-      .where(eq(protocols.slug, p.slug))
-      .limit(1);
+    const result = await db
+      .insert(protocols)
+      .values(p)
+      .onConflictDoUpdate({
+        target: protocols.slug,
+        set: {
+          name: p.name,
+          description: p.description,
+          website_url: p.website_url,
+          audit_status: p.audit_status,
+          auditors: p.auditors,
+          integration: p.integration,
+          updated_at: new Date(),
+        },
+      });
 
-    if (existing.length === 0) {
-      await db.insert(protocols).values(p);
-      added++;
-      logger.info({ protocol: p.name }, "Seeded protocol");
+    if (result.rowCount && result.rowCount > 0) {
+      upserted++;
     }
   }
-  if (added > 0) {
-    logger.info({ count: added }, "Seeded protocols");
-  } else {
-    logger.info("All protocols already present — skipping seed");
-  }
+  logger.info({ count: upserted }, "Seeded/updated protocols");
 }
 
 // ---------------------------------------------------------------------------

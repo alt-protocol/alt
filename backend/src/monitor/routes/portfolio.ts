@@ -447,7 +447,7 @@ export async function portfolioRoutes(app: FastifyInstance) {
               snapshot_at,
               SUM(deposit_amount_usd::numeric) as total_usd,
               SUM(pnl_usd::numeric) as total_pnl
-            FROM user_positions
+            FROM monitor.user_positions
             WHERE wallet_address = ${wallet}
               AND snapshot_at >= ${cutoff}
             GROUP BY snapshot_at

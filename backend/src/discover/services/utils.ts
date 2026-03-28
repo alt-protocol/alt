@@ -197,16 +197,16 @@ export async function batchSnapshotAvg(
     // Subquery: opportunity IDs with at least one snapshot older than half window
     const rows = await db.execute(sql`
       SELECT yo.external_id, AVG(ys.apy) as avg_apy
-      FROM yield_snapshots ys
-      JOIN yield_opportunities yo ON yo.id = ys.opportunity_id
+      FROM discover.yield_snapshots ys
+      JOIN discover.yield_opportunities yo ON yo.id = ys.opportunity_id
       WHERE yo.protocol_id = ${protocolId}
         AND yo.category = ${category}
         AND ys.snapshot_at >= ${since}
         AND ys.apy IS NOT NULL
         AND yo.id IN (
           SELECT DISTINCT ys2.opportunity_id
-          FROM yield_snapshots ys2
-          JOIN yield_opportunities yo2 ON yo2.id = ys2.opportunity_id
+          FROM discover.yield_snapshots ys2
+          JOIN discover.yield_opportunities yo2 ON yo2.id = ys2.opportunity_id
           WHERE yo2.protocol_id = ${protocolId}
             AND yo2.category = ${category}
             AND ys2.snapshot_at <= ${halfWindow}

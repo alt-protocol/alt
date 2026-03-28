@@ -195,6 +195,7 @@ async function fetchInsuranceFund(
   const vaultBalances = await fetchVaultTokenBalances(stableVaults);
 
   let count = 0;
+  const upsertedIds = new Set<string>();
   for (const entry of data) {
     const e = entry as Record<string, unknown>;
     const idx = e.marketIndex;
@@ -208,6 +209,7 @@ async function fetchInsuranceFund(
     const tvlUsd = vaultBalances[Number(idx)] ?? null;
 
     const externalId = `drift-if-${idx}`;
+    upsertedIds.add(externalId);
     const opp = await upsertOpportunity(database, {
       protocolId: protocol.id,
       protocolName: protocol.name,
@@ -249,6 +251,9 @@ async function fetchInsuranceFund(
 
     count++;
   }
+
+  // Deactivate stale insurance fund entries
+  await deactivateStale(database, "drift-if-%", upsertedIds);
 
   logger.info({ count }, "Drift insurance fund: stablecoin entries");
   return [count, marketIndexMap];

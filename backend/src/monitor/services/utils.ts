@@ -235,7 +235,7 @@ export async function batchEarliestSnapshots(
 ): Promise<Record<string, Date>> {
   const rows = await db.execute(sql`
     SELECT external_id, MIN(snapshot_at) as min_snap
-    FROM user_positions
+    FROM monitor.user_positions
     WHERE wallet_address = ${walletAddress}
     GROUP BY external_id
   `);
