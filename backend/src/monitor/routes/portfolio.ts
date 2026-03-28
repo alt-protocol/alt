@@ -103,6 +103,8 @@ async function latestPositions(
 // Background fetch (fire-and-forget)
 // ---------------------------------------------------------------------------
 
+const FETCH_TIMEOUT_MS = 5 * 60 * 1000; // 5 min — defense against hung protocol APIs
+
 async function backgroundFetchAndStore(walletAddress: string) {
   try {
     // Mark as fetching
@@ -113,12 +115,17 @@ async function backgroundFetchAndStore(walletAddress: string) {
 
     const now = new Date();
 
-    // Fetch all 3 protocols in parallel
+    // Fetch all 3 protocols in parallel, with a hard timeout
     const [kaminoResult, driftResult, jupiterResult] =
-      await Promise.allSettled([
-        fetchKaminoPositions(walletAddress),
-        fetchDriftPositions(walletAddress),
-        fetchJupiterPositions(walletAddress, db),
+      await Promise.race([
+        Promise.allSettled([
+          fetchKaminoPositions(walletAddress),
+          fetchDriftPositions(walletAddress),
+          fetchJupiterPositions(walletAddress, db),
+        ]),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Background fetch timeout (5min)")), FETCH_TIMEOUT_MS),
+        ),
       ]);
 
     const allPositions = [
@@ -331,7 +338,7 @@ export async function portfolioRoutes(app: FastifyInstance) {
             total_pnl_usd: totalPnl,
             position_count: positionDicts.length,
           },
-          fetch_status: "ready",
+          fetch_status: "fetching",
         };
       }
 

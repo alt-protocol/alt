@@ -134,33 +134,33 @@ export async function storePositionRows(
   positions: PositionDict[],
   snapshotAt: Date,
 ): Promise<number> {
-  let count = 0;
-  for (const pos of positions) {
-    await db.insert(userPositions).values({
-      wallet_address: pos.wallet_address,
-      protocol_slug: pos.protocol_slug,
-      product_type: pos.product_type,
-      external_id: pos.external_id,
-      opportunity_id: pos.opportunity_id,
-      deposit_amount: pos.deposit_amount?.toString() ?? null,
-      deposit_amount_usd: pos.deposit_amount_usd?.toString() ?? null,
-      pnl_usd: pos.pnl_usd?.toString() ?? null,
-      pnl_pct: pos.pnl_pct?.toString() ?? null,
-      initial_deposit_usd: pos.initial_deposit_usd?.toString() ?? null,
-      opened_at: pos.opened_at,
-      held_days: pos.held_days?.toString() ?? null,
-      apy: pos.apy?.toString() ?? null,
-      apy_realized: pos.apy_realized?.toString() ?? null,
-      is_closed: pos.is_closed,
-      closed_at: pos.closed_at,
-      close_value_usd: pos.close_value_usd?.toString() ?? null,
-      token_symbol: pos.token_symbol,
-      extra_data: pos.extra_data,
-      snapshot_at: snapshotAt,
-    });
-    count++;
-  }
-  return count;
+  if (positions.length === 0) return 0;
+
+  const rows = positions.map((pos) => ({
+    wallet_address: pos.wallet_address,
+    protocol_slug: pos.protocol_slug,
+    product_type: pos.product_type,
+    external_id: pos.external_id,
+    opportunity_id: pos.opportunity_id,
+    deposit_amount: pos.deposit_amount?.toString() ?? null,
+    deposit_amount_usd: pos.deposit_amount_usd?.toString() ?? null,
+    pnl_usd: pos.pnl_usd?.toString() ?? null,
+    pnl_pct: pos.pnl_pct?.toString() ?? null,
+    initial_deposit_usd: pos.initial_deposit_usd?.toString() ?? null,
+    opened_at: pos.opened_at,
+    held_days: pos.held_days?.toString() ?? null,
+    apy: pos.apy?.toString() ?? null,
+    apy_realized: pos.apy_realized?.toString() ?? null,
+    is_closed: pos.is_closed,
+    closed_at: pos.closed_at,
+    close_value_usd: pos.close_value_usd?.toString() ?? null,
+    token_symbol: pos.token_symbol,
+    extra_data: pos.extra_data,
+    snapshot_at: snapshotAt,
+  }));
+
+  await db.insert(userPositions).values(rows);
+  return rows.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +245,37 @@ export async function batchEarliestSnapshots(
     const extId = row.external_id as string;
     const minSnap = row.min_snap as Date | null;
     if (minSnap) result[extId] = minSnap;
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Batch earliest deposits (for PnL fallback)
+// ---------------------------------------------------------------------------
+
+export async function batchEarliestDeposits(
+  db: NodePgDatabase,
+  walletAddress: string,
+): Promise<Record<string, { snapshot_at: Date; deposit_amount_usd: number }>> {
+  const rows = await db.execute(sql`
+    SELECT DISTINCT ON (external_id)
+      external_id,
+      snapshot_at,
+      deposit_amount_usd
+    FROM monitor.user_positions
+    WHERE wallet_address = ${walletAddress}
+      AND deposit_amount_usd IS NOT NULL
+    ORDER BY external_id, snapshot_at ASC
+  `);
+
+  const result: Record<string, { snapshot_at: Date; deposit_amount_usd: number }> = {};
+  for (const row of rows.rows) {
+    const extId = row.external_id as string;
+    const snapAt = row.snapshot_at as Date | null;
+    const depUsd = Number(row.deposit_amount_usd);
+    if (snapAt && Number.isFinite(depUsd) && depUsd > 0) {
+      result[extId] = { snapshot_at: snapAt, deposit_amount_usd: depUsd };
+    }
   }
   return result;
 }

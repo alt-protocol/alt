@@ -22,6 +22,7 @@ import {
   computeHeldDays,
   storePositionRows,
   batchEarliestSnapshots,
+  batchEarliestDeposits,
   loadOpportunityMap,
   type PositionDict,
 } from "./utils.js";
@@ -238,7 +239,13 @@ async function fetchEarnPositions(
     );
   }
 
-  const earliestMap = await batchEarliestSnapshots(database, wallet);
+  const noEarnings = positionIds.length > 0 && Object.keys(earningsMap).length === 0;
+  const [earliestMap, earliestDeposits] = await Promise.all([
+    batchEarliestSnapshots(database, wallet),
+    noEarnings
+      ? batchEarliestDeposits(database, wallet)
+      : Promise.resolve({} as Record<string, { snapshot_at: Date; deposit_amount_usd: number }>),
+  ]);
   const results: PositionDict[] = [];
 
   for (const [assetAddress, pos] of Object.entries(positionsByAsset)) {
@@ -253,7 +260,22 @@ async function fetchEarnPositions(
     const depositAmountUsd = price ? underlyingAmount * price : null;
     if (depositAmountUsd === null || depositAmountUsd < 0.01) continue;
 
-    const pnlUsd = earningsMap[assetAddress] ?? null;
+    let pnlUsd = earningsMap[assetAddress] ?? null;
+
+    // Fallback: approximate PnL from historical snapshots when earnings API fails.
+    // This is current_value - earliest_value, so it underestimates PnL if the user
+    // made additional deposits after the first snapshot (treats them as initial value).
+    if (pnlUsd === null && depositAmountUsd) {
+      const earliest = earliestDeposits[assetAddress];
+      if (earliest && earliest.deposit_amount_usd > 0) {
+        pnlUsd = depositAmountUsd - earliest.deposit_amount_usd;
+        logger.debug(
+          { wallet: wallet.slice(0, 8), asset: assetAddress.slice(0, 8), pnl: pnlUsd },
+          "Jupiter: using snapshot-based PnL fallback",
+        );
+      }
+    }
+
     let initialDepositUsd: number | null = null;
     let pnlPct: number | null = null;
     if (pnlUsd !== null && depositAmountUsd) {

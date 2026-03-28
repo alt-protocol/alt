@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useSelectedWalletAccount } from "@solana/react";
 import { api } from "@/lib/api";
@@ -18,10 +18,16 @@ export function usePortfolioData() {
   const [activeTab, setActiveTab] = useState<"positions" | "history">("positions");
   const [activeType, setActiveType] = useState("all");
   const [chartPeriod, setChartPeriod] = useState<"7d" | "30d" | "90d">("7d");
-  // Fire-and-forget track on mount
+  const queryClient = useQueryClient();
+  // Track wallet on mount, then invalidate status to pick up "fetching" state
   useEffect(() => {
-    if (walletAddress) api.trackWallet(walletAddress);
-  }, [walletAddress]);
+    if (!walletAddress) return;
+    api.trackWallet(walletAddress).then(() => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.wallet.status(walletAddress),
+      });
+    });
+  }, [walletAddress, queryClient]);
 
   const statusQuery = useQuery({
     queryKey: queryKeys.wallet.status(walletAddress!),

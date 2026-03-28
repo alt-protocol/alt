@@ -183,13 +183,19 @@ async function fetchIfPositions(
       depositAmountUsd = (sharesAfter / totalSharesEv) * tvlUsd;
     }
 
-    // Fallback: fully stale event-level data
+    // Fallback: event-level vault amount (raw token units → USD)
     if (depositAmountUsd === null) {
-      const vaultAmountEv = safeFloat(latest.insuranceVaultAmountBefore);
-      depositAmountUsd =
-        totalSharesEv && totalSharesEv > 0 && vaultAmountEv
-          ? (sharesAfter / totalSharesEv) * vaultAmountEv
-          : null;
+      const vaultAmountRaw = safeFloat(latest.insuranceVaultAmountBefore);
+      if (totalSharesEv && totalSharesEv > 0 && vaultAmountRaw) {
+        // insuranceVaultAmountBefore is in raw token units (6 decimals for stablecoins)
+        const STABLECOIN_DECIMALS = 6;
+        const vaultAmountUsd = vaultAmountRaw / 10 ** STABLECOIN_DECIMALS;
+        depositAmountUsd = (sharesAfter / totalSharesEv) * vaultAmountUsd;
+        logger.debug(
+          { wallet: wallet.slice(0, 8), market: idx, vaultAmountRaw, vaultAmountUsd, deposit: depositAmountUsd },
+          "Drift IF: using normalized event fallback for deposit value",
+        );
+      }
     }
 
     if (depositAmountUsd === null) {
@@ -324,6 +330,11 @@ async function fetchVaultPositions(
     const marketIndex = latest.marketIndex;
     const pnlUsd = totalValue - netDeposits;
     const pnlPct = netDeposits > 0 ? (pnlUsd / netDeposits) * 100 : null;
+
+    logger.debug(
+      { wallet: wallet.slice(0, 8), vault: vaultPubkey.slice(0, 8), totalValue, netDeposits, pnlUsd, snapshotCount: snapshots.length },
+      "Drift vault position computed",
+    );
 
     const externalId = `drift-vault-${vaultPubkey}`;
     const entry =
