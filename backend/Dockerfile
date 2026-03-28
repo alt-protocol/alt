@@ -1,15 +1,15 @@
 FROM node:20-slim AS builder
 WORKDIR /app
-COPY backend/package.json backend/package-lock.json ./
+COPY package.json package-lock.json ./
 RUN npm ci --legacy-peer-deps
-COPY backend/tsconfig.json ./
-COPY backend/src ./src
+COPY tsconfig.json ./
+COPY src ./src
 RUN npm run build
 
 FROM node:20-slim
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 WORKDIR /app
-COPY backend/package.json backend/package-lock.json ./
+COPY package.json package-lock.json ./
 RUN npm ci --legacy-peer-deps --omit=dev --ignore-scripts
 COPY --from=builder /app/dist ./dist
 USER appuser
