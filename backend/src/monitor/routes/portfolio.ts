@@ -104,8 +104,14 @@ async function latestPositions(
 // ---------------------------------------------------------------------------
 
 const FETCH_TIMEOUT_MS = 5 * 60 * 1000; // 5 min — defense against hung protocol APIs
+const inFlightWallets = new Set<string>();
 
 async function backgroundFetchAndStore(walletAddress: string) {
+  if (inFlightWallets.has(walletAddress)) {
+    logger.debug({ wallet: walletAddress.slice(0, 8) }, "Background fetch already in flight — skipping");
+    return;
+  }
+  inFlightWallets.add(walletAddress);
   try {
     // Mark as fetching
     await db
@@ -185,6 +191,8 @@ async function backgroundFetchAndStore(walletAddress: string) {
     } catch {
       // ignore
     }
+  } finally {
+    inFlightWallets.delete(walletAddress);
   }
 }
 
