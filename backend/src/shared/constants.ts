@@ -8,32 +8,50 @@ export const KNOWN_TOKEN_MINTS: Record<string, string> = {
   bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1: "bSOL",
 };
 
-export const STABLECOIN_SYMBOLS = new Set([
-  // Pure USD stablecoins
-  "USDC", "USDC-1", "USDC-Dep",
+// ---------------------------------------------------------------------------
+// Token classification — single source of truth
+// ---------------------------------------------------------------------------
+
+export const REGULAR_STABLES = new Set([
+  "USDC", "USDC-1", "USDC-Dep", "USDC 5m 3%", "USDC 15m 5%",
   "USDT",
   "USDS",
   "USDG",
   "PYUSD",
   "FDUSD",
   "EURC",
-  "USDe", "sUSDe",
-  "USDY",
+  "USDe",
   "USD1",
   "AUSD",
   "USDH",
   "USX",
-  "eUSX",
   "JupUSD",
-  // RWA / yield-bearing USD tokens
+  "CASH",
+]);
+
+export const YIELD_BEARING_STABLES = new Set([
   "PRIME",
   "syrupUSDC",
+  "ONyc",
   "USCC",
-  "CASH",
+  "PST",
+  "eUSX",
+  "JUICED",
+  "sUSDe",
+  "USDY",
   "FWDI",
   "wYLDS",
-  "ONyc",
-  "JUICED",
+]);
+
+export const LST_SYMBOLS = new Set([
+  "JITOSOL", "MSOL", "BSOL", "JUPSOL", "HSOL", "VSOL", "INF", "DSOL",
+  "BONKSOL", "COMPASSSOL", "LAINESOL", "PATHSOL", "PICOSOL", "HUBSOL",
+]);
+
+// Derived — union of regular + yield-bearing stables
+export const STABLECOIN_SYMBOLS = new Set([
+  ...REGULAR_STABLES,
+  ...YIELD_BEARING_STABLES,
 ]);
 
 export function computeDepeg(

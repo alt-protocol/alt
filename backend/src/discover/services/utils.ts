@@ -11,28 +11,14 @@ import {
 } from "../db/schema.js";
 import { logger } from "../../shared/logger.js";
 import { safeFloat } from "../../shared/utils.js";
+import {
+  REGULAR_STABLES,
+  YIELD_BEARING_STABLES,
+  LST_SYMBOLS,
+} from "../../shared/constants.js";
 
 // Re-export for convenience
-export { safeFloat };
-
-// ---------------------------------------------------------------------------
-// Token classification (ported from kamino_fetcher.py)
-// ---------------------------------------------------------------------------
-
-export const YIELD_BEARING_STABLES = new Set([
-  "PRIME", "syrupUSDC", "ONyc", "USCC", "PST", "eUSX",
-  "JUICED", "sUSDe", "USDY",
-]);
-
-export const REGULAR_STABLES = new Set([
-  "USDC", "PYUSD", "USDG", "USDS", "CASH", "USD1", "USDT", "USX", "FDUSD",
-  "USDe", "USDH", "AUSD", "JupUSD",
-]);
-
-export const LST_SYMBOLS = new Set([
-  "JITOSOL", "MSOL", "BSOL", "JUPSOL", "HSOL", "VSOL", "INF", "DSOL",
-  "BONKSOL", "COMPASSSOL", "LAINESOL", "PATHSOL", "PICOSOL", "HUBSOL",
-]);
+export { safeFloat, REGULAR_STABLES, YIELD_BEARING_STABLES, LST_SYMBOLS };
 
 export function classifyToken(symbol: string): string {
   const upper = symbol.toUpperCase();

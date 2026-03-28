@@ -82,7 +82,7 @@ function DashboardContent() {
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: queryKeys.yields.all,
-    queryFn: () => api.getYields({}),
+    queryFn: () => api.getYields({ stablecoins_only: true }),
   });
 
   const allYields: YieldOpportunity[] = data?.data ?? [];
