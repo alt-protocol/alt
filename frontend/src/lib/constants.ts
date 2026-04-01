@@ -4,6 +4,13 @@ export const HELIUS_RPC_URL =
   process.env.NEXT_PUBLIC_HELIUS_RPC_URL ??
   "https://api.mainnet-beta.solana.com";
 
+export const STABLECOIN_SYMBOLS = new Set([
+  "USDC", "USDT", "USDS", "PYUSD", "USDe", "sUSDe", "USDY",
+  "EURC", "USDH", "AUSD", "FDUSD", "USDG", "USD1", "JupUSD",
+  "PRIME", "syrupUSDC", "ONyc", "USCC", "PST", "eUSX",
+  "JUICED", "FWDI", "wYLDS", "CASH", "USX",
+]);
+
 export const TOKEN_MINTS = {
   USDC: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
   USDT: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",

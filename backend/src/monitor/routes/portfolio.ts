@@ -8,6 +8,7 @@ import { trackedWallets, userPositions, userPositionEvents } from "../db/schema.
 import { NotFoundError } from "../../shared/error-handler.js";
 import { postJson } from "../../shared/http.js";
 import { logger } from "../../shared/logger.js";
+import { getSymbolForMint, isStablecoinMint } from "../../shared/constants.js";
 import { validateWallet, storePositionRows, storeEventsBatch } from "../services/utils.js";
 import { fetchWalletPositions as fetchKaminoPositions } from "../services/kamino-position-fetcher.js";
 import { fetchWalletPositions as fetchDriftPositions } from "../services/drift-position-fetcher.js";
@@ -219,40 +220,47 @@ export async function portfolioRoutes(app: FastifyInstance) {
       }
 
       const url = `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`;
-      let data: Record<string, unknown>;
+
+      // Fetch from both Token Program and Token-2022 in parallel
+      const programIds = [
+        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",   // Token Program
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",   // Token-2022
+      ];
+
+      let allAccounts: Record<string, unknown>[] = [];
       try {
-        data = (await postJson(url, {
-          jsonrpc: "2.0",
-          id: 1,
-          method: "getTokenAccountsByOwner",
-          params: [
-            wallet,
-            { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
-            { encoding: "jsonParsed" },
-          ],
-        })) as Record<string, unknown>;
+        const results = await Promise.all(
+          programIds.map((programId) =>
+            postJson(url, {
+              jsonrpc: "2.0",
+              id: 1,
+              method: "getTokenAccountsByOwner",
+              params: [wallet, { programId }, { encoding: "jsonParsed" }],
+            }) as Promise<Record<string, unknown>>
+          ),
+        );
+
+        for (const data of results) {
+          if (data.error) {
+            const e = new Error(
+              ((data.error as Record<string, unknown>).message as string) ?? "RPC error",
+            ) as Error & { statusCode: number };
+            e.statusCode = 502;
+            throw e;
+          }
+          const accounts =
+            ((data.result as Record<string, unknown>)?.value as Record<string, unknown>[]) ?? [];
+          allAccounts = allAccounts.concat(accounts);
+        }
       } catch (err) {
+        if ((err as Error & { statusCode?: number }).statusCode) throw err;
         const e = new Error(`Helius RPC error`) as Error & { statusCode: number };
         e.statusCode = 502;
         throw e;
       }
 
-      if (data.error) {
-        const e = new Error(
-          ((data.error as Record<string, unknown>).message as string) ?? "RPC error",
-        ) as Error & { statusCode: number };
-        e.statusCode = 502;
-        throw e;
-      }
-
-      const accounts =
-        ((data.result as Record<string, unknown>)?.value as Record<
-          string,
-          unknown
-        >[]) ?? [];
-
       const positions = [];
-      for (const account of accounts) {
+      for (const account of allAccounts) {
         const info =
           (
             (
@@ -272,15 +280,20 @@ export async function portfolioRoutes(app: FastifyInstance) {
         if (uiAmount > 0) {
           positions.push({
             mint,
-            symbol: null,
+            symbol: getSymbolForMint(mint),
             amount: Number(amount),
             decimals,
             ui_amount: uiAmount,
+            is_stablecoin: isStablecoinMint(mint),
           });
         }
       }
 
-      return { wallet, positions, total_value_usd: 0 };
+      const totalStablecoinUsd = positions
+        .filter((p) => p.is_stablecoin)
+        .reduce((sum, p) => sum + p.ui_amount, 0);
+
+      return { wallet, positions, total_value_usd: totalStablecoinUsd };
     },
   });
 

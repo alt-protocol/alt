@@ -99,6 +99,7 @@ export default function Portfolio() {
     byType,
     visiblePositions,
     summary,
+    stableSummary,
     chartData,
     showSyncing,
     shortAddr,
@@ -128,6 +129,7 @@ export default function Portfolio() {
                   ["positionHistory", walletAddress],
                   queryKeys.positions.events(walletAddress),
                   queryKeys.wallet.status(walletAddress),
+                  queryKeys.wallet.portfolio(walletAddress),
                 ]}
                 className="ml-auto"
               />
@@ -146,6 +148,19 @@ export default function Portfolio() {
             size="lg"
             className="mb-[2.25rem]"
           />
+
+          {stableSummary.total > 0 && (
+            <StatsGrid
+              stats={[
+                { label: "Total Stablecoins", value: fmtUsd(stableSummary.total) },
+                { label: "Idle", value: fmtUsd(stableSummary.idle) },
+                { label: "Allocated", value: fmtUsd(stableSummary.allocated), sub: `${stableSummary.allocationPct.toFixed(0)}% deployed` },
+                { label: "APY (Total)", value: fmtApy(stableSummary.aprTotal) },
+                { label: "APY (Allocated)", value: fmtApy(stableSummary.aprAllocated), colorClass: pnlColor(stableSummary.aprAllocated) },
+              ]}
+              className="mb-[2.25rem]"
+            />
+          )}
 
           <ChartCard
             chartData={chartData}

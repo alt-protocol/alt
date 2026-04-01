@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import type { UserPositionOut } from "@/lib/api";
 import { fmtDate } from "@/lib/format";
 import { queryKeys } from "@/lib/queryKeys";
+import { STABLECOIN_SYMBOLS } from "@/lib/constants";
 
 export interface ChartPoint {
   date: string;
@@ -57,6 +58,14 @@ export function usePortfolioData() {
     enabled: !!walletAddress && activeTab === "history",
   });
 
+  const portfolioQuery = useQuery({
+    queryKey: queryKeys.wallet.portfolio(walletAddress!),
+    queryFn: () => api.getPortfolio(walletAddress!),
+    enabled: !!walletAddress,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+
   const prevFetchStatus = useRef<string | undefined>(undefined);
   useEffect(() => {
     const status = statusQuery.data?.fetch_status;
@@ -103,6 +112,30 @@ export function usePortfolioData() {
     }));
   }, [historyQuery.data]);
 
+  const stableSummary = useMemo(() => {
+    const idle = (portfolioQuery.data?.positions ?? [])
+      .filter((p) => p.is_stablecoin)
+      .reduce((sum, p) => sum + p.ui_amount, 0);
+
+    const stablePositions = positions.filter(
+      (p) => p.token_symbol && STABLECOIN_SYMBOLS.has(p.token_symbol),
+    );
+    const allocated = stablePositions.reduce(
+      (sum, p) => sum + (p.deposit_amount_usd ?? 0), 0,
+    );
+
+    const total = idle + allocated;
+    const allocationPct = total > 0 ? (allocated / total) * 100 : 0;
+
+    const aprAllocated = allocated > 0
+      ? stablePositions.reduce((sum, p) => sum + (p.apy ?? 0) * (p.deposit_amount_usd ?? 0), 0) / allocated
+      : 0;
+
+    const aprTotal = total > 0 ? (aprAllocated * allocated) / total : 0;
+
+    return { total, idle, allocated, allocationPct, aprTotal, aprAllocated };
+  }, [portfolioQuery.data, positions]);
+
   const showSyncing = positionsQuery.isSuccess && positions.length === 0 && statusQuery.data?.fetch_status === "fetching";
 
   const shortAddr = walletAddress
@@ -124,6 +157,7 @@ export function usePortfolioData() {
     byType,
     visiblePositions,
     summary,
+    stableSummary,
     chartData,
     showSyncing,
     shortAddr,

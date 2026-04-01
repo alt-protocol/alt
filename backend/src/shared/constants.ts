@@ -6,6 +6,14 @@ export const KNOWN_TOKEN_MINTS: Record<string, string> = {
   mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So: "MSOL",
   "7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj": "stSOL",
   bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1: "bSOL",
+  // Stablecoins
+  USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA: "USDS",
+  "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo": "PYUSD",
+  DEkqHyPN7GMRJ5cArtQFAWNfQT7dJQ262PuVhdxAGune: "USDe",
+  Eh6XEPhSwoLv5wFApuLc5bTjQE2G4dEkVktFbEAuhuFQ: "sUSDe",
+  A1KLoBrKBde8Ty9qtNQUtq3C2ortoC3u7twggz7sEto6: "USDY",
+  HzwqbKZw8HxMN6bF2yFZNrht3c2iXXzpKcFu7uBEDKtr: "EURC",
+  USDH1SM1ojwWUga67PGrgFWUHibbjqMvuMaDkRJTgkX: "USDH",
 };
 
 // ---------------------------------------------------------------------------
@@ -53,6 +61,15 @@ export const STABLECOIN_SYMBOLS = new Set([
   ...REGULAR_STABLES,
   ...YIELD_BEARING_STABLES,
 ]);
+
+export function getSymbolForMint(mint: string): string | null {
+  return KNOWN_TOKEN_MINTS[mint] ?? null;
+}
+
+export function isStablecoinMint(mint: string): boolean {
+  const symbol = getSymbolForMint(mint);
+  return symbol !== null && STABLECOIN_SYMBOLS.has(symbol);
+}
 
 export function computeDepeg(
   symbol: string,

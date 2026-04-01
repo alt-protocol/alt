@@ -15,5 +15,6 @@ export const queryKeys = {
   wallet: {
     status: (wallet: string) => ["walletStatus", wallet] as const,
     tokenBalance: (wallet: string, symbol: string) => ["tokenBalance", wallet, symbol] as const,
+    portfolio: (wallet: string) => ["walletPortfolio", wallet] as const,
   },
 };

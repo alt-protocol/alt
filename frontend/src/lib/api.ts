@@ -60,6 +60,7 @@ export interface PortfolioPosition {
   amount: number;
   decimals: number;
   ui_amount: number;
+  is_stablecoin: boolean;
 }
 
 export interface Portfolio {
