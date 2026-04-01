@@ -61,6 +61,17 @@ function addr(s: string): any {
   return address(s);
 }
 
+/**
+ * Wrap a wallet address as a TransactionSigner-like object for the klend SDK.
+ * The SDK accesses `user.address` internally to derive ATAs and build
+ * instruction accounts. A plain Address string has `.address === undefined`,
+ * which breaks deposit/withdraw instruction building. Since the backend never
+ * signs transactions (non-custodial), only the `.address` property is needed.
+ */
+function walletSigner(walletAddress: string): any {
+  return { address: addr(walletAddress) };
+}
+
 // ---------------------------------------------------------------------------
 // Vault helpers
 // ---------------------------------------------------------------------------
@@ -117,7 +128,7 @@ async function buildVaultDeposit(
   try {
     const { vault, Decimal } = await loadVault(params.depositAddress);
     const bundle = await vault.depositIxs(
-      addr(params.walletAddress) as any,
+      walletSigner(params.walletAddress),
       new Decimal(params.amount),
     );
     return [
@@ -153,7 +164,7 @@ async function buildVaultWithdraw(
     );
 
     const bundle = await vault.withdrawIxs(
-      addr(params.walletAddress) as any,
+      walletSigner(params.walletAddress),
       shareAmount,
     );
     const instructions = [
