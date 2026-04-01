@@ -113,9 +113,11 @@ export function usePortfolioData() {
   }, [historyQuery.data]);
 
   const stableSummary = useMemo(() => {
-    const idle = (portfolioQuery.data?.positions ?? [])
-      .filter((p) => p.is_stablecoin)
-      .reduce((sum, p) => sum + p.ui_amount, 0);
+    const idleBalances = (portfolioQuery.data?.positions ?? [])
+      .filter((p) => p.is_stablecoin && p.ui_amount > 0)
+      .sort((a, b) => b.ui_amount - a.ui_amount);
+
+    const idle = idleBalances.reduce((sum, p) => sum + p.ui_amount, 0);
 
     const stablePositions = positions.filter(
       (p) => p.token_symbol && STABLECOIN_SYMBOLS.has(p.token_symbol),
@@ -133,7 +135,7 @@ export function usePortfolioData() {
 
     const aprTotal = total > 0 ? (aprAllocated * allocated) / total : 0;
 
-    return { total, idle, allocated, allocationPct, aprTotal, aprAllocated };
+    return { total, idle, allocated, allocationPct, aprTotal, aprAllocated, idleBalances };
   }, [portfolioQuery.data, positions]);
 
   const showSyncing = positionsQuery.isSuccess && positions.length === 0 && statusQuery.data?.fetch_status === "fetching";

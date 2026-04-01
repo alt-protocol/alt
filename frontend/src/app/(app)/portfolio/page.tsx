@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import dynamic from "next/dynamic";
-import { fmtUsd, fmtPct, fmtApy, pnlColor } from "@/lib/format";
+import { fmtUsd, fmtPct, fmtApy, pnlColor, truncateId } from "@/lib/format";
 import PositionTable, { getColumnsForType } from "@/components/PositionTable";
 import StatsGrid from "@/components/StatsGrid";
 import PeriodSelector from "@/components/PeriodSelector";
@@ -150,16 +150,45 @@ export default function Portfolio() {
           />
 
           {stableSummary.total > 0 && (
-            <StatsGrid
-              stats={[
-                { label: "Total Stablecoins", value: fmtUsd(stableSummary.total) },
-                { label: "Idle", value: fmtUsd(stableSummary.idle) },
-                { label: "Allocated", value: fmtUsd(stableSummary.allocated), sub: `${stableSummary.allocationPct.toFixed(0)}% deployed` },
-                { label: "APY (Total)", value: fmtApy(stableSummary.aprTotal) },
-                { label: "APY (Allocated)", value: fmtApy(stableSummary.aprAllocated), colorClass: pnlColor(stableSummary.aprAllocated) },
-              ]}
-              className="mb-[2.25rem]"
-            />
+            <>
+              <StatsGrid
+                stats={[
+                  { label: "Total Stablecoins", value: fmtUsd(stableSummary.total) },
+                  { label: "Idle", value: fmtUsd(stableSummary.idle) },
+                  { label: "Allocated", value: fmtUsd(stableSummary.allocated), sub: `${stableSummary.allocationPct.toFixed(0)}% deployed` },
+                  { label: "APY (Total)", value: fmtApy(stableSummary.aprTotal) },
+                  { label: "APY (Allocated)", value: fmtApy(stableSummary.aprAllocated), colorClass: pnlColor(stableSummary.aprAllocated) },
+                ]}
+                className={stableSummary.idleBalances.length > 0 ? "mb-3" : "mb-[2.25rem]"}
+              />
+
+              {stableSummary.idleBalances.length > 0 && (
+                <div className="bg-surface-low rounded-sm overflow-hidden mb-[2.25rem]">
+                  <div className="px-5 py-3">
+                    <h3 className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">
+                      Idle Stablecoins
+                    </h3>
+                  </div>
+                  <table className="w-full text-[0.8rem] font-sans">
+                    <tbody>
+                      {stableSummary.idleBalances.map((b) => (
+                        <tr key={b.mint} className="border-t border-outline-ghost">
+                          <td className="px-5 py-2.5 font-display tracking-[-0.02em]">
+                            {b.symbol ?? truncateId(b.mint)}
+                          </td>
+                          <td className="px-5 py-2.5 text-right tabular-nums">
+                            {fmtUsd(b.ui_amount)}
+                          </td>
+                          <td className="px-5 py-2.5 text-right">
+                            <span className="text-foreground-muted text-[0.7rem]">Not Deposited</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
           )}
 
           <ChartCard
