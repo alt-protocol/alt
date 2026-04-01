@@ -113,7 +113,9 @@ const KNOWN_PROGRAMS = new Set([
   // Kamino
   "KLend2g3cP87ber8LQur7Kx1dYKMnLgNq3Jb5zMhJxp", // klend (old)
   "KLend2g3cP87ber8LQur7Kx1dYKMnLgNq3Jb5zMhJxo", // klend (variant)
-  "kvauTFR8qm1dhniz6pYuBZkuene3Hfrs1VQhVRgCNrr", // Kamino vault
+  "kvauTFR8qm1dhniz6pYuBZkuene3Hfrs1VQhVRgCNrr", // Kamino vault (legacy)
+  "KvauGMspG5k6rtzrqqn7WNn3oZdyKqLKwK2XWQ8FLjd", // Kamino vault (kvaults v2)
+  "FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr", // Kamino Farms
   "ScopeZXynqGXfzUmn4NLqyPRjpXthANEexhVGo5i2ux", // Scope oracle
   // Drift
   "dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH", // Drift V2
