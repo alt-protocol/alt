@@ -336,14 +336,86 @@ async function getIfBalance(
   let ctx: DriftContext | undefined;
   try {
     ctx = await createDriftContext(params.walletAddress);
-    const stake = await readIfStake(ctx, getMarketIndex(params.extraData));
+    const marketIndex = getMarketIndex(params.extraData);
+    const stake = await readIfStake(ctx, marketIndex);
     if (!stake) return 0;
     if (stake.shares.isZero() && stake.pendingShares.isZero()) return 0;
 
     const decimals = getDecimals(params.extraData);
+
+    // If there's a pending withdrawal, return the pending value
     if (!stake.pendingShares.isZero())
       return stake.pendingValue.toNumber() / 10 ** decimals;
+
+    // Calculate actual value from on-chain data:
+    // userValue = (userShares / totalShares) * vaultTokenBalance
+    // This is more reliable than costBasis which can be 0.
+    try {
+      const spotMarket = ctx.driftClient.getSpotMarketAccount(marketIndex);
+      if (spotMarket) {
+        const totalShares = spotMarket.insuranceFund.totalShares;
+        if (!totalShares.isZero()) {
+          const vaultInfo = await ctx.connection.getTokenAccountBalance(
+            spotMarket.insuranceFund.vault,
+          );
+          const vaultBalance = Number(vaultInfo.value.amount);
+          return (
+            (stake.shares.toNumber() / totalShares.toNumber()) *
+            (vaultBalance / 10 ** decimals)
+          );
+        }
+      }
+    } catch {
+      // Fall through to costBasis
+    }
+
     return stake.costBasis.toNumber() / 10 ** decimals;
+  } catch {
+    return null;
+  } finally {
+    await ctx?.cleanup();
+  }
+}
+
+/** Read both current balance and cost basis from on-chain in one context. */
+export async function getIfBalanceWithCostBasis(
+  walletAddress: string,
+  marketIndex: number,
+): Promise<{ balance: number; costBasis: number } | null> {
+  let ctx: DriftContext | undefined;
+  try {
+    ctx = await createDriftContext(walletAddress);
+    const stake = await readIfStake(ctx, marketIndex);
+    if (!stake) return null;
+    if (stake.shares.isZero() && stake.pendingShares.isZero()) return null;
+
+    const decimals = 6; // IF is always stablecoin (USDC)
+    const costBasis = stake.costBasis.toNumber() / 10 ** decimals;
+
+    if (!stake.pendingShares.isZero()) {
+      return { balance: stake.pendingValue.toNumber() / 10 ** decimals, costBasis };
+    }
+
+    try {
+      const spotMarket = ctx.driftClient.getSpotMarketAccount(marketIndex);
+      if (spotMarket) {
+        const totalShares = spotMarket.insuranceFund.totalShares;
+        if (!totalShares.isZero()) {
+          const vaultInfo = await ctx.connection.getTokenAccountBalance(
+            spotMarket.insuranceFund.vault,
+          );
+          const vaultBalance = Number(vaultInfo.value.amount);
+          const balance =
+            (stake.shares.toNumber() / totalShares.toNumber()) *
+            (vaultBalance / 10 ** decimals);
+          return { balance, costBasis };
+        }
+      }
+    } catch {
+      // Fall through to costBasis as balance
+    }
+
+    return { balance: costBasis, costBasis };
   } catch {
     return null;
   } finally {
@@ -423,6 +495,7 @@ async function buildVaultDeposit(
         initParam,
       );
 
+    const cuIxs = computeBudgetIxs(ctx.web3);
     const ixs: any[] = [];
     if (existingAccount === null) {
       ixs.push(
@@ -432,6 +505,34 @@ async function buildVaultDeposit(
         ),
       );
     }
+
+    // Defensive ATA guard for non-wSOL deposit tokens
+    const spl = await import("@solana/spl-token");
+    const vault = await ctx.vaultClient.getVault(ctx.vaultPubkey);
+    const spotMarket = ctx.driftClient.getSpotMarketAccount(
+      vault.spotMarketIndex,
+    );
+    if (
+      spotMarket &&
+      !spotMarket.mint.equals(ctx.driftSdk.WRAPPED_SOL_MINT)
+    ) {
+      const ata = spl.getAssociatedTokenAddressSync(
+        spotMarket.mint,
+        ctx.signerPubkey,
+        true,
+      );
+      if (!(await ctx.connection.getAccountInfo(ata))) {
+        ixs.push(
+          spl.createAssociatedTokenAccountInstruction(
+            ctx.signerPubkey,
+            ata,
+            ctx.signerPubkey,
+            spotMarket.mint,
+          ),
+        );
+      }
+    }
+
     ixs.push(...preIxs);
     ixs.push(
       await ctx.vaultClient.program.methods
@@ -441,7 +542,7 @@ async function buildVaultDeposit(
         .instruction(),
     );
     ixs.push(...postIxs);
-    return ixs.map(convertIx);
+    return [...cuIxs, ...ixs].map(convertIx);
   } finally {
     await ctx.cleanup();
   }

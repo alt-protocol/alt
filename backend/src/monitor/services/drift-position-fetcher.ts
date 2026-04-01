@@ -14,7 +14,7 @@ import { logger } from "../../shared/logger.js";
 import { safeFloat, parseTimestamp, cached } from "../../shared/utils.js";
 import type { OpportunityMapEntry } from "../../shared/types.js";
 import { discoverService } from "../../discover/service.js";
-import { getAdapter } from "../../manage/protocols/index.js";
+import { getIfBalanceWithCostBasis } from "../../manage/protocols/drift.js";
 import { db } from "../db/connection.js";
 import { trackedWallets } from "../db/schema.js";
 import {
@@ -170,91 +170,48 @@ async function fetchIfPositions(
     const externalId = `drift-if-${idx}`;
     const entry = oppMap[externalId];
 
-    // Primary: on-chain balance via Manage module (cross-module read).
-    // This reads current userShares / totalShares * vaultBalance directly
-    // from Solana, avoiding stale event-level totalShares.
+    // On-chain balance + cost basis via Manage module (cross-module read).
+    // Reads current userShares/totalShares*vaultBalance and costBasis in one context.
     let depositAmountUsd: number | null = null;
+    let initialDepositUsd: number | null = null;
     try {
-      const adapter = await getAdapter("drift");
-      const onChainBalance = await adapter?.getBalance?.({
-        walletAddress: wallet,
-        depositAddress: "",
-        category: "insurance_fund",
-        extraData: { market_index: idx },
-      });
-      if (onChainBalance != null && onChainBalance > 0) {
-        depositAmountUsd = onChainBalance;
+      const onChain = await getIfBalanceWithCostBasis(wallet, idx);
+      if (onChain) {
+        if (onChain.balance > 0) depositAmountUsd = onChain.balance;
+        if (onChain.costBasis > 0) initialDepositUsd = onChain.costBasis;
       }
     } catch (err) {
       logger.warn(
         { err, wallet: wallet.slice(0, 8), market: idx },
-        "Drift IF: on-chain balance fetch failed, falling back to event data",
+        "Drift IF: on-chain fetch failed, falling back to event data",
       );
     }
 
-    // Fallback: event-level TVL approximation (totalShares may be stale)
+    // Fallback for depositAmountUsd: event-level TVL approximation
     if (depositAmountUsd === null) {
       const totalSharesEv = safeFloat(latest.totalIfSharesAfter);
       const tvlUsd = entry?.tvl_usd ?? null;
-
       if (tvlUsd && tvlUsd > 0 && totalSharesEv && totalSharesEv > 0) {
         depositAmountUsd = (sharesAfter / totalSharesEv) * tvlUsd;
       }
-
-      if (depositAmountUsd === null) {
-        const vaultAmountRaw = safeFloat(latest.insuranceVaultAmountBefore);
-        if (totalSharesEv && totalSharesEv > 0 && vaultAmountRaw) {
-          const STABLECOIN_DECIMALS = 6;
-          const vaultAmountUsd = vaultAmountRaw / 10 ** STABLECOIN_DECIMALS;
-          depositAmountUsd = (sharesAfter / totalSharesEv) * vaultAmountUsd;
-        }
-      }
-
-      if (depositAmountUsd === null) {
-        logger.info(
-          { wallet: wallet.slice(0, 8), market: idx, shares: sharesAfter },
-          "Drift IF: could not compute current value — no on-chain or event data",
-        );
-      }
     }
 
-    // Find the last reset point (full withdrawal) — only count events
-    // from the current deposit cycle for PnL calculation.
-    let resetIdx = -1;
-    for (let i = marketEvents.length - 1; i >= 0; i--) {
-      const evt = marketEvents[i];
+    // Determine opened_at from events (for held_days calculation)
+    let openedAt: Date | null = null;
+    for (const evt of marketEvents) {
       const action = ((evt.action as string) ?? "").toLowerCase();
-      const sharesAfterEvt = safeFloat(evt.ifSharesAfter) ?? 0;
-      if (action === "unstake" && sharesAfterEvt < 0.001) {
-        resetIdx = i;
+      if (action === "stake") {
+        openedAt = parseTimestamp(evt.ts);
         break;
       }
     }
 
-    let totalStaked = 0;
-    let totalUnstaked = 0;
-    let openedAt: Date | null = null;
-
-    for (let i = resetIdx + 1; i < marketEvents.length; i++) {
-      const evt = marketEvents[i];
-      const action = ((evt.action as string) ?? "").toLowerCase();
-      const amount = safeFloat(evt.amount) ?? 0;
-      if (action === "stake") {
-        totalStaked += amount;
-        if (openedAt === null) openedAt = parseTimestamp(evt.ts);
-      } else if (action === "unstake" || action === "unstakerequest") {
-        totalUnstaked += amount;
-      }
-    }
-
-    const netStaked = totalStaked - totalUnstaked;
-    const initialDepositUsd = netStaked > 0 ? netStaked : totalStaked;
     const pnlUsd =
-      depositAmountUsd !== null && initialDepositUsd > 0
+      depositAmountUsd !== null && initialDepositUsd !== null && initialDepositUsd > 0
         ? depositAmountUsd - initialDepositUsd
         : null;
     const pnlPct =
-      pnlUsd !== null && initialDepositUsd > 0
+      pnlUsd !== null && initialDepositUsd !== null && initialDepositUsd > 0
         ? (pnlUsd / initialDepositUsd) * 100
         : null;
 
@@ -273,7 +230,7 @@ async function fetchIfPositions(
         deposit_amount_usd: depositAmountUsd,
         pnl_usd: pnlUsd,
         pnl_pct: pnlPct,
-        initial_deposit_usd: initialDepositUsd > 0 ? initialDepositUsd : null,
+        initial_deposit_usd: initialDepositUsd,
         opened_at: openedAt,
         held_days: computeHeldDays(openedAt, now),
         apy,
@@ -282,14 +239,12 @@ async function fetchIfPositions(
           if_shares: sharesAfter,
           market_index: idx,
           symbol,
-          total_staked: totalStaked,
-          total_unstaked: totalUnstaked,
         },
       }),
     );
 
-    for (let i = resetIdx + 1; i < marketEvents.length; i++)
-      positionEvents.push(ifEventToRecord(marketEvents[i], wallet));
+    for (const evt of marketEvents)
+      positionEvents.push(ifEventToRecord(evt, wallet));
   }
 
   return { positions, events: positionEvents };
