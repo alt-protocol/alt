@@ -142,16 +142,19 @@ async function buildEarnWithdraw(
       return ixs.map(convertInstruction);
     }
   } catch {
-    // Position query failed — fall through to asset-based withdrawal
+    // Position query errored — fall through to asset-based withdrawal
+    const { ixs } = await ctx.getWithdrawIxs({
+      amount: amountRaw,
+      asset: ctx.asset,
+      signer: ctx.user,
+      connection: ctx.connection as any,
+    });
+    return ixs.map(convertInstruction);
   }
 
-  const { ixs } = await ctx.getWithdrawIxs({
-    amount: amountRaw,
-    asset: ctx.asset,
-    signer: ctx.user,
-    connection: ctx.connection as any,
-  });
-  return ixs.map(convertInstruction);
+  // Position query succeeded but found no position — reject early instead of
+  // building instructions that will always revert on-chain
+  throw new Error("No Jupiter Earn position found on-chain for this wallet and asset");
 }
 
 // ---------------------------------------------------------------------------

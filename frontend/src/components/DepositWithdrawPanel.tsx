@@ -68,6 +68,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
     ? vaultBalance
     : (position?.deposit_amount ?? null);
   const withdrawLoading = vaultBalanceLoading || (vaultBalance == null && positionLoading);
+  const usingFallbackBalance = withdrawBalance != null && withdrawBalance > 0 && (vaultBalance == null || vaultBalance <= 0);
 
   const { execute, status, error, txSignature, reset } = useTransaction(signer);
   const [isSettling, setIsSettling] = useState(false);
@@ -178,6 +179,11 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
                 </span>
               }
             />
+          )}
+          {usingFallbackBalance && (
+            <p className="text-foreground-muted/60 font-sans text-[0.6rem] mb-3">
+              Cached balance — on-chain position not confirmed
+            </p>
           )}
         </>
       )}
