@@ -113,6 +113,10 @@ export async function txRoutes(app: FastifyInstance) {
 
       const opp = await discoverService.getOpportunityById(body.opportunity_id);
       if (!opp || !opp.protocol?.slug || !opp.deposit_address) {
+        logger.warn(
+          { opportunityId: body.opportunity_id, hasOpp: !!opp, slug: opp?.protocol?.slug, depositAddr: opp?.deposit_address?.slice(0, 12) },
+          "Balance: opportunity missing required fields",
+        );
         return reply.send({ balance: null });
       }
 

@@ -5,6 +5,7 @@ import type {
   GetBalanceParams,
 } from "./types.js";
 import { convertLegacyInstruction as convertInstruction } from "../services/instruction-converter.js";
+import { logger } from "../../shared/logger.js";
 
 // Jupiter Lend SDK uses legacy @solana/web3.js v1.x internally.
 // We dynamically import it along with its dependencies.
@@ -171,7 +172,11 @@ async function getEarnBalance(
 
     if (!position || position.underlyingAssets.isZero()) return 0;
     return position.underlyingAssets.toNumber() / 10 ** ctx.decimals;
-  } catch {
+  } catch (err) {
+    logger.error(
+      { err, wallet: params.walletAddress.slice(0, 8), mint: params.extraData?.mint },
+      "Jupiter getEarnBalance failed",
+    );
     return null;
   }
 }
