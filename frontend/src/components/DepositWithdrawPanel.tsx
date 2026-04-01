@@ -53,7 +53,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
     selectedAccount.address,
     tab === "withdraw" ? yield_.id : undefined,
   );
-  const { position } = usePositionForOpportunity(
+  const { position, isLoading: positionLoading } = usePositionForOpportunity(
     selectedAccount.address,
     yield_.id,
   );
@@ -62,13 +62,20 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
     tab === "withdraw" ? yield_.id : undefined,
   );
 
+  // On-chain balance is the source of truth; fall back to monitor position data
+  // when the on-chain query returns 0/null (e.g. Jupiter SDK doesn't find the position)
+  const withdrawBalance = (vaultBalance != null && vaultBalance > 0)
+    ? vaultBalance
+    : (position?.deposit_amount ?? null);
+  const withdrawLoading = vaultBalanceLoading || (vaultBalance == null && positionLoading);
+
   const { execute, status, error, txSignature, reset } = useTransaction(signer);
   const [isSettling, setIsSettling] = useState(false);
 
   // Reset transaction state when tab changes
   useEffect(() => { reset(); }, [tab, reset]);
 
-  const effectiveBalance = tab === "deposit" ? (balance ?? null) : (vaultBalance ?? null);
+  const effectiveBalance = tab === "deposit" ? (balance ?? null) : (withdrawBalance != null && withdrawBalance > 0 ? withdrawBalance : null);
   const numAmount = parseFloat(amount) || 0;
   const meetsMinimum = tab === "withdraw" || !yield_.min_deposit || numAmount >= yield_.min_deposit;
   const isRedeemable = withdrawState?.status === "redeemable";
@@ -148,19 +155,19 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
         />
       )}
 
-      {tab === "withdraw" && vaultBalanceLoading && (
+      {tab === "withdraw" && withdrawLoading && (
         <div className="flex justify-between items-center mb-4 animate-pulse">
           <span className="h-3 w-16 bg-surface-high rounded-sm" />
           <span className="h-3 w-24 bg-surface-high rounded-sm" />
         </div>
       )}
 
-      {tab === "withdraw" && !vaultBalanceLoading && vaultBalance != null && vaultBalance > 0 && (
+      {tab === "withdraw" && !withdrawLoading && withdrawBalance != null && withdrawBalance > 0 && (
         <>
           <BalanceRow
             label="Deposited"
             className={position?.pnl_usd != null ? "mb-2" : "mb-4"}
-            value={<>{fmtNum(vaultBalance, 6)} {primaryToken}</>}
+            value={<>{fmtNum(withdrawBalance, 6)} {primaryToken}</>}
           />
           {position?.pnl_usd != null && (
             <BalanceRow
@@ -175,7 +182,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
         </>
       )}
 
-      {tab === "withdraw" && !vaultBalanceLoading && (vaultBalance == null || vaultBalance <= 0) && (
+      {tab === "withdraw" && !withdrawLoading && (withdrawBalance == null || withdrawBalance <= 0) && (
         <div className="flex-1 flex flex-col items-center justify-center gap-2">
           <p className="text-foreground-muted font-sans text-[0.75rem]">
             No active position
