@@ -15,6 +15,7 @@ import { safeFloat, parseTimestamp, cached } from "../../shared/utils.js";
 import type { OpportunityMapEntry } from "../../shared/types.js";
 import { discoverService } from "../../discover/service.js";
 import { getIfBalanceWithCostBasis } from "../../manage/protocols/drift.js";
+import { getAdapter } from "../../manage/protocols/index.js";
 import { db } from "../db/connection.js";
 import { trackedWallets } from "../db/schema.js";
 import {
@@ -159,7 +160,47 @@ async function fetchIfPositions(
 
     const sharesAfter = safeFloat(latest.ifSharesAfter) ?? 0;
     if (sharesAfter < 0.001) {
-      // Closed — record events only
+      // Shares are 0 — check on-chain for pending unstaking (freeze period)
+      try {
+        const onChain = await getIfBalanceWithCostBasis(wallet, idx);
+        if (onChain && onChain.balance > 0) {
+          const symbol = (latest.symbol as string) ?? `MARKET-${idx}`;
+          const externalId = `drift-if-${idx}`;
+          const entry = oppMap[externalId];
+          const adapter = await getAdapter("drift");
+          const withdrawState = await adapter?.getWithdrawState?.({
+            walletAddress: wallet,
+            depositAddress: "",
+            category: "insurance_fund",
+            extraData: { market_index: idx },
+          });
+          positions.push(
+            buildPositionDict({
+              wallet_address: wallet,
+              protocol_slug: "drift",
+              product_type: "insurance_fund",
+              external_id: externalId,
+              snapshot_at: now,
+              opportunity_id: entry?.id ?? null,
+              deposit_amount: sharesAfter,
+              deposit_amount_usd: onChain.balance,
+              initial_deposit_usd: onChain.costBasis > 0 ? onChain.costBasis : null,
+              apy: entry?.apy_current ?? null,
+              token_symbol: symbol,
+              extra_data: {
+                if_shares: sharesAfter,
+                market_index: idx,
+                symbol,
+                withdraw_status: withdrawState?.status ?? "pending",
+                withdraw_message: withdrawState?.message,
+                withdraw_requested_amount: onChain.balance,
+              },
+            }),
+          );
+        }
+      } catch {
+        // Truly closed — no pending withdrawal
+      }
       for (const evt of marketEvents)
         positionEvents.push(ifEventToRecord(evt, wallet));
       continue;
@@ -306,7 +347,49 @@ async function fetchVaultPositions(
     }
 
     const totalValue = safeFloat(latest.totalAccountValue) ?? 0;
-    if (totalValue <= 0) continue;
+    if (totalValue <= 0) {
+      // Check on-chain for pending withdrawal (freeze period)
+      try {
+        const adapter = await getAdapter("drift");
+        const withdrawState = await adapter?.getWithdrawState?.({
+          walletAddress: wallet,
+          depositAddress: vaultPubkey,
+          category: "vault",
+        });
+        if (withdrawState && withdrawState.status !== "none") {
+          const balance = withdrawState.requestedAmount ?? 0;
+          const externalId = `drift-vault-${vaultPubkey}`;
+          const entry = oppMap[vaultPubkey] ?? oppMap[externalId] ?? null;
+          const openedAt = parseTimestamp(snapshots[0].ts);
+          positions.push(
+            buildPositionDict({
+              wallet_address: wallet,
+              protocol_slug: "drift",
+              product_type: "earn_vault",
+              external_id: externalId,
+              snapshot_at: now,
+              opportunity_id: entry?.id ?? null,
+              deposit_amount: balance,
+              deposit_amount_usd: balance,
+              apy: entry?.apy_current ?? null,
+              opened_at: openedAt,
+              held_days: computeHeldDays(openedAt, now),
+              token_symbol: entry?.first_token ?? null,
+              extra_data: {
+                vault_pubkey: vaultPubkey,
+                market_index: latest.marketIndex,
+                withdraw_status: withdrawState.status,
+                withdraw_message: withdrawState.message,
+                withdraw_requested_amount: balance,
+              },
+            }),
+          );
+        }
+      } catch {
+        // Truly closed — no pending withdrawal
+      }
+      continue;
+    }
 
     const netDeposits = safeFloat(latest.netDeposits) ?? 0;
     const marketIndex = latest.marketIndex;
