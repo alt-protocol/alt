@@ -759,7 +759,7 @@ async function fetchObligationPositions(
           external_id: obligationAddress,
           snapshot_at: now,
           opportunity_id: opportunityId,
-          deposit_amount: totalDeposit,
+          deposit_amount: productType === "multiply" ? netValue : totalDeposit,
           deposit_amount_usd: !isClosed ? netValue : 0,
           pnl_usd: pnlUsd,
           pnl_pct: pnlPct,

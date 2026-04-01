@@ -20,6 +20,7 @@ function makeVaultDef(slug: string, displayName: string, sidebarLabel: string): 
       if (y.tokens.length > 0) fields.push({ label: "Tokens", value: y.tokens.join(", ") });
       if (y.min_deposit != null) fields.push({ label: "Min Deposit", value: fmtTvl(y.min_deposit) });
       if (y.lock_period_days > 0) fields.push({ label: "Lock Period", value: `${y.lock_period_days}d` });
+      if (y.liquidity_available_usd != null) fields.push({ label: "Remaining Capacity", value: fmtTvl(y.liquidity_available_usd) });
       if (y.is_automated != null) fields.push({ label: "Automated", value: y.is_automated ? "Yes" : "No" });
       return fields;
     },

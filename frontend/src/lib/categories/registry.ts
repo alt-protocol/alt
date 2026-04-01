@@ -49,6 +49,9 @@ export interface CategoryDefinition {
   /* Transaction lifecycle */
   transactionType: "simple" | "multi-step";
 
+  /** Uncapped products (lending, IF staking) — dashboard shows ∞ instead of — */
+  uncappedLiquidity?: boolean;
+
   /** Optional strategy description shown on detail page */
   strategyDescription?: (y: YieldOpportunityDetail) => string | null;
 

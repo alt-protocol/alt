@@ -9,6 +9,12 @@ import { useYieldFilters, type SortField } from "@/lib/hooks/useYieldFilters";
 import { queryKeys } from "@/lib/queryKeys";
 import FilterPanel from "@/components/FilterPanel";
 import StatsGrid from "@/components/StatsGrid";
+import { getCategoryDef } from "@/lib/categories";
+
+function fmtLiquidity(y: YieldOpportunity) {
+  if (y.liquidity_available_usd != null) return fmtTvl(y.liquidity_available_usd);
+  return getCategoryDef(y.category)?.uncappedLiquidity ? "\u221E" : "\u2014";
+}
 
 function SortArrow({ field, sortField, sortDir }: { field: SortField; sortField: SortField; sortDir: "asc" | "desc" }) {
   const active = sortField === field;
@@ -183,7 +189,7 @@ function DashboardContent() {
                       </div>
                       <div className="flex justify-between items-baseline">
                         <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Available Liquidity</span>
-                        <span className="text-[0.8rem] font-sans tabular-nums text-foreground-muted">{y.liquidity_available_usd != null ? fmtTvl(y.liquidity_available_usd) : "\u2014"}</span>
+                        <span className="text-[0.8rem] font-sans tabular-nums text-foreground-muted">{fmtLiquidity(y)}</span>
                       </div>
                       <div className="flex justify-between items-baseline">
                         <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">APR</span>
@@ -268,7 +274,7 @@ function DashboardContent() {
                         {fmtCategory(y.category)}
                       </td>
                       <td className="px-5 py-3 text-right text-foreground-muted tabular-nums">{fmtTvl(y.tvl_usd)}</td>
-                      <td className="px-5 py-3 text-right text-foreground-muted tabular-nums">{y.liquidity_available_usd != null ? fmtTvl(y.liquidity_available_usd) : "\u2014"}</td>
+                      <td className="px-5 py-3 text-right text-foreground-muted tabular-nums">{fmtLiquidity(y)}</td>
                       <td className="px-5 py-3 text-right font-semibold text-neon tabular-nums">
                         {fmtNum(y.apy_current)}%
                       </td>

@@ -3,6 +3,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import type { UserPositionOut } from "@/lib/api";
+import type { WithdrawState } from "@/lib/tx-types";
 import { queryKeys } from "@/lib/queryKeys";
 
 interface InvalidateParams {
@@ -18,7 +19,7 @@ export function useInvalidateAfterTransaction() {
   const queryClient = useQueryClient();
 
   const invalidateAfterTx = useCallback(
-    ({ walletAddress, tokenSymbol, opportunityId, vaultAddress, txType, txAmount }: InvalidateParams) => {
+    async ({ walletAddress, tokenSymbol, opportunityId, vaultAddress, txType, txAmount }: InvalidateParams) => {
       // Optimistic position update — adjust cached balance before backend catches up
       if (opportunityId && txType && txAmount) {
         const positionsKey = queryKeys.positions.list(walletAddress);
@@ -39,38 +40,68 @@ export function useInvalidateAfterTransaction() {
         }
       }
 
-      // Immediate invalidations — client-side and position data
+      // Optimistic withdrawState update — show new state immediately before RPC catches up
+      if (opportunityId && walletAddress && txType === "withdraw") {
+        const wsKey = ["withdrawState", walletAddress, opportunityId];
+        const cachedWs = queryClient.getQueryData<WithdrawState | null>(wsKey);
+        if (cachedWs?.status === "redeemable") {
+          // Step 2 completed: redeemable → none (withdrawal executed)
+          queryClient.setQueryData(wsKey, { status: "none" } as WithdrawState);
+        } else if (cachedWs && cachedWs.status === "none") {
+          // Step 1 completed: none → pending (withdrawal requested)
+          queryClient.setQueryData(wsKey, {
+            status: "pending",
+            message: "Withdrawal requested. Waiting for on-chain confirmation...",
+            requestedAmount: txAmount ?? 0,
+          } as WithdrawState);
+        }
+      }
+
+      // Optimistic positionBalance update
+      if (opportunityId && walletAddress && txType && txAmount) {
+        const balKey = ["positionBalance", walletAddress, opportunityId];
+        const cachedBalance = queryClient.getQueryData<number | null>(balKey);
+        if (cachedBalance != null) {
+          const newBalance = txType === "withdraw"
+            ? Math.max(0, cachedBalance - txAmount)
+            : cachedBalance + txAmount;
+          queryClient.setQueryData(balKey, newBalance);
+        }
+      }
+
+      // Critical refetches — await so UI has fresh data before re-enabling
+      const critical: Promise<void>[] = [];
+      if (tokenSymbol) {
+        critical.push(
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.wallet.tokenBalance(walletAddress, tokenSymbol),
+          }),
+        );
+      }
+      if (vaultAddress) {
+        critical.push(
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.vault.balance(walletAddress, vaultAddress),
+          }),
+          queryClient.invalidateQueries({
+            queryKey: ["positionBalance", walletAddress],
+            exact: false,
+          }),
+          queryClient.invalidateQueries({
+            queryKey: ["withdrawState", walletAddress],
+            exact: false,
+          }),
+        );
+      }
+      await Promise.allSettled(critical);
+
+      // Non-critical — fire-and-forget (backend-dependent, slow)
       queryClient.invalidateQueries({ queryKey: queryKeys.positions.list(walletAddress) });
       queryClient.invalidateQueries({ queryKey: queryKeys.positions.events(walletAddress) });
       queryClient.invalidateQueries({ queryKey: queryKeys.wallet.status(walletAddress) });
-
-      // Invalidate all position history periods (prefix match)
       queryClient.invalidateQueries({
         queryKey: ["positionHistory", walletAddress],
       });
-
-      // Token balance + vault balance — direct RPC, updates immediately
-      if (tokenSymbol) {
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.wallet.tokenBalance(walletAddress, tokenSymbol),
-        });
-      }
-      if (vaultAddress) {
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.vault.balance(walletAddress, vaultAddress),
-        });
-        // Invalidate on-chain position balance + withdrawal state
-        queryClient.invalidateQueries({
-          queryKey: ["positionBalance", walletAddress],
-          exact: false,
-        });
-        queryClient.invalidateQueries({
-          queryKey: ["withdrawState", walletAddress],
-          exact: false,
-        });
-      }
-
-      // Yield detail TVL may change after large deposits
       if (opportunityId) {
         queryClient.invalidateQueries({
           queryKey: queryKeys.yields.detail(String(opportunityId)),
@@ -85,7 +116,24 @@ export function useInvalidateAfterTransaction() {
         queryClient.invalidateQueries({
           queryKey: ["positionHistory", walletAddress],
         });
+        // Reconcile optimistic state with real on-chain data
+        if (vaultAddress) {
+          queryClient.invalidateQueries({ queryKey: ["withdrawState", walletAddress], exact: false });
+          queryClient.invalidateQueries({ queryKey: ["positionBalance", walletAddress], exact: false });
+          queryClient.invalidateQueries({ queryKey: queryKeys.vault.balance(walletAddress, vaultAddress) });
+        }
+        if (tokenSymbol) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.wallet.tokenBalance(walletAddress, tokenSymbol) });
+        }
       }, 5000);
+
+      // Safety net — some RPCs lag 5-10s for account state changes
+      setTimeout(() => {
+        if (vaultAddress) {
+          queryClient.invalidateQueries({ queryKey: ["withdrawState", walletAddress], exact: false });
+          queryClient.invalidateQueries({ queryKey: ["positionBalance", walletAddress], exact: false });
+        }
+      }, 10_000);
     },
     [queryClient],
   );

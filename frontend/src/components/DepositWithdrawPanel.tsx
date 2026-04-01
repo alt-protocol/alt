@@ -63,6 +63,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
   );
 
   const { execute, status, error, txSignature, reset } = useTransaction(signer);
+  const [isSettling, setIsSettling] = useState(false);
 
   // Reset transaction state when tab changes
   useEffect(() => { reset(); }, [tab, reset]);
@@ -90,15 +91,19 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
   }
 
   async function handleSubmit() {
-    if (!yield_.deposit_address) return;
+    if (!yield_.deposit_address || isSettling) return;
 
     reset();
+
+    const effectiveAmount = (tab === "withdraw" && isRedeemable && withdrawState?.requestedAmount)
+      ? withdrawState.requestedAmount.toString()
+      : amount;
 
     const success = await execute(async () => {
       const params = {
         opportunity_id: yield_.id,
         wallet_address: selectedAccount.address,
-        amount,
+        amount: effectiveAmount,
       };
 
       const response = tab === "deposit"
@@ -110,8 +115,9 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
 
     if (!success) return;
 
+    setIsSettling(true);
     setAmount("");
-    invalidateAfterTx({
+    await invalidateAfterTx({
       walletAddress: selectedAccount.address,
       tokenSymbol: primaryToken,
       opportunityId: yield_.id,
@@ -119,6 +125,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
       txType: tab,
       txAmount: numAmount,
     });
+    setIsSettling(false);
     api.trackWallet(selectedAccount.address);
   }
 
@@ -249,10 +256,12 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
         <>
           <button
             onClick={handleSubmit}
-            disabled={!isValid || isBusy || isPendingWithdraw}
+            disabled={!isValid || isBusy || isPendingWithdraw || isSettling}
             className="bg-neon text-on-neon rounded-sm px-6 py-3 text-sm font-semibold font-sans w-full mt-3 hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {isBusy
+            {isSettling
+              ? "Updating balance..."
+              : isBusy
               ? statusLabel
               : isPendingWithdraw
                 ? "Withdrawal Pending"

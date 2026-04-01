@@ -400,6 +400,7 @@ async function fetchLendingReserves(
           },
           now,
           source: "kamino_api",
+          liquidityAvailableUsd: null,
         });
         count++;
       } catch (err) {

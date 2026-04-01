@@ -23,3 +23,6 @@ frontend/.env.production.local
 *.log
 .env
 .vercel
+
+# Temp task prompts (planner → executor/validator)
+tasks/

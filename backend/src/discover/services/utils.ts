@@ -168,7 +168,9 @@ export async function batchSnapshotAvg(
   db: NodePgDatabase,
   protocolId: number,
   category: string,
+  options?: { strict?: boolean },
 ): Promise<Record<string, { "7d": number | null; "30d": number | null }>> {
+  const strict = options?.strict ?? true;
   const now = new Date();
   const result: Record<string, { "7d": number | null; "30d": number | null }> =
     {};
@@ -178,27 +180,41 @@ export async function batchSnapshotAvg(
     [30, "30d"],
   ] as const) {
     const since = new Date(now.getTime() - days * 86_400_000);
-    const halfWindow = new Date(now.getTime() - Math.floor(days / 2) * 86_400_000);
 
-    // Subquery: opportunity IDs with at least one snapshot older than half window
-    const rows = await db.execute(sql`
-      SELECT yo.external_id, AVG(ys.apy) as avg_apy
-      FROM discover.yield_snapshots ys
-      JOIN discover.yield_opportunities yo ON yo.id = ys.opportunity_id
-      WHERE yo.protocol_id = ${protocolId}
-        AND yo.category = ${category}
-        AND ys.snapshot_at >= ${since}
-        AND ys.apy IS NOT NULL
-        AND yo.id IN (
-          SELECT DISTINCT ys2.opportunity_id
-          FROM discover.yield_snapshots ys2
-          JOIN discover.yield_opportunities yo2 ON yo2.id = ys2.opportunity_id
-          WHERE yo2.protocol_id = ${protocolId}
-            AND yo2.category = ${category}
-            AND ys2.snapshot_at <= ${halfWindow}
-        )
-      GROUP BY yo.external_id
-    `);
+    let rows;
+    if (strict) {
+      const halfWindow = new Date(now.getTime() - Math.floor(days / 2) * 86_400_000);
+
+      rows = await db.execute(sql`
+        SELECT yo.external_id, AVG(ys.apy) as avg_apy
+        FROM discover.yield_snapshots ys
+        JOIN discover.yield_opportunities yo ON yo.id = ys.opportunity_id
+        WHERE yo.protocol_id = ${protocolId}
+          AND yo.category = ${category}
+          AND ys.snapshot_at >= ${since}
+          AND ys.apy IS NOT NULL
+          AND yo.id IN (
+            SELECT DISTINCT ys2.opportunity_id
+            FROM discover.yield_snapshots ys2
+            JOIN discover.yield_opportunities yo2 ON yo2.id = ys2.opportunity_id
+            WHERE yo2.protocol_id = ${protocolId}
+              AND yo2.category = ${category}
+              AND ys2.snapshot_at <= ${halfWindow}
+          )
+        GROUP BY yo.external_id
+      `);
+    } else {
+      rows = await db.execute(sql`
+        SELECT yo.external_id, AVG(ys.apy) as avg_apy
+        FROM discover.yield_snapshots ys
+        JOIN discover.yield_opportunities yo ON yo.id = ys.opportunity_id
+        WHERE yo.protocol_id = ${protocolId}
+          AND yo.category = ${category}
+          AND ys.snapshot_at >= ${since}
+          AND ys.apy IS NOT NULL
+        GROUP BY yo.external_id
+      `);
+    }
 
     for (const row of rows.rows) {
       const extId = row.external_id as string;

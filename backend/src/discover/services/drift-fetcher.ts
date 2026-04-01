@@ -285,6 +285,7 @@ async function fetchInsuranceFund(
         source: "drift_api",
         lockPeriodDays: IF_UNSTAKING_PERIOD_DAYS,
         isAutomated: true,
+        liquidityAvailableUsd: null,
       });
 
       // Compute 7d/30d averages from stored snapshots

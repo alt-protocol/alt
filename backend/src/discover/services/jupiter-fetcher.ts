@@ -108,6 +108,7 @@ async function fetchEarnTokens(
       depeg: computeDepeg(symbol, price),
       apy7dAvg: oppAvgs["7d"] ?? null,
       apy30dAvg: oppAvgs["30d"] ?? await getDefiLlama30dAvg("jupiter-lend", symbol, "Earn"),
+      liquidityAvailableUsd: null,
     });
 
     upsertedIds.add(externalId);
@@ -149,7 +150,8 @@ async function fetchMultiplyVaults(
     return [0, new Set()];
   }
 
-  const avgs = await batchSnapshotAvg(database, protocol.id, "multiply");
+  // strict: false — no Jupiter historical API; use whatever snapshots exist
+  const avgs = await batchSnapshotAvg(database, protocol.id, "multiply", { strict: false });
 
   let count = 0;
   const upsertedIds = new Set<string>();

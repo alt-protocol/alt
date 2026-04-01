@@ -9,6 +9,7 @@ import type {
   GetBalanceParams,
 } from "./types.js";
 import { getRpc } from "../../shared/rpc.js";
+import { logger } from "../../shared/logger.js";
 import {
   getKswapSdkInstance,
   createKswapQuoter,
@@ -169,10 +170,16 @@ async function prepareLending(params: BuildTxParams) {
   } = await loadSdk();
 
   const marketAddress = params.extraData?.market as string | undefined;
-  if (!marketAddress) throw new Error("Missing market address in extra_data");
+  if (!marketAddress)
+    throw Object.assign(new Error("Missing market address in extra_data"), {
+      statusCode: 400,
+    });
 
   const tokenMint = params.extraData?.token_mint as string | undefined;
-  if (!tokenMint) throw new Error("Missing token_mint in extra_data");
+  if (!tokenMint)
+    throw Object.assign(new Error("Missing token_mint in extra_data"), {
+      statusCode: 400,
+    });
 
   const decimals =
     params.extraData?.decimals != null
@@ -187,7 +194,10 @@ async function prepareLending(params: BuildTxParams) {
     addr(marketAddress),
     400,
   );
-  if (!market) throw new Error("Failed to load Kamino market");
+  if (!market)
+    throw Object.assign(new Error("Failed to load Kamino market"), {
+      statusCode: 502,
+    });
 
   return {
     market,
@@ -212,51 +222,73 @@ function flattenLendingIxs(action: any): Instruction[] {
 async function buildLendingDeposit(
   params: BuildTxParams,
 ): Promise<Instruction[]> {
-  const {
-    market,
-    amountBase,
-    tokenMint,
-    KaminoAction,
-    VanillaObligation,
-    PROGRAM_ID,
-  } = await prepareLending(params);
+  try {
+    const {
+      market,
+      amountBase,
+      tokenMint,
+      KaminoAction,
+      VanillaObligation,
+      PROGRAM_ID,
+    } = await prepareLending(params);
 
-  const action = await KaminoAction.buildDepositTxns(
-    market,
-    amountBase,
-    addr(tokenMint),
-    addr(params.walletAddress) as any,
-    new VanillaObligation(PROGRAM_ID),
-    true,
-    undefined,
-  );
+    const action = await KaminoAction.buildDepositTxns(
+      market,
+      amountBase,
+      addr(tokenMint),
+      addr(params.walletAddress) as any,
+      new VanillaObligation(PROGRAM_ID),
+      true,
+      undefined,
+    );
 
-  return flattenLendingIxs(action);
+    return flattenLendingIxs(action);
+  } catch (err: unknown) {
+    if (err instanceof Error && "statusCode" in err) throw err;
+    logger.error({ err }, "Kamino lending deposit SDK error");
+    throw Object.assign(
+      new Error(
+        "Kamino lending deposit failed. Please check the amount and try again.",
+      ),
+      { statusCode: 400 },
+    );
+  }
 }
 
 async function buildLendingWithdraw(
   params: BuildTxParams,
 ): Promise<Instruction[]> {
-  const {
-    market,
-    amountBase,
-    tokenMint,
-    KaminoAction,
-    VanillaObligation,
-    PROGRAM_ID,
-  } = await prepareLending(params);
+  try {
+    const {
+      market,
+      amountBase,
+      tokenMint,
+      KaminoAction,
+      VanillaObligation,
+      PROGRAM_ID,
+    } = await prepareLending(params);
 
-  const action = await KaminoAction.buildWithdrawTxns(
-    market,
-    amountBase,
-    addr(tokenMint),
-    addr(params.walletAddress) as any,
-    new VanillaObligation(PROGRAM_ID),
-    true,
-    undefined,
-  );
+    const action = await KaminoAction.buildWithdrawTxns(
+      market,
+      amountBase,
+      addr(tokenMint),
+      addr(params.walletAddress) as any,
+      new VanillaObligation(PROGRAM_ID),
+      true,
+      undefined,
+    );
 
-  return flattenLendingIxs(action);
+    return flattenLendingIxs(action);
+  } catch (err: unknown) {
+    if (err instanceof Error && "statusCode" in err) throw err;
+    logger.error({ err }, "Kamino lending withdraw SDK error");
+    throw Object.assign(
+      new Error(
+        "Kamino lending withdraw failed. The position may not exist or the amount may exceed your balance.",
+      ),
+      { statusCode: 400 },
+    );
+  }
 }
 
 function isVaultCategory(category: string): boolean {
@@ -304,7 +336,10 @@ async function prepareMultiply(params: BuildTxParams, slippageBps: number) {
     addr(marketAddress),
     DEFAULT_RECENT_SLOT_DURATION_MS,
   );
-  if (!market) throw new Error("Failed to load Kamino market");
+  if (!market)
+    throw Object.assign(new Error("Failed to load Kamino market"), {
+      statusCode: 502,
+    });
 
   const collReserve = market.getReserveByMint(collTokenMint);
   const debtReserve = market.getReserveByMint(debtTokenMint);
@@ -637,6 +672,43 @@ async function getVaultBalance(
   }
 }
 
+async function getLendingBalance(
+  params: GetBalanceParams,
+): Promise<number | null> {
+  try {
+    const { KaminoMarket, VanillaObligation, PROGRAM_ID } = await loadSdk();
+
+    const marketAddress = params.extraData?.market as string | undefined;
+    const tokenMint = params.extraData?.token_mint as string | undefined;
+    if (!marketAddress || !tokenMint) return null;
+
+    const market = await KaminoMarket.load(
+      getRpc() as any,
+      addr(marketAddress),
+      400,
+    );
+    if (!market) return null;
+
+    const obligation = await market.getObligationByWallet(
+      addr(params.walletAddress) as any,
+      new VanillaObligation(PROGRAM_ID),
+    );
+    if (!obligation) return 0;
+
+    const deposit = obligation.getDepositByMint(addr(tokenMint) as any);
+    if (!deposit) return 0;
+
+    const decimals =
+      params.extraData?.decimals != null
+        ? Number(params.extraData.decimals)
+        : 6;
+
+    return deposit.amount.div(10 ** decimals).toNumber();
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Adapter export
 // ---------------------------------------------------------------------------
@@ -654,8 +726,11 @@ export const kaminoAdapter: ProtocolAdapter = {
     return buildLendingWithdraw(params);
   },
 
-  async getBalance({ walletAddress, depositAddress, category }) {
-    if (!isVaultCategory(category)) return null;
-    return getVaultBalance({ walletAddress, depositAddress, category });
+  async getBalance({ walletAddress, depositAddress, category, extraData }) {
+    if (isVaultCategory(category))
+      return getVaultBalance({ walletAddress, depositAddress, category, extraData });
+    if (category === "lending")
+      return getLendingBalance({ walletAddress, depositAddress, category, extraData });
+    return null;
   },
 };

@@ -5,6 +5,7 @@ export const lendingCategory: CategoryDefinition = {
   slug: "lending",
   displayName: "Lending",
   sidebarLabel: "LEND",
+  uncappedLiquidity: true,
 
   statsGrid: (y) => [
     { label: "APY Now", value: fmtApy(y.apy_current) },

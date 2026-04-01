@@ -12,6 +12,7 @@ import { validateWallet, storePositionRows, storeEventsBatch } from "../services
 import { fetchWalletPositions as fetchKaminoPositions } from "../services/kamino-position-fetcher.js";
 import { fetchWalletPositions as fetchDriftPositions } from "../services/drift-position-fetcher.js";
 import { fetchWalletPositions as fetchJupiterPositions } from "../services/jupiter-position-fetcher.js";
+import { discoverService } from "../../discover/service.js";
 import {
   PositionsQuery,
   PositionHistoryQuery,
@@ -412,6 +413,18 @@ export async function portfolioRoutes(app: FastifyInstance) {
           q.protocol,
           q.product_type,
         );
+
+        // Enrich positions missing opportunity_id (stale rows from before link was established)
+        const needsEnrichment = positions.some((p) => p.opportunity_id == null);
+        if (needsEnrichment) {
+          const oppMap = await discoverService.getOpportunityMap();
+          for (const p of positions) {
+            if (p.opportunity_id != null) continue;
+            const entry = oppMap[p.external_id] ?? null;
+            if (entry) (p as any).opportunity_id = entry.id;
+          }
+        }
+
         return positions.map(formatPosition);
       } catch (err) {
         logger.error({ err, wallet: wallet.slice(0, 8) }, "Positions query failed");

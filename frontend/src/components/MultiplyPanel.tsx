@@ -25,11 +25,10 @@ interface Props {
 }
 
 function PositionInfo({
-  position, positionLoading, collSymbol, closeNote,
+  position, positionLoading, closeNote,
 }: {
   position: { deposit_amount?: number | null; pnl_usd?: number | null; pnl_pct?: number | null } | null;
   positionLoading: boolean;
-  collSymbol: string;
   closeNote?: boolean;
 }) {
   if (!position && !positionLoading) {
@@ -44,9 +43,9 @@ function PositionInfo({
   return (
     <>
       <div className="flex justify-between items-center mb-2">
-        <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Deposited</span>
+        <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Net Value</span>
         <span className="font-sans text-[0.8rem] tabular-nums">
-          {position.deposit_amount?.toLocaleString(undefined, { maximumFractionDigits: 6 })} {collSymbol}
+          {fmtUsd(position.deposit_amount)}
         </span>
       </div>
       {position.pnl_usd != null && (
@@ -201,7 +200,7 @@ function ConnectedMultiplyPanel({
       )}
 
       {(tab === "withdraw" || tab === "close") && (
-        <PositionInfo position={position} positionLoading={positionLoading} collSymbol={collSymbol} closeNote={tab === "close"} />
+        <PositionInfo position={position} positionLoading={positionLoading} closeNote={tab === "close"} />
       )}
 
       {/* Amount input (open + withdraw only) */}

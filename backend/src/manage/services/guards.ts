@@ -120,7 +120,8 @@ const KNOWN_PROGRAMS = new Set([
   "vAuLTsyrvSfZRuRB3XgvkPwNGgYSs9YRYymVebLKoxR", // Drift Vaults
   // Jupiter
   "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", // Jupiter V6
-  "jupaEfBGhvYvpGo99zScFXCAW4yJpQjTFY9o1hiYLEM", // Jupiter Lend
+  "jupaEfBGhvYvpGo99zScFXCAW4yJpQjTFY9o1hiYLEM", // Jupiter Lend Router
+  "jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9", // Jupiter Lend Protocol
   // KSwap / DEX routing
   "KSwapzXNkf3JBhUeRjn9xbA3W2Y3LUoNhKSfb1Bvmi", // KSwap
   "9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP", // Orca

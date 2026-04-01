@@ -285,7 +285,17 @@ async function fetchEarnPositions(
       }
     }
 
-    const entry = oppMap[assetAddress];
+    // Lookup by deposit_address first, fall back to external_id pattern
+    const entry =
+      oppMap[assetAddress] ??
+      oppMap[`juplend-earn-${assetAddress.slice(0, 8)}`] ??
+      null;
+    if (!entry) {
+      logger.warn(
+        { wallet: wallet.slice(0, 8), assetAddress: assetAddress.slice(0, 12), oppMapSize: Object.keys(oppMap).length },
+        "Jupiter position: no opportunity match found",
+      );
+    }
     let apy = entry?.apy_current ?? null;
     if (apy === null) {
       const rateBps = safeFloat(tokenInfo.total_rate_bps);

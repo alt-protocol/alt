@@ -5,6 +5,7 @@ export const insuranceFundCategory: CategoryDefinition = {
   slug: "insurance_fund",
   displayName: "Insurance Fund",
   sidebarLabel: "INSURANCE FUNDS",
+  uncappedLiquidity: true,
 
   statsGrid: (y) => [
     { label: "APY Now", value: fmtApy(y.apy_current) },
