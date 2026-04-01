@@ -14,6 +14,7 @@ import { logger } from "../../shared/logger.js";
 import { safeFloat, parseTimestamp, cached } from "../../shared/utils.js";
 import type { OpportunityMapEntry } from "../../shared/types.js";
 import { discoverService } from "../../discover/service.js";
+import { getAdapter } from "../../manage/protocols/index.js";
 import { db } from "../db/connection.js";
 import { trackedWallets } from "../db/schema.js";
 import {
@@ -169,40 +170,52 @@ async function fetchIfPositions(
     const externalId = `drift-if-${idx}`;
     const entry = oppMap[externalId];
 
-    // Compute current deposit value using opportunity TVL (updated every
-    // 15 min from on-chain data) and event-level total shares.
-    // The Drift /stats/insuranceFund API only returns { marketIndex, symbol, apy }
-    // — no share price or vault balance — so we derive value from the Discover
-    // module's TVL combined with the most recent event's total shares.
-    const totalSharesEv = safeFloat(latest.totalIfSharesAfter);
-    const tvlUsd = entry?.tvl_usd ?? null;
+    // Primary: on-chain balance via Manage module (cross-module read).
+    // This reads current userShares / totalShares * vaultBalance directly
+    // from Solana, avoiding stale event-level totalShares.
     let depositAmountUsd: number | null = null;
-
-    if (tvlUsd && tvlUsd > 0 && totalSharesEv && totalSharesEv > 0) {
-      // TVL is current (from on-chain); totalShares from last event is approximate
-      depositAmountUsd = (sharesAfter / totalSharesEv) * tvlUsd;
+    try {
+      const adapter = await getAdapter("drift");
+      const onChainBalance = await adapter?.getBalance?.({
+        walletAddress: wallet,
+        depositAddress: "",
+        category: "insurance_fund",
+        extraData: { market_index: idx },
+      });
+      if (onChainBalance != null && onChainBalance > 0) {
+        depositAmountUsd = onChainBalance;
+      }
+    } catch (err) {
+      logger.warn(
+        { err, wallet: wallet.slice(0, 8), market: idx },
+        "Drift IF: on-chain balance fetch failed, falling back to event data",
+      );
     }
 
-    // Fallback: event-level vault amount (raw token units → USD)
+    // Fallback: event-level TVL approximation (totalShares may be stale)
     if (depositAmountUsd === null) {
-      const vaultAmountRaw = safeFloat(latest.insuranceVaultAmountBefore);
-      if (totalSharesEv && totalSharesEv > 0 && vaultAmountRaw) {
-        // insuranceVaultAmountBefore is in raw token units (6 decimals for stablecoins)
-        const STABLECOIN_DECIMALS = 6;
-        const vaultAmountUsd = vaultAmountRaw / 10 ** STABLECOIN_DECIMALS;
-        depositAmountUsd = (sharesAfter / totalSharesEv) * vaultAmountUsd;
-        logger.debug(
-          { wallet: wallet.slice(0, 8), market: idx, vaultAmountRaw, vaultAmountUsd, deposit: depositAmountUsd },
-          "Drift IF: using normalized event fallback for deposit value",
+      const totalSharesEv = safeFloat(latest.totalIfSharesAfter);
+      const tvlUsd = entry?.tvl_usd ?? null;
+
+      if (tvlUsd && tvlUsd > 0 && totalSharesEv && totalSharesEv > 0) {
+        depositAmountUsd = (sharesAfter / totalSharesEv) * tvlUsd;
+      }
+
+      if (depositAmountUsd === null) {
+        const vaultAmountRaw = safeFloat(latest.insuranceVaultAmountBefore);
+        if (totalSharesEv && totalSharesEv > 0 && vaultAmountRaw) {
+          const STABLECOIN_DECIMALS = 6;
+          const vaultAmountUsd = vaultAmountRaw / 10 ** STABLECOIN_DECIMALS;
+          depositAmountUsd = (sharesAfter / totalSharesEv) * vaultAmountUsd;
+        }
+      }
+
+      if (depositAmountUsd === null) {
+        logger.info(
+          { wallet: wallet.slice(0, 8), market: idx, shares: sharesAfter },
+          "Drift IF: could not compute current value — no on-chain or event data",
         );
       }
-    }
-
-    if (depositAmountUsd === null) {
-      logger.info(
-        { wallet: wallet.slice(0, 8), market: idx, shares: sharesAfter },
-        "Drift IF: could not compute current value — no TVL or event data",
-      );
     }
 
     // Find the last reset point (full withdrawal) — only count events
