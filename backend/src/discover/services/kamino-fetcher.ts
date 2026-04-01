@@ -117,7 +117,8 @@ function getCollateralYield(
   const tokenType = classifyToken(collSymbol);
 
   if (tokenType === "yield_bearing_stable") {
-    return [deriveCollateralYield(collHistory, debtHistory, 720), "price_ratio"];
+    const avg = avgFromHistory(collHistory, "supplyInterestAPY", lastN);
+    return [avg ?? safeFloat(collReserve.supplyApy), "supply_apy"];
   }
   if (tokenType === "stable") {
     const avg = avgFromHistory(collHistory, "supplyInterestAPY", lastN);
@@ -142,7 +143,7 @@ function getCollateralYieldCurrent(
     return safeFloat(collReserve.supplyApy);
   }
   if (tokenType === "yield_bearing_stable") {
-    return deriveCollateralYield(collHistory, debtHistory, 720);
+    return safeFloat(collReserve.supplyApy);
   }
   if (tokenType === "lst") {
     return deriveCollateralYield(collHistory, debtHistory, 720);
