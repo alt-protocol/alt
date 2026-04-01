@@ -212,7 +212,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
       )}
 
       {/* Amount input + actions (hidden when withdraw has no balance or redeemable) */}
-      {(tab === "deposit" || (vaultBalance != null && vaultBalance > 0 && !isRedeemable && !isPendingWithdraw)) && (
+      {(tab === "deposit" || (withdrawBalance != null && withdrawBalance > 0 && !isRedeemable && !isPendingWithdraw)) && (
         <>
           <div className="bg-surface-high rounded-sm px-4 py-3 mb-2 focus-within:shadow-[0_2px_0_0_var(--neon-primary)] transition-shadow">
             <div className="flex items-center justify-between mb-1">
@@ -259,7 +259,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
       )}
 
       {/* Submit button — shown for deposit, withdraw with balance, or redeemable state */}
-      {(tab === "deposit" || (vaultBalance != null && vaultBalance > 0) || isRedeemable) && (
+      {(tab === "deposit" || (withdrawBalance != null && withdrawBalance > 0) || isRedeemable) && (
         <>
           <button
             onClick={handleSubmit}
