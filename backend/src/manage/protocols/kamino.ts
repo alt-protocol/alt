@@ -114,15 +114,26 @@ async function tokenAmountToShares(
 async function buildVaultDeposit(
   params: BuildTxParams,
 ): Promise<Instruction[]> {
-  const { vault, Decimal } = await loadVault(params.depositAddress);
-  const bundle = await vault.depositIxs(
-    addr(params.walletAddress) as any,
-    new Decimal(params.amount),
-  );
-  return [
-    ...bundle.depositIxs,
-    ...bundle.stakeInFarmIfNeededIxs,
-  ] as unknown as Instruction[];
+  try {
+    const { vault, Decimal } = await loadVault(params.depositAddress);
+    const bundle = await vault.depositIxs(
+      addr(params.walletAddress) as any,
+      new Decimal(params.amount),
+    );
+    return [
+      ...bundle.depositIxs,
+      ...bundle.stakeInFarmIfNeededIxs,
+    ] as unknown as Instruction[];
+  } catch (err: unknown) {
+    if (err instanceof Error && "statusCode" in err) throw err;
+    logger.error({ err, vault: params.depositAddress }, "Kamino vault deposit SDK error");
+    throw Object.assign(
+      new Error(
+        "Kamino vault deposit failed. Please check the amount and try again.",
+      ),
+      { statusCode: 400 },
+    );
+  }
 }
 
 /** Sentinel address used by the SDK when a field is unset. */
@@ -131,32 +142,43 @@ const NULL_ADDRESS = "11111111111111111111111111111111";
 async function buildVaultWithdraw(
   params: BuildTxParams,
 ): Promise<BuildTxResult> {
-  const { vault, Decimal } = await loadVault(params.depositAddress);
-  const vaultState = await vault.getState();
+  try {
+    const { vault, Decimal } = await loadVault(params.depositAddress);
+    const vaultState = await vault.getState();
 
-  const shareAmount = await tokenAmountToShares(
-    vault,
-    addr(params.walletAddress),
-    new Decimal(params.amount),
-  );
+    const shareAmount = await tokenAmountToShares(
+      vault,
+      addr(params.walletAddress),
+      new Decimal(params.amount),
+    );
 
-  const bundle = await vault.withdrawIxs(
-    addr(params.walletAddress) as any,
-    shareAmount,
-  );
-  const instructions = [
-    ...bundle.unstakeFromFarmIfNeededIxs,
-    ...bundle.withdrawIxs,
-    ...bundle.postWithdrawIxs,
-  ] as unknown as Instruction[];
+    const bundle = await vault.withdrawIxs(
+      addr(params.walletAddress) as any,
+      shareAmount,
+    );
+    const instructions = [
+      ...bundle.unstakeFromFarmIfNeededIxs,
+      ...bundle.withdrawIxs,
+      ...bundle.postWithdrawIxs,
+    ] as unknown as Instruction[];
 
-  // Vault withdraw has 22+ accounts per reserve — needs ALT compression
-  const vaultLut = vaultState.vaultLookupTable as string;
-  if (vaultLut && vaultLut !== NULL_ADDRESS) {
-    return { instructions, lookupTableAddresses: [vaultLut] };
+    // Vault withdraw has 22+ accounts per reserve — needs ALT compression
+    const vaultLut = vaultState.vaultLookupTable as string;
+    if (vaultLut && vaultLut !== NULL_ADDRESS) {
+      return { instructions, lookupTableAddresses: [vaultLut] };
+    }
+
+    return instructions;
+  } catch (err: unknown) {
+    if (err instanceof Error && "statusCode" in err) throw err;
+    logger.error({ err, vault: params.depositAddress }, "Kamino vault withdraw SDK error");
+    throw Object.assign(
+      new Error(
+        "Kamino vault withdraw failed. The position may not exist or the amount may exceed your balance.",
+      ),
+      { statusCode: 400 },
+    );
   }
-
-  return instructions;
 }
 
 /** Parse and validate lending params from extraData, load market. */
