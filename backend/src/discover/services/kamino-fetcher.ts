@@ -120,13 +120,34 @@ function getCollateralYield(
     return [deriveCollateralYield(collHistory, debtHistory, lastN), "price_ratio"];
   }
   if (tokenType === "stable") {
-    return [safeFloat(collReserve.supplyApy), "supply_apy"];
+    const avg = avgFromHistory(collHistory, "supplyInterestAPY", lastN);
+    return [avg ?? safeFloat(collReserve.supplyApy), "supply_apy"];
   }
   if (tokenType === "lst") {
     const result = deriveCollateralYield(collHistory, debtHistory, lastN);
     return result !== null ? [result, "staking_apy"] : [null, "unavailable"];
   }
   return [null, "unavailable"];
+}
+
+function getCollateralYieldCurrent(
+  collSymbol: string,
+  collHistory: unknown[],
+  debtHistory: unknown[],
+  collReserve: Record<string, unknown>,
+): number | null {
+  const tokenType = classifyToken(collSymbol);
+
+  if (tokenType === "stable") {
+    return safeFloat(collReserve.supplyApy);
+  }
+  if (tokenType === "yield_bearing_stable") {
+    return deriveCollateralYield(collHistory, debtHistory, 24);
+  }
+  if (tokenType === "lst") {
+    return deriveCollateralYield(collHistory, debtHistory, 24);
+  }
+  return null;
 }
 
 function computeNetApy(
@@ -567,15 +588,21 @@ async function fetchMultiplyMarkets(
           collReserve as unknown as Record<string, unknown>,
           720,
         );
+        const collYieldCurrent = getCollateralYieldCurrent(
+          collSymbol,
+          collHistory,
+          debtHistory,
+          collReserve as unknown as Record<string, unknown>,
+        );
 
         const effectiveLeverage = maxLeverage ?? 3;
         const netApyCurrent = computeNetApy(
-          collYield30d,
+          collYieldCurrent,
           borrowApyCurrent,
           effectiveLeverage,
         );
         const netApy7d = computeNetApy(
-          collYield30d,
+          collYield7d,
           borrowAvg7d,
           effectiveLeverage,
         );
@@ -603,10 +630,10 @@ async function fetchMultiplyMarkets(
           if (maxLeverage && lev > maxLeverage + 0.1) continue;
           leverageTable[`${lev}x`] = {
             net_apy_current_pct: toPct(
-              computeNetApy(collYield30d, borrowApyCurrent, lev),
+              computeNetApy(collYieldCurrent, borrowApyCurrent, lev),
             ),
             net_apy_7d_pct: toPct(
-              computeNetApy(collYield30d, borrowAvg7d, lev),
+              computeNetApy(collYield7d, borrowAvg7d, lev),
             ),
             net_apy_30d_pct: toPct(
               computeNetApy(collYield30d, borrowAvg30d, lev),
@@ -710,6 +737,7 @@ async function fetchMultiplyMarkets(
           debt_price_usd: debtPrice,
           collateral_ltv: collLtvHistory,
           collateral_liquidation_threshold: collLiqThreshold,
+          collateral_yield_current_pct: toPct(collYieldCurrent),
           collateral_yield_7d_pct: toPct(collYield7d),
           collateral_yield_30d_pct: toPct(collYield30d),
           debt_symbol: debtSymbol,
