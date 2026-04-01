@@ -205,11 +205,25 @@ async function fetchIfPositions(
       );
     }
 
+    // Find the last reset point (full withdrawal) — only count events
+    // from the current deposit cycle for PnL calculation.
+    let resetIdx = -1;
+    for (let i = marketEvents.length - 1; i >= 0; i--) {
+      const evt = marketEvents[i];
+      const action = ((evt.action as string) ?? "").toLowerCase();
+      const sharesAfterEvt = safeFloat(evt.ifSharesAfter) ?? 0;
+      if (action === "unstake" && sharesAfterEvt < 0.001) {
+        resetIdx = i;
+        break;
+      }
+    }
+
     let totalStaked = 0;
     let totalUnstaked = 0;
     let openedAt: Date | null = null;
 
-    for (const evt of marketEvents) {
+    for (let i = resetIdx + 1; i < marketEvents.length; i++) {
+      const evt = marketEvents[i];
       const action = ((evt.action as string) ?? "").toLowerCase();
       const amount = safeFloat(evt.amount) ?? 0;
       if (action === "stake") {
@@ -261,8 +275,8 @@ async function fetchIfPositions(
       }),
     );
 
-    for (const evt of marketEvents)
-      positionEvents.push(ifEventToRecord(evt, wallet));
+    for (let i = resetIdx + 1; i < marketEvents.length; i++)
+      positionEvents.push(ifEventToRecord(marketEvents[i], wallet));
   }
 
   return { positions, events: positionEvents };
