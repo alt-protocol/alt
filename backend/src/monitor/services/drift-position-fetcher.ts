@@ -212,14 +212,15 @@ async function fetchIfPositions(
     const entry = oppMap[externalId];
 
     // On-chain balance + cost basis via Manage module (cross-module read).
-    // Reads current userShares/totalShares*vaultBalance and costBasis in one context.
     let depositAmountUsd: number | null = null;
     let initialDepositUsd: number | null = null;
+    let ifPendingWithdrawal = false;
     try {
       const onChain = await getIfBalanceWithCostBasis(wallet, idx);
       if (onChain) {
         if (onChain.balance > 0) depositAmountUsd = onChain.balance;
         if (onChain.costBasis > 0) initialDepositUsd = onChain.costBasis;
+        ifPendingWithdrawal = onChain.hasPendingWithdrawal;
       }
     } catch (err) {
       logger.warn(
@@ -247,12 +248,33 @@ async function fetchIfPositions(
       }
     }
 
-    const pnlUsd =
-      depositAmountUsd !== null && initialDepositUsd !== null && initialDepositUsd > 0
+    // Frozen positions: null out PnL, fetch withdraw state for badge
+    let ifWithdrawExtra: Record<string, unknown> = {};
+    if (ifPendingWithdrawal) {
+      try {
+        const adapter = await getAdapter("drift");
+        const ws = await adapter?.getWithdrawState?.({
+          walletAddress: wallet,
+          depositAddress: "",
+          category: "insurance_fund",
+          extraData: { market_index: idx },
+        });
+        ifWithdrawExtra = {
+          withdraw_status: ws?.status ?? "pending",
+          withdraw_message: ws?.message,
+          withdraw_requested_amount: depositAmountUsd,
+        };
+      } catch {
+        ifWithdrawExtra = { withdraw_status: "pending" };
+      }
+    }
+
+    const pnlUsd = ifPendingWithdrawal ? null
+      : depositAmountUsd !== null && initialDepositUsd !== null && initialDepositUsd > 0
         ? depositAmountUsd - initialDepositUsd
         : null;
-    const pnlPct =
-      pnlUsd !== null && initialDepositUsd !== null && initialDepositUsd > 0
+    const pnlPct = ifPendingWithdrawal ? null
+      : pnlUsd !== null && initialDepositUsd !== null && initialDepositUsd > 0
         ? (pnlUsd / initialDepositUsd) * 100
         : null;
 
@@ -271,7 +293,7 @@ async function fetchIfPositions(
         deposit_amount_usd: depositAmountUsd,
         pnl_usd: pnlUsd,
         pnl_pct: pnlPct,
-        initial_deposit_usd: initialDepositUsd,
+        initial_deposit_usd: ifPendingWithdrawal ? null : initialDepositUsd,
         opened_at: openedAt,
         held_days: computeHeldDays(openedAt, now),
         apy,
@@ -280,6 +302,7 @@ async function fetchIfPositions(
           if_shares: sharesAfter,
           market_index: idx,
           symbol,
+          ...ifWithdrawExtra,
         },
       }),
     );
@@ -393,13 +416,6 @@ async function fetchVaultPositions(
 
     const netDeposits = safeFloat(latest.netDeposits) ?? 0;
     const marketIndex = latest.marketIndex;
-    const pnlUsd = totalValue - netDeposits;
-    const pnlPct = netDeposits > 0 ? (pnlUsd / netDeposits) * 100 : null;
-
-    logger.debug(
-      { wallet: wallet.slice(0, 8), vault: vaultPubkey.slice(0, 8), totalValue, netDeposits, pnlUsd, snapshotCount: snapshots.length },
-      "Drift vault position computed",
-    );
 
     const externalId = `drift-vault-${vaultPubkey}`;
     const entry =
@@ -410,6 +426,37 @@ async function fetchVaultPositions(
     }
 
     const openedAt = parseTimestamp(snapshots[0].ts);
+
+    // Check on-chain for pending withdrawal (freeze period)
+    let vaultWithdrawExtra: Record<string, unknown> = {};
+    let vaultPendingWithdrawal = false;
+    try {
+      const adapter = await getAdapter("drift");
+      const ws = await adapter?.getWithdrawState?.({
+        walletAddress: wallet,
+        depositAddress: vaultPubkey,
+        category: "vault",
+      });
+      if (ws && ws.status !== "none") {
+        vaultPendingWithdrawal = true;
+        vaultWithdrawExtra = {
+          withdraw_status: ws.status,
+          withdraw_message: ws.message,
+          withdraw_requested_amount: ws.requestedAmount,
+        };
+      }
+    } catch {
+      // Could not check — treat as active
+    }
+
+    const pnlUsd = vaultPendingWithdrawal ? null : totalValue - netDeposits;
+    const pnlPct = vaultPendingWithdrawal ? null
+      : netDeposits > 0 ? (pnlUsd! / netDeposits) * 100 : null;
+
+    logger.debug(
+      { wallet: wallet.slice(0, 8), vault: vaultPubkey.slice(0, 8), totalValue, netDeposits, pnlUsd, pending: vaultPendingWithdrawal, snapshotCount: snapshots.length },
+      "Drift vault position computed",
+    );
 
     positions.push(
       buildPositionDict({
@@ -423,7 +470,7 @@ async function fetchVaultPositions(
         deposit_amount_usd: totalValue,
         pnl_usd: pnlUsd,
         pnl_pct: pnlPct,
-        initial_deposit_usd: netDeposits > 0 ? netDeposits : null,
+        initial_deposit_usd: vaultPendingWithdrawal ? null : netDeposits > 0 ? netDeposits : null,
         opened_at: openedAt,
         held_days: computeHeldDays(openedAt, now),
         apy: entry?.apy_current ?? null,
@@ -434,6 +481,7 @@ async function fetchVaultPositions(
           net_deposits: netDeposits,
           total_account_value: totalValue,
           total_account_base_value: safeFloat(latest.totalAccountBaseValue),
+          ...vaultWithdrawExtra,
         },
       }),
     );

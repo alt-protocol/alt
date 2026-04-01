@@ -381,7 +381,7 @@ async function getIfBalance(
 export async function getIfBalanceWithCostBasis(
   walletAddress: string,
   marketIndex: number,
-): Promise<{ balance: number; costBasis: number } | null> {
+): Promise<{ balance: number; costBasis: number; hasPendingWithdrawal: boolean } | null> {
   let ctx: DriftContext | undefined;
   try {
     ctx = await createDriftContext(walletAddress);
@@ -391,9 +391,10 @@ export async function getIfBalanceWithCostBasis(
 
     const decimals = 6; // IF is always stablecoin (USDC)
     const costBasis = stake.costBasis.toNumber() / 10 ** decimals;
+    const hasPendingWithdrawal = !stake.pendingShares.isZero();
 
-    if (!stake.pendingShares.isZero()) {
-      return { balance: stake.pendingValue.toNumber() / 10 ** decimals, costBasis };
+    if (hasPendingWithdrawal) {
+      return { balance: stake.pendingValue.toNumber() / 10 ** decimals, costBasis, hasPendingWithdrawal };
     }
 
     try {
@@ -408,14 +409,14 @@ export async function getIfBalanceWithCostBasis(
           const balance =
             (stake.shares.toNumber() / totalShares.toNumber()) *
             (vaultBalance / 10 ** decimals);
-          return { balance, costBasis };
+          return { balance, costBasis, hasPendingWithdrawal };
         }
       }
     } catch {
       // Fall through to costBasis as balance
     }
 
-    return { balance: costBasis, costBasis };
+    return { balance: costBasis, costBasis, hasPendingWithdrawal };
   } catch {
     return null;
   } finally {
