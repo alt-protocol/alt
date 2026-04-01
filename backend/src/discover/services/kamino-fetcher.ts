@@ -142,10 +142,10 @@ function getCollateralYieldCurrent(
     return safeFloat(collReserve.supplyApy);
   }
   if (tokenType === "yield_bearing_stable") {
-    return deriveCollateralYield(collHistory, debtHistory, 24);
+    return deriveCollateralYield(collHistory, debtHistory, 48);
   }
   if (tokenType === "lst") {
-    return deriveCollateralYield(collHistory, debtHistory, 24);
+    return deriveCollateralYield(collHistory, debtHistory, 48);
   }
   return null;
 }
