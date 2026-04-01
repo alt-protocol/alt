@@ -56,8 +56,26 @@ export const multiplyCategory: CategoryDefinition = {
     }
 
     if (extra.leverage_used != null) fields.push({ label: "Avg Leverage Taken", value: `${extra.leverage_used.toFixed(2)}x` });
+    if (extra.collateral_yield_current_pct != null) fields.push({ label: "Supply APY", value: fmtApy(extra.collateral_yield_current_pct) });
     if (extra.borrow_apy_current_pct != null) fields.push({ label: "Borrow APY", value: fmtApy(extra.borrow_apy_current_pct) });
     if (y.utilization_pct != null) fields.push({ label: "Utilization", value: `${y.utilization_pct.toFixed(1)}%` });
+
+    // Leverage table
+    if (extra.leverage_table) {
+      const entries = Object.entries(extra.leverage_table)
+        .map(([k, v]) => ({ lev: parseFloat(k), ...v }))
+        .filter((e) => Number.isFinite(e.lev))
+        .sort((a, b) => a.lev - b.lev);
+      for (const e of entries) {
+        const current = fmtApy(e.net_apy_current_pct);
+        const avg30d = e.net_apy_30d_pct != null ? fmtApy(e.net_apy_30d_pct) : null;
+        fields.push({
+          label: `Net APY at ${e.lev}x`,
+          value: avg30d ? `${current} (30d: ${avg30d})` : current,
+        });
+      }
+    }
+
     return fields;
   },
 

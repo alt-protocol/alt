@@ -94,6 +94,7 @@ function ConnectedMultiplyPanel({
   const collSymbol = (extra?.collateral_symbol as string) ?? yield_.tokens[0] ?? "SOL";
   const debtSymbol = (extra?.debt_symbol as string) ?? "USDC";
   const borrowApy = extra?.borrow_apy_current_pct as number | null;
+  const supplyApy = extra?.collateral_yield_current_pct as number | null;
   const { data: balance } = useTokenBalance(selectedAccount.address, collSymbol);
   const { position, isLoading: positionLoading } = usePositionForOpportunity(
     selectedAccount.address,
@@ -182,6 +183,12 @@ function ConnectedMultiplyPanel({
             <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Projected APY</span>
             <span className="font-sans text-[0.8rem] text-neon tabular-nums">{projectedApy != null ? fmtApy(projectedApy) : "—"}</span>
           </div>
+          {supplyApy != null && (
+            <div className="flex justify-between items-center mb-2">
+              <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Supply APY</span>
+              <span className="font-sans text-[0.8rem] tabular-nums">{fmtApy(supplyApy)}</span>
+            </div>
+          )}
           {borrowApy != null && (
             <div className="flex justify-between items-center mb-4">
               <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Borrow APY</span>
