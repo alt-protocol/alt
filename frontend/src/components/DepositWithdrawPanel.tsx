@@ -67,7 +67,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
   const withdrawBalance = (vaultBalance != null && vaultBalance > 0)
     ? vaultBalance
     : (position?.deposit_amount ?? null);
-  const withdrawLoading = vaultBalanceLoading || (vaultBalance == null && positionLoading);
+  const withdrawLoading = vaultBalanceLoading || ((vaultBalance == null || vaultBalance <= 0) && positionLoading);
   const usingFallbackBalance = withdrawBalance != null && withdrawBalance > 0 && (vaultBalance == null || vaultBalance <= 0);
 
   const { execute, status, error, txSignature, reset } = useTransaction(signer);
