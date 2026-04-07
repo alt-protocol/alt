@@ -13,6 +13,7 @@ import { useTokenBalance } from "@/lib/hooks/useTokenBalance";
 import { useTransaction } from "@/lib/hooks/useTransaction";
 import { usePositionForOpportunity } from "@/lib/hooks/usePositionForOpportunity";
 import { useSlippage } from "@/lib/hooks/useSlippage";
+import DriftMaintenanceBanner from "./DriftMaintenanceBanner";
 import type { LeverageEntry } from "@/lib/multiply-utils";
 import { parseLeverageTable, interpolateApy, getMultiplyStatusLabel } from "@/lib/multiply-utils";
 import WalletButton from "./WalletButton";
@@ -238,7 +239,7 @@ function ConnectedMultiplyPanel({
       {/* Action button */}
       <button
         onClick={handleSubmit}
-        disabled={!isValid || isBusy}
+        disabled={!isValid || isBusy || protocolSlug === "drift"}
         className="bg-neon text-on-neon rounded-sm px-6 py-3 text-sm font-semibold font-sans w-full mt-3 hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
       >
         {isBusy ? statusLabel : tab === "open" ? `Open ${leverage.toFixed(1)}x ${collSymbol}/${debtSymbol}` : tab === "withdraw" ? `Withdraw ${collSymbol}` : "Close Position"}
@@ -346,6 +347,8 @@ export default function MultiplyPanel({ yield_, protocolSlug }: Props) {
           </button>
         ))}
       </div>
+
+      {protocolSlug === "drift" && <DriftMaintenanceBanner />}
 
       {!selectedAccount ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-3">

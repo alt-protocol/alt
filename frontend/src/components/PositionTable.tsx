@@ -6,6 +6,7 @@ import type { UserPositionOut } from "@/lib/api";
 import { fmtUsd, fmtApy, fmtPct, fmtDays, fmtProductType, truncateId, pnlColor } from "@/lib/format";
 import { ProtocolChip } from "@/components/ProtocolChip";
 import { getCategoryDef } from "@/lib/categories";
+import DriftMaintenanceBanner from "./DriftMaintenanceBanner";
 
 function getWithdrawStatus(p: UserPositionOut): string | null {
   return (p.extra_data as Record<string, unknown> | null)?.withdraw_status as string | null ?? null;
@@ -103,6 +104,7 @@ function PositionCard({ position, showProtocol, fields, onClick }: { position: U
           {fmtProductType(position.product_type)}
         </span>
       )}
+      {position.protocol_slug === "drift" && <DriftMaintenanceBanner />}
       <div className="space-y-1.5">
         {fields.map((f) => (
           <div key={f.label} className="flex justify-between items-baseline">

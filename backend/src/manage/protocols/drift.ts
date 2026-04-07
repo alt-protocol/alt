@@ -177,13 +177,14 @@ async function buildInsuranceFundDeposit(
     const ifStakePda = deriveIfStakePda(ctx, marketIndex);
     const existingAccount = await ctx.connection.getAccountInfo(ifStakePda);
 
+    const cuIxs = computeBudgetIxs(ctx.web3);
     const ixs = await ctx.driftClient.getAddInsuranceFundStakeIxs({
       marketIndex,
       amount,
       collateralAccountPublicKey: collateralAccount,
       initializeStakeAccount: existingAccount === null,
     });
-    return ixs.flat().map(convertIx);
+    return [...cuIxs, ...ixs.flat()].map(convertIx);
   } finally {
     await ctx.cleanup();
   }

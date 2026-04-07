@@ -15,6 +15,7 @@ import { useTransaction } from "@/lib/hooks/useTransaction";
 import { usePositionForOpportunity } from "@/lib/hooks/usePositionForOpportunity";
 import { useInvalidateAfterTransaction } from "@/lib/hooks/useInvalidateAfterTransaction";
 import WalletButton from "./WalletButton";
+import DriftMaintenanceBanner from "./DriftMaintenanceBanner";
 
 type Tab = "deposit" | "withdraw";
 
@@ -269,7 +270,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
         <>
           <button
             onClick={handleSubmit}
-            disabled={!isValid || isBusy || isPendingWithdraw || isSettling}
+            disabled={!isValid || isBusy || isPendingWithdraw || isSettling || protocolSlug === "drift"}
             className="bg-neon text-on-neon rounded-sm px-6 py-3 text-sm font-semibold font-sans w-full mt-3 hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {isSettling
@@ -340,6 +341,8 @@ export default function DepositWithdrawPanel({ yield_, protocolSlug }: Props) {
           </button>
         ))}
       </div>
+
+      {protocolSlug === "drift" && <DriftMaintenanceBanner />}
 
       {!selectedAccount ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-3">
