@@ -31,6 +31,50 @@ async function kGet(path: string): Promise<unknown | null> {
 }
 
 // ---------------------------------------------------------------------------
+// Token yield API — underlying yield for yield-bearing tokens (PRIME, syrupUSDC, etc.)
+// ---------------------------------------------------------------------------
+
+interface TokenYieldEntry {
+  createdOn: string;
+  apr: string;
+  apy: string;
+}
+
+async function fetchTokenYieldHistory(
+  mint: string,
+  start: string,
+  end: string,
+): Promise<TokenYieldEntry[]> {
+  const data = await kGet(
+    `/yields/${mint}/history?start=${start}&end=${end}`,
+  );
+  if (Array.isArray(data)) return data as TokenYieldEntry[];
+  return [];
+}
+
+function avgTokenYield(
+  history: TokenYieldEntry[],
+  lastN: number,
+): number | null {
+  if (history.length === 0) return null;
+  const entries = history.slice(-lastN);
+  const values: number[] = [];
+  for (const h of entries) {
+    const v = parseFloat(h.apy);
+    if (!isNaN(v)) values.push(v);
+  }
+  return values.length > 0
+    ? values.reduce((a, b) => a + b, 0) / values.length
+    : null;
+}
+
+function latestTokenYield(history: TokenYieldEntry[]): number | null {
+  if (history.length === 0) return null;
+  const v = parseFloat(history[history.length - 1].apy);
+  return isNaN(v) ? null : v;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -113,10 +157,15 @@ function getCollateralYield(
   debtHistory: unknown[],
   collReserve: Record<string, unknown>,
   lastN: number,
+  tokenYieldHistory?: TokenYieldEntry[],
 ): [number | null, string] {
   const tokenType = classifyToken(collSymbol);
 
   if (tokenType === "yield_bearing_stable") {
+    if (tokenYieldHistory && tokenYieldHistory.length > 0) {
+      const avg = avgTokenYield(tokenYieldHistory, lastN);
+      return [avg ?? safeFloat(collReserve.supplyApy), "token_yield_api"];
+    }
     const avg = avgFromHistory(collHistory, "supplyInterestAPY", lastN);
     return [avg ?? safeFloat(collReserve.supplyApy), "supply_apy"];
   }
@@ -136,6 +185,7 @@ function getCollateralYieldCurrent(
   collHistory: unknown[],
   debtHistory: unknown[],
   collReserve: Record<string, unknown>,
+  tokenYieldHistory?: TokenYieldEntry[],
 ): number | null {
   const tokenType = classifyToken(collSymbol);
 
@@ -143,6 +193,9 @@ function getCollateralYieldCurrent(
     return safeFloat(collReserve.supplyApy);
   }
   if (tokenType === "yield_bearing_stable") {
+    if (tokenYieldHistory && tokenYieldHistory.length > 0) {
+      return latestTokenYield(tokenYieldHistory) ?? safeFloat(collReserve.supplyApy);
+    }
     return safeFloat(collReserve.supplyApy);
   }
   if (tokenType === "lst") {
@@ -546,6 +599,21 @@ async function fetchMultiplyMarkets(
       return reserveHistories[reservePk];
     }
 
+    // Cache underlying token yield history per mint (for yield-bearing stables)
+    const tokenYieldHistories: Record<string, TokenYieldEntry[]> = {};
+    async function getTokenYieldHistory(
+      mint: string,
+    ): Promise<TokenYieldEntry[]> {
+      if (!tokenYieldHistories[mint]) {
+        tokenYieldHistories[mint] = await fetchTokenYieldHistory(
+          mint,
+          start30d,
+          endStr,
+        );
+      }
+      return tokenYieldHistories[mint];
+    }
+
     const maxLeverageFromDesc = parseMaxLeverage(marketDescription);
 
     for (const [collReserve, debtReserve] of pairs) {
@@ -568,6 +636,13 @@ async function fetchMultiplyMarkets(
         const collHistory = await getHistory(collPk);
         const debtHistory = await getHistory(debtPk);
 
+        // Fetch underlying yield for yield-bearing stables (PRIME, syrupUSDC, etc.)
+        const collTokenType = classifyToken(collSymbol);
+        const yieldHistory =
+          collTokenType === "yield_bearing_stable"
+            ? await getTokenYieldHistory(collReserve.liquidityTokenMint)
+            : undefined;
+
         const borrowAvg7d = avgFromHistory(debtHistory, "borrowInterestAPY", 168);
         const borrowAvg30d = avgFromHistory(
           debtHistory,
@@ -581,6 +656,7 @@ async function fetchMultiplyMarkets(
           debtHistory,
           collReserve as unknown as Record<string, unknown>,
           168,
+          yieldHistory,
         );
         const [collYield30d] = getCollateralYield(
           collSymbol,
@@ -588,12 +664,14 @@ async function fetchMultiplyMarkets(
           debtHistory,
           collReserve as unknown as Record<string, unknown>,
           720,
+          yieldHistory,
         );
         const collYieldCurrent = getCollateralYieldCurrent(
           collSymbol,
           collHistory,
           debtHistory,
           collReserve as unknown as Record<string, unknown>,
+          yieldHistory,
         );
 
         const effectiveLeverage = maxLeverage ?? 3;
