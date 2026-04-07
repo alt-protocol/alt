@@ -56,6 +56,7 @@ export const userPositions = monitorSchema.table(
     close_value_usd: numeric("close_value_usd", { precision: 20, scale: 2 }),
     token_symbol: varchar("token_symbol", { length: 50 }),
     extra_data: jsonb("extra_data"),
+    underlying_tokens: jsonb("underlying_tokens"),
     snapshot_at: timestamp("snapshot_at").notNull(),
     created_at: timestamp("created_at").defaultNow(),
   },
@@ -84,5 +85,8 @@ export const userPositionEvents = monitorSchema.table(
     event_at: timestamp("event_at").notNull(),
     extra_data: jsonb("extra_data"),
   },
-  (t) => [index("idx_upe_wallet").on(t.wallet_address)],
+  (t) => [
+    index("idx_upe_wallet").on(t.wallet_address),
+    index("idx_upe_event_at").on(t.event_at),
+  ],
 );

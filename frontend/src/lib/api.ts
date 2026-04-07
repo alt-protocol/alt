@@ -16,6 +16,13 @@ export interface Protocol {
   integration: string;
 }
 
+export interface UnderlyingToken {
+  symbol: string;
+  mint: string | null;
+  role: string;
+  type: "stablecoin" | "yield_bearing_stable" | "lst" | "volatile";
+}
+
 export interface YieldOpportunity {
   id: number;
   protocol_id: number;
@@ -37,6 +44,7 @@ export interface YieldOpportunity {
   liquidity_available_usd: number | null;
   is_automated: boolean | null;
   depeg: number | null;
+  underlying_tokens: UnderlyingToken[] | null;
   protocol_url: string | null;
   updated_at: string | null;
 }
@@ -89,6 +97,7 @@ export interface UserPositionOut {
   closed_at: string | null;
   close_value_usd: number | null;
   token_symbol: string | null;
+  underlying_tokens: UnderlyingToken[] | null;
   extra_data: Record<string, unknown> | null;
   snapshot_at: string;
 }

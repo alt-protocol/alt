@@ -2,7 +2,7 @@
  * Shared utilities for yield fetchers.
  * Port of backend/app/services/utils.py + kamino_fetcher.py shared helpers.
  */
-import { eq, and, sql, avg, gte, lte, isNotNull } from "drizzle-orm";
+import { eq, and, sql, avg, gte, lt, lte, isNotNull } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
   yieldOpportunities,
@@ -15,19 +15,48 @@ import {
   REGULAR_STABLES,
   YIELD_BEARING_STABLES,
   LST_SYMBOLS,
+  classifyToken,
 } from "../../shared/constants.js";
 
-// Re-export for convenience
-export { safeFloat, REGULAR_STABLES, YIELD_BEARING_STABLES, LST_SYMBOLS };
+import type { UnderlyingToken } from "../../shared/types.js";
 
-export function classifyToken(symbol: string): string {
-  const upper = symbol.toUpperCase();
-  if (YIELD_BEARING_STABLES.has(symbol)) return "yield_bearing_stable";
-  for (const s of REGULAR_STABLES) {
-    if (s.toUpperCase() === upper) return "stable";
+// Re-export for convenience
+export { safeFloat, REGULAR_STABLES, YIELD_BEARING_STABLES, LST_SYMBOLS, classifyToken };
+
+function tokenType(symbol: string): UnderlyingToken["type"] {
+  const ct = classifyToken(symbol);
+  return ct === "stable" ? "stablecoin" : (ct as UnderlyingToken["type"]);
+}
+
+export function buildUnderlyingTokens(
+  category: string,
+  tokens: string[],
+  extra: Record<string, unknown>,
+): UnderlyingToken[] {
+  if (category === "multiply" && tokens.length >= 2) {
+    return [
+      {
+        symbol: tokens[0],
+        mint: ((extra.collateral_mint ?? extra.supply_token_mint ?? null) as string | null),
+        role: "collateral",
+        type: tokenType(tokens[0]),
+      },
+      {
+        symbol: tokens[1],
+        mint: ((extra.debt_mint ?? extra.borrow_token_mint ?? null) as string | null),
+        role: "debt",
+        type: tokenType(tokens[1]),
+      },
+    ];
   }
-  if (LST_SYMBOLS.has(upper)) return "lst";
-  return "volatile";
+
+  const symbol = tokens[0] ?? "UNKNOWN";
+  return [{
+    symbol,
+    mint: ((extra.token_mint ?? extra.mint ?? null) as string | null),
+    role: "underlying",
+    type: tokenType(symbol),
+  }];
 }
 
 export function classifyMultiplyPair(
@@ -102,6 +131,7 @@ export async function upsertOpportunity(
       protocol_name: p.protocolName,
       is_active: true,
       extra_data: p.extra,
+      underlying_tokens: buildUnderlyingTokens(p.category, p.tokens, p.extra),
       updated_at: p.now,
     };
     if (p.maxLeverage !== undefined)
@@ -136,6 +166,7 @@ export async function upsertOpportunity(
         risk_tier: p.riskTier,
         is_active: true,
         extra_data: p.extra,
+        underlying_tokens: buildUnderlyingTokens(p.category, p.tokens, p.extra),
         min_deposit: p.minDeposit?.toString() ?? null,
         max_leverage: p.maxLeverage?.toString() ?? null,
         lock_period_days: p.lockPeriodDays ?? 0,
@@ -148,14 +179,28 @@ export async function upsertOpportunity(
     oppId = inserted[0].id;
   }
 
-  // Record snapshot
-  await db.insert(yieldSnapshots).values({
-    opportunity_id: oppId,
-    apy: p.apyCurrent?.toString() ?? null,
-    tvl_usd: p.tvlUsd?.toString() ?? null,
-    snapshot_at: p.now,
-    source: p.source,
-  });
+  // Record snapshot (throttled to every 4 hours to control DB growth)
+  const FOUR_HOURS = 4 * 60 * 60 * 1000;
+  const recentSnapshot = await db
+    .select({ id: yieldSnapshots.id })
+    .from(yieldSnapshots)
+    .where(
+      and(
+        eq(yieldSnapshots.opportunity_id, oppId),
+        gte(yieldSnapshots.snapshot_at, new Date(Date.now() - FOUR_HOURS)),
+      ),
+    )
+    .limit(1);
+
+  if (recentSnapshot.length === 0) {
+    await db.insert(yieldSnapshots).values({
+      opportunity_id: oppId,
+      apy: p.apyCurrent?.toString() ?? null,
+      tvl_usd: p.tvlUsd?.toString() ?? null,
+      snapshot_at: p.now,
+      source: p.source,
+    });
+  }
 
   return { id: oppId };
 }

@@ -13,7 +13,8 @@ import { address, getAddressEncoder, getProgramDerivedAddress } from "@solana/ad
 import { getWithRetry, getOrNull, postJson } from "../../shared/http.js";
 import { logger } from "../../shared/logger.js";
 import { safeFloat, parseTimestamp, cachedAsync } from "../../shared/utils.js";
-import type { OpportunityMapEntry } from "../../shared/types.js";
+import { classifyToken } from "../../shared/constants.js";
+import type { OpportunityMapEntry, UnderlyingToken } from "../../shared/types.js";
 import { discoverService } from "../../discover/service.js";
 import { db } from "../db/connection.js";
 import { trackedWallets } from "../db/schema.js";
@@ -325,6 +326,7 @@ async function fetchEarnPositions(
         held_days: computeHeldDays(openedAt, now),
         apy,
         token_symbol: (tokenInfo.symbol as string) ?? "",
+        underlying_tokens: tokenInfo.symbol ? [{ symbol: tokenInfo.symbol as string, mint: assetAddress, role: "underlying", type: classifyToken(tokenInfo.symbol as string) === "stable" ? "stablecoin" : classifyToken(tokenInfo.symbol as string) } as UnderlyingToken] : null,
         extra_data: {
           shares: safeFloat(pos.shares),
           underlying_amount: underlyingAmount,

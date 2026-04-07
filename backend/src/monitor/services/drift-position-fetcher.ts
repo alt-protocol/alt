@@ -12,7 +12,8 @@ import { eq } from "drizzle-orm";
 import { getOrNull } from "../../shared/http.js";
 import { logger } from "../../shared/logger.js";
 import { safeFloat, parseTimestamp, cached } from "../../shared/utils.js";
-import type { OpportunityMapEntry } from "../../shared/types.js";
+import { classifyToken } from "../../shared/constants.js";
+import type { OpportunityMapEntry, UnderlyingToken } from "../../shared/types.js";
 import { discoverService } from "../../discover/service.js";
 import { getIfBalanceWithCostBasis } from "../../manage/protocols/drift.js";
 import { getAdapter } from "../../manage/protocols/index.js";
@@ -298,6 +299,7 @@ async function fetchIfPositions(
         held_days: computeHeldDays(openedAt, now),
         apy,
         token_symbol: symbol,
+        underlying_tokens: [{ symbol, mint: null, role: "underlying", type: classifyToken(symbol) === "stable" ? "stablecoin" : classifyToken(symbol) } as UnderlyingToken],
         extra_data: {
           if_shares: sharesAfter,
           market_index: idx,
@@ -475,6 +477,7 @@ async function fetchVaultPositions(
         held_days: computeHeldDays(openedAt, now),
         apy: entry?.apy_current ?? null,
         token_symbol: tokenSymbol,
+        underlying_tokens: tokenSymbol ? [{ symbol: tokenSymbol, mint: null, role: "underlying", type: classifyToken(tokenSymbol) === "stable" ? "stablecoin" : classifyToken(tokenSymbol) } as UnderlyingToken] : null,
         extra_data: {
           vault_pubkey: vaultPubkey,
           market_index: marketIndex,

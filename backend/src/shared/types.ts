@@ -28,6 +28,14 @@ export interface DiscoverService {
   getOpportunityMap(): Promise<Record<string, OpportunityMapEntry>>;
 }
 
+/** Token exposure entry — stored in underlying_tokens JSONB column. */
+export interface UnderlyingToken {
+  symbol: string;
+  mint: string | null;
+  role: string; // "underlying" | "collateral" | "debt" | "pool_a" | "pool_b" | ...
+  type: "stablecoin" | "yield_bearing_stable" | "lst" | "volatile";
+}
+
 /** JSON-safe instruction format returned by Manage routes. */
 export interface SerializableInstruction {
   programAddress: string;

@@ -58,6 +58,7 @@ export const yieldOpportunities = discoverSchema.table(
     protocol_name: varchar("protocol_name", { length: 100 }),
     is_active: boolean("is_active").default(true).notNull(),
     extra_data: jsonb("extra_data"),
+    underlying_tokens: jsonb("underlying_tokens"),
     max_leverage: numeric("max_leverage", { precision: 6, scale: 2 }),
     utilization_pct: numeric("utilization_pct", { precision: 6, scale: 2 }),
     liquidity_available_usd: numeric("liquidity_available_usd", {

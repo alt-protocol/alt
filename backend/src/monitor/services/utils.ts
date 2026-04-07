@@ -7,7 +7,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { userPositions, userPositionEvents } from "../db/schema.js";
 import { logger } from "../../shared/logger.js";
 import { safeFloat } from "../../shared/utils.js";
-import type { DiscoverService, OpportunityMapEntry } from "../../shared/types.js";
+import type { DiscoverService, OpportunityMapEntry, UnderlyingToken } from "../../shared/types.js";
 
 export { safeFloat };
 
@@ -63,6 +63,7 @@ export interface PositionParams {
   close_value_usd?: number | null;
   token_symbol?: string | null;
   extra_data?: Record<string, unknown> | null;
+  underlying_tokens?: UnderlyingToken[] | null;
 }
 
 export interface PositionDict extends Record<string, unknown> {
@@ -86,6 +87,7 @@ export interface PositionDict extends Record<string, unknown> {
   close_value_usd: number | null;
   token_symbol: string | null;
   extra_data: Record<string, unknown>;
+  underlying_tokens: UnderlyingToken[] | null;
 }
 
 function r2(v: number | null | undefined): number | null {
@@ -121,6 +123,7 @@ export function buildPositionDict(p: PositionParams): PositionDict {
     close_value_usd: r2(p.close_value_usd),
     token_symbol: p.token_symbol ?? null,
     extra_data: p.extra_data ?? {},
+    underlying_tokens: p.underlying_tokens ?? null,
     snapshot_at: p.snapshot_at,
   };
 }
@@ -156,6 +159,7 @@ export async function storePositionRows(
     close_value_usd: pos.close_value_usd?.toString() ?? null,
     token_symbol: pos.token_symbol,
     extra_data: pos.extra_data,
+    underlying_tokens: pos.underlying_tokens,
     snapshot_at: snapshotAt,
   }));
 

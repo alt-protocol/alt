@@ -48,7 +48,6 @@ export const YIELD_BEARING_STABLES = new Set([
   "sUSDe",
   "USDY",
   "FWDI",
-  "wYLDS",
 ]);
 
 export const LST_SYMBOLS = new Set([
@@ -61,6 +60,19 @@ export const STABLECOIN_SYMBOLS = new Set([
   ...REGULAR_STABLES,
   ...YIELD_BEARING_STABLES,
 ]);
+
+// Tokens to skip when building multiply pairs (not real stablecoins, illiquid, etc.)
+export const EXCLUDED_MULTIPLY_TOKENS = new Set(["wYLDS"]);
+
+export function classifyToken(symbol: string): string {
+  const upper = symbol.toUpperCase();
+  if (YIELD_BEARING_STABLES.has(symbol)) return "yield_bearing_stable";
+  for (const s of REGULAR_STABLES) {
+    if (s.toUpperCase() === upper) return "stable";
+  }
+  if (LST_SYMBOLS.has(upper)) return "lst";
+  return "volatile";
+}
 
 export function getSymbolForMint(mint: string): string | null {
   return KNOWN_TOKEN_MINTS[mint] ?? null;

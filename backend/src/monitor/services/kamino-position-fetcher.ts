@@ -13,8 +13,8 @@ import { eq } from "drizzle-orm";
 import { getOrNull } from "../../shared/http.js";
 import { logger } from "../../shared/logger.js";
 import { safeFloat, parseTimestamp, cached, cachedAsync } from "../../shared/utils.js";
-import { KNOWN_TOKEN_MINTS } from "../../shared/constants.js";
-import type { OpportunityMapEntry } from "../../shared/types.js";
+import { KNOWN_TOKEN_MINTS, classifyToken } from "../../shared/constants.js";
+import type { OpportunityMapEntry, UnderlyingToken } from "../../shared/types.js";
 import { discoverService } from "../../discover/service.js";
 import { db } from "../db/connection.js";
 import { trackedWallets } from "../db/schema.js";
@@ -486,6 +486,12 @@ async function fetchEarnPositions(
         held_days: computeHeldDays(openedAt, now),
         apy: entry?.apy_current ?? null,
         token_symbol: (tokenInfo.token_symbol as string) ?? null,
+        underlying_tokens: tokenInfo.token_symbol ? [{
+          symbol: tokenInfo.token_symbol as string,
+          mint: (tokenInfo.token_mint as string) ?? null,
+          role: "underlying",
+          type: classifyToken(tokenInfo.token_symbol as string) === "stable" ? "stablecoin" : classifyToken(tokenInfo.token_symbol as string),
+        } as UnderlyingToken] : null,
         extra_data: {
           shares: totalShares,
           staked_shares: stakedShares,
@@ -771,6 +777,14 @@ async function fetchObligationPositions(
           closed_at: closedAt,
           close_value_usd: closeValueUsd,
           token_symbol: tokenSymbol,
+          underlying_tokens: productType === "multiply" && collateralInfo.length > 0 && debtInfo.length > 0
+            ? [
+                { symbol: collateralInfo[0].symbol, mint: collateralInfo[0].mint ?? null, role: "collateral", type: classifyToken(collateralInfo[0].symbol) === "stable" ? "stablecoin" : classifyToken(collateralInfo[0].symbol) } as UnderlyingToken,
+                { symbol: debtInfo[0].symbol, mint: debtInfo[0].mint ?? null, role: "debt", type: classifyToken(debtInfo[0].symbol) === "stable" ? "stablecoin" : classifyToken(debtInfo[0].symbol) } as UnderlyingToken,
+              ]
+            : collateralInfo.length > 0
+              ? [{ symbol: collateralInfo[0].symbol, mint: collateralInfo[0].mint ?? null, role: "underlying", type: classifyToken(collateralInfo[0].symbol) === "stable" ? "stablecoin" : classifyToken(collateralInfo[0].symbol) } as UnderlyingToken]
+              : null,
           extra_data: {
             obligation_address: obligationAddress,
             human_tag: obligation.humanTag,

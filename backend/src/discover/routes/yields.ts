@@ -50,6 +50,14 @@ export async function yieldsRoutes(app: FastifyInstance) {
         conditions.push(arrayOverlaps(yieldOpportunities.tokens, tokenList));
       }
 
+      // Hide opportunities with negligible available liquidity
+      conditions.push(
+        or(
+          sql`${yieldOpportunities.liquidity_available_usd} IS NULL`,
+          sql`${yieldOpportunities.liquidity_available_usd} >= 100`,
+        )!,
+      );
+
       if (q.stablecoins_only) {
         conditions.push(
           sql`${yieldOpportunities.apy_current} > 0`,
@@ -130,6 +138,7 @@ export async function yieldsRoutes(app: FastifyInstance) {
           liquidity_available_usd: numOrNull(o.liquidity_available_usd),
           is_automated: o.is_automated,
           depeg: numOrNull(o.depeg),
+          underlying_tokens: o.underlying_tokens ?? null,
           protocol_url: extra?.protocol_url ?? null,
           updated_at: o.updated_at,
         };
@@ -206,6 +215,7 @@ export async function yieldsRoutes(app: FastifyInstance) {
         liquidity_available_usd: numOrNull(opp.liquidity_available_usd),
         is_automated: opp.is_automated,
         depeg: numOrNull(opp.depeg),
+        underlying_tokens: opp.underlying_tokens ?? null,
         protocol_url: extra?.protocol_url ?? null,
         updated_at: opp.updated_at,
         extra_data: opp.extra_data,

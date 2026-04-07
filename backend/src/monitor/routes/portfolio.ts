@@ -47,6 +47,7 @@ function formatPosition(p: typeof userPositions.$inferSelect) {
     closed_at: p.closed_at,
     close_value_usd: numOrNull(p.close_value_usd),
     token_symbol: p.token_symbol,
+    underlying_tokens: p.underlying_tokens ?? null,
     extra_data: p.extra_data,
     snapshot_at: p.snapshot_at,
   };
@@ -488,10 +489,10 @@ export async function portfolioRoutes(app: FastifyInstance) {
 
           // Aggregate history with time bucketing
           const bucketInterval = {
-            "7d": "1 hour",
-            "30d": "4 hours",
+            "7d": "4 hours",
+            "30d": "8 hours",
             "90d": "12 hours",
-          }[q.period] ?? "1 hour";
+          }[q.period] ?? "4 hours";
 
           const rows = await db.execute(sql`
             WITH per_snapshot AS (
