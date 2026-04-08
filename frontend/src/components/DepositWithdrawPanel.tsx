@@ -66,13 +66,9 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
   const { execute, status, error, txSignature, reset } = useTransaction(signer);
   const [isSettling, setIsSettling] = useState(false);
 
-  // On-chain balance is the source of truth; fall back to monitor position data
-  // when the on-chain query returns 0/null (e.g. Jupiter SDK doesn't find the position).
-  const withdrawBalance = (vaultBalance != null && vaultBalance > 0)
-    ? vaultBalance
-    : (position?.deposit_amount ?? null);
-  const withdrawLoading = vaultBalanceLoading || ((vaultBalance == null || vaultBalance <= 0) && positionLoading);
-  const usingFallbackBalance = withdrawBalance != null && withdrawBalance > 0 && (vaultBalance == null || vaultBalance <= 0);
+  // On-chain balance is the sole source of truth — no fallback to stale monitor data
+  const withdrawBalance = vaultBalance ?? null;
+  const withdrawLoading = vaultBalanceLoading;
 
   // Reset transaction state when tab changes
   useEffect(() => { reset(); }, [tab, reset]);
@@ -178,11 +174,6 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
                 </span>
               }
             />
-          )}
-          {usingFallbackBalance && (
-            <p className="text-foreground-muted/60 font-sans text-[0.6rem] mb-3">
-              Cached balance — on-chain position not confirmed
-            </p>
           )}
         </>
       )}

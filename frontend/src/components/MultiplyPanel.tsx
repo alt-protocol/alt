@@ -9,6 +9,7 @@ import { api } from "@/lib/api";
 import { deserializeBuildResponse } from "@/lib/instruction-deserializer";
 import { fmtApy, fmtUsd, fmtPct, pnlColor } from "@/lib/format";
 import { useTokenBalance } from "@/lib/hooks/useTokenBalance";
+import { usePositionBalance } from "@/lib/hooks/usePositionBalance";
 import { useTransaction } from "@/lib/hooks/useTransaction";
 import { usePositionForOpportunity } from "@/lib/hooks/usePositionForOpportunity";
 import { useInvalidateAfterTransaction } from "@/lib/hooks/useInvalidateAfterTransaction";
@@ -97,6 +98,10 @@ function ConnectedMultiplyPanel({
   const borrowApy = extra?.borrow_apy_current_pct as number | null;
   const supplyApy = extra?.collateral_yield_current_pct as number | null;
   const { data: balance } = useTokenBalance(selectedAccount.address, collSymbol);
+  const { data: vaultBalance } = usePositionBalance(
+    selectedAccount.address,
+    tab !== "open" ? yield_.id : undefined,
+  );
   const { position, isLoading: positionLoading } = usePositionForOpportunity(
     selectedAccount.address,
     yield_.id,
@@ -111,7 +116,7 @@ function ConnectedMultiplyPanel({
   const numAmount = parseFloat(amount) || 0;
   const effectiveBalance = tab === "open"
     ? (balance ?? null)
-    : (position?.deposit_amount ?? null);
+    : (vaultBalance ?? null);
   const isValid = tab === "close"
     ? !!position
     : numAmount > 0 && (effectiveBalance == null || numAmount <= effectiveBalance);

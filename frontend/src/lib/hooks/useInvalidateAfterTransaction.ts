@@ -63,7 +63,6 @@ export function useInvalidateAfterTransaction() {
         queryClient.invalidateQueries({
           queryKey: ["positionHistory", walletAddress],
         });
-        // Reconcile optimistic state with real on-chain data
         if (vaultAddress) {
           queryClient.invalidateQueries({ queryKey: ["withdrawState", walletAddress], exact: false });
           queryClient.invalidateQueries({ queryKey: ["positionBalance", walletAddress], exact: false });
