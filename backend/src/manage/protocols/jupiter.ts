@@ -126,9 +126,8 @@ async function buildEarnWithdraw(
   );
 
   try {
-    // Use share-based redemption (getRedeemIxs) to avoid the on-chain
-    // asset->shares rounding issue that causes "Not enough tokens" errors.
-    // Falls back to asset-based withdrawal if position query fails.
+    // Try share-based redemption first (avoids on-chain rounding issues).
+    // Falls back to asset-based withdrawal if position query fails or returns no shares.
     try {
       const position = await ctx.getUserLendingPositionByAsset({
         user: ctx.user,
@@ -155,22 +154,24 @@ async function buildEarnWithdraw(
         });
         return ixs.map(convertInstruction);
       }
+
+      // SDK returned no shares — log and fall through to asset-based withdrawal
+      logger.warn(
+        { wallet: params.walletAddress.slice(0, 8), mint: params.extraData?.mint },
+        "Jupiter position query returned zero shares; falling back to asset-based withdrawal",
+      );
     } catch {
-      // Position query errored — fall through to asset-based withdrawal
-      const { ixs } = await ctx.getWithdrawIxs({
-        amount: amountRaw,
-        asset: ctx.asset,
-        signer: ctx.user,
-        connection: ctx.connection as any,
-      });
-      return ixs.map(convertInstruction);
+      // Position query threw — fall through to asset-based withdrawal
     }
 
-    // Position query succeeded but found no position — reject early
-    throw Object.assign(
-      new Error("No Jupiter Earn position found on-chain for this wallet and asset"),
-      { statusCode: 400 },
-    );
+    // Asset-based withdrawal fallback
+    const { ixs } = await ctx.getWithdrawIxs({
+      amount: amountRaw,
+      asset: ctx.asset,
+      signer: ctx.user,
+      connection: ctx.connection as any,
+    });
+    return ixs.map(convertInstruction);
   } catch (err: unknown) {
     if (err instanceof Error && "statusCode" in err) throw err;
     logger.error({ err, mint: params.extraData?.mint }, "Jupiter Earn withdraw SDK error");
