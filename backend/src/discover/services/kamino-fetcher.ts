@@ -9,6 +9,7 @@
  * Port of backend/app/services/kamino_fetcher.py
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { EXCLUDED_MULTIPLY_TOKENS } from "../../shared/constants.js";
 import { getOrNull } from "../../shared/http.js";
 import { logger } from "../../shared/logger.js";
 import { db } from "../db/connection.js";
@@ -518,6 +519,8 @@ function enumerateCollateralDebtPairs(
   for (const coll of collCandidates) {
     for (const debt of reserves) {
       if (debt.reserve === coll.reserve) continue;
+      if (EXCLUDED_MULTIPLY_TOKENS.has(coll.liquidityToken)) continue;
+      if (EXCLUDED_MULTIPLY_TOKENS.has(debt.liquidityToken)) continue;
       const debtBorrow = safeFloat(debt.totalBorrowUsd) ?? 0;
       const debtSupply = safeFloat(debt.totalSupplyUsd) ?? 0;
       if (debtBorrow <= 0 && debtSupply <= 0) continue;

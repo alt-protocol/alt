@@ -20,7 +20,12 @@ async function main() {
 
   const shutdown = async () => {
     app.log.info("Shutting down...");
+    const forceExit = setTimeout(() => {
+      app.log.error("Graceful shutdown timeout — forcing exit");
+      process.exit(1);
+    }, 30_000);
     await app.close();
+    clearTimeout(forceExit);
     process.exit(0);
   };
 

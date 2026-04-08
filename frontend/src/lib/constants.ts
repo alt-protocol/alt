@@ -8,7 +8,7 @@ export const STABLECOIN_SYMBOLS = new Set([
   "USDC", "USDT", "USDS", "PYUSD", "USDe", "sUSDe", "USDY",
   "EURC", "USDH", "AUSD", "FDUSD", "USDG", "USD1", "JupUSD",
   "PRIME", "syrupUSDC", "ONyc", "USCC", "PST", "eUSX",
-  "JUICED", "FWDI", "wYLDS", "CASH", "USX",
+  "JUICED", "FWDI", "CASH", "USX",
 ]);
 
 export const TOKEN_MINTS = {

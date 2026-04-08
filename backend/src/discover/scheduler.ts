@@ -1,5 +1,8 @@
 import cron from "node-cron";
+import { lt } from "drizzle-orm";
 import { logger } from "../shared/logger.js";
+import { db } from "../shared/db.js";
+import { yieldSnapshots } from "./db/schema.js";
 import { fetchKaminoYields } from "./services/kamino-fetcher.js";
 import { fetchDriftYields } from "./services/drift-fetcher.js";
 import { fetchJupiterYields } from "./services/jupiter-fetcher.js";
@@ -50,7 +53,21 @@ export function startScheduler() {
     tasks.push(task);
   }
 
-  logger.info("Scheduler started — yield fetch every 15 minutes");
+  // Daily retention — delete snapshots older than 365 days
+  const retentionTask = cron.schedule("0 4 * * *", async () => {
+    try {
+      const cutoff = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+      const result = await db
+        .delete(yieldSnapshots)
+        .where(lt(yieldSnapshots.snapshot_at, cutoff));
+      logger.info({ cutoff, deleted: result.rowCount }, "Yield snapshot retention completed");
+    } catch (err) {
+      logger.error({ err }, "Yield snapshot retention failed");
+    }
+  });
+  tasks.push(retentionTask);
+
+  logger.info("Scheduler started — yield fetch every 15 minutes, retention daily at 04:00 UTC");
 }
 
 export function stopScheduler() {

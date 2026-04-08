@@ -40,11 +40,49 @@ export async function buildApp() {
   // Health endpoint
   app.get("/api/health", async () => {
     try {
-      await db.execute(sql`SELECT 1`);
-      return { status: "ok" };
+      const sizeResult = await db.execute(
+        sql`SELECT pg_database_size(current_database()) as size`,
+      );
+      const dbSizeMb = Math.round(
+        Number(sizeResult.rows[0].size) / 1024 / 1024,
+      );
+      return { status: "ok", db_size_mb: dbSizeMb };
     } catch {
       return { status: "degraded", detail: "database unavailable" };
     }
+  });
+
+  // Deep health check — verifies external dependencies
+  app.get("/api/health/ready", async () => {
+    const checks: Record<string, string> = {};
+
+    try {
+      await db.execute(sql`SELECT 1`);
+      checks.database = "ok";
+    } catch {
+      checks.database = "failed";
+    }
+
+    try {
+      const resp = await fetch(process.env.HELIUS_RPC_URL!, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getHealth" }),
+        signal: AbortSignal.timeout(3000),
+      });
+      checks.helius_rpc = resp.ok ? "ok" : "failed";
+    } catch {
+      checks.helius_rpc = "failed";
+    }
+
+    const allOk = Object.values(checks).every((v) => v === "ok");
+    return { status: allOk ? "ok" : "degraded", checks };
+  });
+
+  // Request ID response header
+  app.addHook("onSend", (_request, reply, _payload, done) => {
+    void reply.header("x-request-id", _request.id);
+    done();
   });
 
   // Discover module
