@@ -63,16 +63,21 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
     tab === "withdraw" ? yield_.id : undefined,
   );
 
-  // On-chain balance is the source of truth; fall back to monitor position data
-  // when the on-chain query returns 0/null (e.g. Jupiter SDK doesn't find the position)
-  const withdrawBalance = (vaultBalance != null && vaultBalance > 0)
-    ? vaultBalance
-    : (position?.deposit_amount ?? null);
-  const withdrawLoading = vaultBalanceLoading || ((vaultBalance == null || vaultBalance <= 0) && positionLoading);
-  const usingFallbackBalance = withdrawBalance != null && withdrawBalance > 0 && (vaultBalance == null || vaultBalance <= 0);
-
   const { execute, status, error, txSignature, reset } = useTransaction(signer);
   const [isSettling, setIsSettling] = useState(false);
+  const [withdrawCompleted, setWithdrawCompleted] = useState(false);
+
+  // On-chain balance is the source of truth; fall back to monitor position data
+  // when the on-chain query returns 0/null (e.g. Jupiter SDK doesn't find the position).
+  // After a successful withdrawal, suppress the fallback to prevent stale monitor data
+  // from re-showing the old balance (Monitor only updates every 15 min).
+  const withdrawBalance = withdrawCompleted
+    ? (vaultBalance ?? 0)
+    : (vaultBalance != null && vaultBalance > 0)
+      ? vaultBalance
+      : (position?.deposit_amount ?? null);
+  const withdrawLoading = !withdrawCompleted && (vaultBalanceLoading || ((vaultBalance == null || vaultBalance <= 0) && positionLoading));
+  const usingFallbackBalance = !withdrawCompleted && withdrawBalance != null && withdrawBalance > 0 && (vaultBalance == null || vaultBalance <= 0);
 
   // Reset transaction state when tab changes
   useEffect(() => { reset(); }, [tab, reset]);
@@ -135,6 +140,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
       txAmount: numAmount,
     });
     setIsSettling(false);
+    if (tab === "withdraw") setWithdrawCompleted(true);
     api.trackWallet(selectedAccount.address);
   }
 

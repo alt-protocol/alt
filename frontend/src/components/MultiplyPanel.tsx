@@ -4,7 +4,6 @@ import { useState, useMemo, useEffect } from "react";
 import { useSelectedWalletAccount } from "@solana/react";
 import { useWalletAccountTransactionSendingSigner } from "@solana/react";
 import type { UiWalletAccount } from "@wallet-standard/react";
-import { useQueryClient } from "@tanstack/react-query";
 import type { YieldOpportunityDetail } from "@/lib/api";
 import { api } from "@/lib/api";
 import { deserializeBuildResponse } from "@/lib/instruction-deserializer";
@@ -12,6 +11,7 @@ import { fmtApy, fmtUsd, fmtPct, pnlColor } from "@/lib/format";
 import { useTokenBalance } from "@/lib/hooks/useTokenBalance";
 import { useTransaction } from "@/lib/hooks/useTransaction";
 import { usePositionForOpportunity } from "@/lib/hooks/usePositionForOpportunity";
+import { useInvalidateAfterTransaction } from "@/lib/hooks/useInvalidateAfterTransaction";
 import { useSlippage } from "@/lib/hooks/useSlippage";
 import DriftMaintenanceBanner from "./DriftMaintenanceBanner";
 import type { LeverageEntry } from "@/lib/multiply-utils";
@@ -90,7 +90,7 @@ function ConnectedMultiplyPanel({
   const extra = yield_.extra_data;
   const signer = useWalletAccountTransactionSendingSigner(selectedAccount, "solana:mainnet");
 
-  const queryClient = useQueryClient();
+  const invalidateAfterTx = useInvalidateAfterTransaction();
   const { slippageBps, setSlippage } = useSlippage();
   const collSymbol = (extra?.collateral_symbol as string) ?? yield_.tokens[0] ?? "SOL";
   const debtSymbol = (extra?.debt_symbol as string) ?? "USDC";
@@ -103,15 +103,18 @@ function ConnectedMultiplyPanel({
   );
 
   const { execute, status, error, txSignature, reset } = useTransaction(signer);
+  const [txCompleted, setTxCompleted] = useState(false);
 
   // Reset transaction state when tab changes
   useEffect(() => { reset(); }, [tab, reset]);
 
   const projectedApy = useMemo(() => interpolateApy(leverageEntries, leverage), [leverageEntries, leverage]);
   const numAmount = parseFloat(amount) || 0;
-  const effectiveBalance = tab === "open" ? (balance ?? null) : (position?.deposit_amount ?? null);
+  const effectiveBalance = tab === "open"
+    ? (balance ?? null)
+    : txCompleted ? null : (position?.deposit_amount ?? null);
   const isValid = tab === "close"
-    ? !!position
+    ? !!position && !txCompleted
     : numAmount > 0 && (effectiveBalance == null || numAmount <= effectiveBalance);
   const isBusy = status === "preparing" || status === "building" || status === "signing" || status === "confirming";
 
@@ -125,7 +128,7 @@ function ConnectedMultiplyPanel({
     if (!yield_.deposit_address) return;
     reset();
 
-    await execute(async () => {
+    const success = await execute(async () => {
       const params = {
         opportunity_id: yield_.id,
         wallet_address: selectedAccount.address,
@@ -140,8 +143,18 @@ function ConnectedMultiplyPanel({
       return deserializeBuildResponse(response);
     });
 
+    if (!success) return;
+
     setAmount("");
-    queryClient.invalidateQueries({ queryKey: ["positions", selectedAccount.address] });
+    await invalidateAfterTx({
+      walletAddress: selectedAccount.address,
+      tokenSymbol: collSymbol,
+      opportunityId: yield_.id,
+      vaultAddress: yield_.deposit_address ?? undefined,
+      txType: tab === "open" ? "deposit" : "withdraw",
+      txAmount: numAmount || (position?.deposit_amount ?? 0),
+    });
+    if (tab !== "open") setTxCompleted(true);
   }
 
   const statusLabel = getMultiplyStatusLabel(status);
@@ -207,7 +220,7 @@ function ConnectedMultiplyPanel({
         </>
       )}
 
-      {(tab === "withdraw" || tab === "close") && (
+      {(tab === "withdraw" || tab === "close") && !txCompleted && (
         <PositionInfo position={position} positionLoading={positionLoading} closeNote={tab === "close"} />
       )}
 

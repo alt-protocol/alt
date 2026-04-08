@@ -96,7 +96,9 @@ export function useInvalidateAfterTransaction() {
       await Promise.allSettled(critical);
 
       // Non-critical — fire-and-forget (backend-dependent, slow)
-      queryClient.invalidateQueries({ queryKey: queryKeys.positions.list(walletAddress) });
+      // Note: positions.list is NOT invalidated here — the immediate refetch would
+      // overwrite the optimistic update above with stale backend data (Monitor runs
+      // every 15 min). Positions are refreshed in the 5s delayed callback instead.
       queryClient.invalidateQueries({ queryKey: queryKeys.positions.events(walletAddress) });
       queryClient.invalidateQueries({ queryKey: queryKeys.wallet.status(walletAddress) });
       queryClient.invalidateQueries({
