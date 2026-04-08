@@ -103,7 +103,7 @@ function ConnectedMultiplyPanel({
   );
 
   const { execute, status, error, txSignature, reset } = useTransaction(signer);
-  const [txCompleted, setTxCompleted] = useState(false);
+  const [postTxBalance, setPostTxBalance] = useState<number | null>(null);
 
   // Reset transaction state when tab changes
   useEffect(() => { reset(); }, [tab, reset]);
@@ -112,9 +112,9 @@ function ConnectedMultiplyPanel({
   const numAmount = parseFloat(amount) || 0;
   const effectiveBalance = tab === "open"
     ? (balance ?? null)
-    : txCompleted ? null : (position?.deposit_amount ?? null);
+    : postTxBalance != null ? (postTxBalance > 0 ? postTxBalance : null) : (position?.deposit_amount ?? null);
   const isValid = tab === "close"
-    ? !!position && !txCompleted
+    ? !!position && postTxBalance == null
     : numAmount > 0 && (effectiveBalance == null || numAmount <= effectiveBalance);
   const isBusy = status === "preparing" || status === "building" || status === "signing" || status === "confirming";
 
@@ -154,7 +154,11 @@ function ConnectedMultiplyPanel({
       txType: tab === "open" ? "deposit" : "withdraw",
       txAmount: numAmount || (position?.deposit_amount ?? 0),
     });
-    if (tab !== "open") setTxCompleted(true);
+    if (tab === "open") {
+      setPostTxBalance((effectiveBalance ?? 0) + numAmount);
+    } else {
+      setPostTxBalance(Math.max(0, (effectiveBalance ?? 0) - numAmount));
+    }
   }
 
   const statusLabel = getMultiplyStatusLabel(status);
@@ -220,7 +224,7 @@ function ConnectedMultiplyPanel({
         </>
       )}
 
-      {(tab === "withdraw" || tab === "close") && !txCompleted && (
+      {(tab === "withdraw" || tab === "close") && postTxBalance == null && (
         <PositionInfo position={position} positionLoading={positionLoading} closeNote={tab === "close"} />
       )}
 

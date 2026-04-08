@@ -25,6 +25,7 @@ export function useInvalidateAfterTransaction() {
         const positionsKey = queryKeys.positions.list(walletAddress);
         const cached = queryClient.getQueryData<UserPositionOut[]>(positionsKey);
         if (cached) {
+          const hasMatch = cached.some((p) => p.opportunity_id === opportunityId && !p.is_closed);
           const updated = cached.map((p) => {
             if (p.opportunity_id !== opportunityId || p.is_closed) return p;
             const current = p.deposit_amount ?? 0;
@@ -36,6 +37,33 @@ export function useInvalidateAfterTransaction() {
               is_closed: newAmount <= 0 ? true : p.is_closed,
             };
           });
+          // First deposit — no existing position in cache, create a synthetic entry
+          if (!hasMatch && txType === "deposit") {
+            updated.push({
+              id: -1,
+              wallet_address: walletAddress,
+              protocol_slug: "",
+              product_type: "",
+              external_id: "",
+              opportunity_id: opportunityId,
+              deposit_amount: txAmount,
+              deposit_amount_usd: txAmount,
+              pnl_usd: 0,
+              pnl_pct: 0,
+              initial_deposit_usd: txAmount,
+              opened_at: null,
+              held_days: null,
+              apy: null,
+              apy_realized: null,
+              is_closed: false,
+              closed_at: null,
+              close_value_usd: null,
+              token_symbol: tokenSymbol ?? null,
+              underlying_tokens: null,
+              extra_data: null,
+              snapshot_at: new Date().toISOString(),
+            } as UserPositionOut);
+          }
           queryClient.setQueryData(positionsKey, updated);
         }
       }
@@ -66,6 +94,9 @@ export function useInvalidateAfterTransaction() {
             ? Math.max(0, cachedBalance - txAmount)
             : cachedBalance + txAmount;
           queryClient.setQueryData(balKey, newBalance);
+        } else if (txType === "deposit") {
+          // First deposit — no cached balance yet, seed with deposit amount
+          queryClient.setQueryData(balKey, txAmount);
         }
       }
 

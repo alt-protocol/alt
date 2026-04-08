@@ -65,19 +65,20 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
 
   const { execute, status, error, txSignature, reset } = useTransaction(signer);
   const [isSettling, setIsSettling] = useState(false);
-  const [withdrawCompleted, setWithdrawCompleted] = useState(false);
+  // Locally-computed expected balance after a tx — overrides stale RPC/monitor data
+  // until the user navigates away (component unmount resets to null).
+  const [postTxBalance, setPostTxBalance] = useState<number | null>(null);
 
   // On-chain balance is the source of truth; fall back to monitor position data
   // when the on-chain query returns 0/null (e.g. Jupiter SDK doesn't find the position).
-  // After a successful withdrawal, suppress the fallback to prevent stale monitor data
-  // from re-showing the old balance (Monitor only updates every 15 min).
-  const withdrawBalance = withdrawCompleted
-    ? (vaultBalance ?? 0)
+  // After a successful tx, postTxBalance overrides all external sources (RPC may lag).
+  const withdrawBalance = postTxBalance != null
+    ? postTxBalance
     : (vaultBalance != null && vaultBalance > 0)
       ? vaultBalance
       : (position?.deposit_amount ?? null);
-  const withdrawLoading = !withdrawCompleted && (vaultBalanceLoading || ((vaultBalance == null || vaultBalance <= 0) && positionLoading));
-  const usingFallbackBalance = !withdrawCompleted && withdrawBalance != null && withdrawBalance > 0 && (vaultBalance == null || vaultBalance <= 0);
+  const withdrawLoading = postTxBalance == null && (vaultBalanceLoading || ((vaultBalance == null || vaultBalance <= 0) && positionLoading));
+  const usingFallbackBalance = postTxBalance == null && withdrawBalance != null && withdrawBalance > 0 && (vaultBalance == null || vaultBalance <= 0);
 
   // Reset transaction state when tab changes
   useEffect(() => { reset(); }, [tab, reset]);
@@ -140,7 +141,12 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
       txAmount: numAmount,
     });
     setIsSettling(false);
-    if (tab === "withdraw") setWithdrawCompleted(true);
+    // Compute expected balance locally — RPC may return stale data for seconds
+    if (tab === "withdraw") {
+      setPostTxBalance(Math.max(0, (effectiveBalance ?? 0) - numAmount));
+    } else {
+      setPostTxBalance((effectiveBalance ?? 0) + numAmount);
+    }
     api.trackWallet(selectedAccount.address);
   }
 
