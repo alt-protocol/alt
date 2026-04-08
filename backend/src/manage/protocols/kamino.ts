@@ -198,7 +198,7 @@ async function prepareLending(params: BuildTxParams) {
   const {
     KaminoMarket,
     KaminoAction,
-    LendingObligation,
+    VanillaObligation,
     PROGRAM_ID,
     BN,
   } = await loadSdk();
@@ -238,7 +238,7 @@ async function prepareLending(params: BuildTxParams) {
     amountBase,
     tokenMint,
     KaminoAction,
-    LendingObligation,
+    VanillaObligation,
     PROGRAM_ID,
   };
 }
@@ -268,7 +268,7 @@ async function buildLendingDeposit(
       amountBase,
       tokenMint,
       KaminoAction,
-      LendingObligation,
+      VanillaObligation,
       PROGRAM_ID,
     } = await prepareLending(params);
 
@@ -277,7 +277,7 @@ async function buildLendingDeposit(
       amountBase,
       addr(tokenMint),
       walletSigner(params.walletAddress),
-      new LendingObligation(addr(tokenMint), PROGRAM_ID),
+      new VanillaObligation(PROGRAM_ID),
       true,
       undefined,
     );
@@ -304,7 +304,7 @@ async function buildLendingWithdraw(
       amountBase,
       tokenMint,
       KaminoAction,
-      LendingObligation,
+      VanillaObligation,
       PROGRAM_ID,
     } = await prepareLending(params);
 
@@ -313,7 +313,7 @@ async function buildLendingWithdraw(
       amountBase,
       addr(tokenMint),
       walletSigner(params.walletAddress),
-      new LendingObligation(addr(tokenMint), PROGRAM_ID),
+      new VanillaObligation(PROGRAM_ID),
       true,
       undefined,
     );
