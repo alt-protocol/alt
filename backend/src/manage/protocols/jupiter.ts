@@ -67,7 +67,11 @@ async function createEarnContext(
   const sdk = await loadSdk();
 
   const mint = extraData?.mint as string | undefined;
-  if (!mint) throw new Error("Missing mint in extra_data for Jupiter Earn");
+  if (!mint)
+    throw Object.assign(
+      new Error("Missing mint in extra_data for Jupiter Earn"),
+      { statusCode: 400 },
+    );
 
   const decimals = DECIMALS[mint] ?? 6;
   const connection = getLegacyConnection(sdk.Connection);
@@ -90,13 +94,22 @@ async function buildEarnDeposit(
     Math.round(parseFloat(params.amount) * 10 ** ctx.decimals).toString(),
   );
 
-  const { ixs } = await ctx.getDepositIxs({
-    amount,
-    asset: ctx.asset,
-    signer: ctx.user,
-    connection: ctx.connection as any,
-  });
-  return ixs.map(convertInstruction);
+  try {
+    const { ixs } = await ctx.getDepositIxs({
+      amount,
+      asset: ctx.asset,
+      signer: ctx.user,
+      connection: ctx.connection as any,
+    });
+    return ixs.map(convertInstruction);
+  } catch (err: unknown) {
+    if (err instanceof Error && "statusCode" in err) throw err;
+    logger.error({ err, mint: params.extraData?.mint }, "Jupiter Earn deposit SDK error");
+    throw Object.assign(
+      new Error("Jupiter Earn deposit failed. Please check the amount and try again."),
+      { statusCode: 400 },
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -112,49 +125,60 @@ async function buildEarnWithdraw(
     Math.round(parseFloat(params.amount) * 10 ** ctx.decimals).toString(),
   );
 
-  // Use share-based redemption (getRedeemIxs) to avoid the on-chain
-  // asset->shares rounding issue that causes "Not enough tokens" errors.
-  // Falls back to asset-based withdrawal if position query fails.
   try {
-    const position = await ctx.getUserLendingPositionByAsset({
-      user: ctx.user,
-      asset: ctx.asset,
-      connection: ctx.connection as any,
-    });
+    // Use share-based redemption (getRedeemIxs) to avoid the on-chain
+    // asset->shares rounding issue that causes "Not enough tokens" errors.
+    // Falls back to asset-based withdrawal if position query fails.
+    try {
+      const position = await ctx.getUserLendingPositionByAsset({
+        user: ctx.user,
+        asset: ctx.asset,
+        connection: ctx.connection as any,
+      });
 
-    if (position && !position.lendingTokenShares.isZero()) {
-      const isFullWithdraw =
-        !position.underlyingAssets.isZero() &&
-        amountRaw.muln(1000).gte(position.underlyingAssets.muln(999));
+      if (position && !position.lendingTokenShares.isZero()) {
+        const isFullWithdraw =
+          !position.underlyingAssets.isZero() &&
+          amountRaw.muln(1000).gte(position.underlyingAssets.muln(999));
 
-      const shares = isFullWithdraw
-        ? position.lendingTokenShares
-        : position.lendingTokenShares
-            .mul(amountRaw)
-            .div(position.underlyingAssets);
+        const shares = isFullWithdraw
+          ? position.lendingTokenShares
+          : position.lendingTokenShares
+              .mul(amountRaw)
+              .div(position.underlyingAssets);
 
-      const { ixs } = await ctx.getRedeemIxs({
-        shares,
+        const { ixs } = await ctx.getRedeemIxs({
+          shares,
+          asset: ctx.asset,
+          signer: ctx.user,
+          connection: ctx.connection as any,
+        });
+        return ixs.map(convertInstruction);
+      }
+    } catch {
+      // Position query errored — fall through to asset-based withdrawal
+      const { ixs } = await ctx.getWithdrawIxs({
+        amount: amountRaw,
         asset: ctx.asset,
         signer: ctx.user,
         connection: ctx.connection as any,
       });
       return ixs.map(convertInstruction);
     }
-  } catch {
-    // Position query errored — fall through to asset-based withdrawal
-    const { ixs } = await ctx.getWithdrawIxs({
-      amount: amountRaw,
-      asset: ctx.asset,
-      signer: ctx.user,
-      connection: ctx.connection as any,
-    });
-    return ixs.map(convertInstruction);
-  }
 
-  // Position query succeeded but found no position — reject early instead of
-  // building instructions that will always revert on-chain
-  throw new Error("No Jupiter Earn position found on-chain for this wallet and asset");
+    // Position query succeeded but found no position — reject early
+    throw Object.assign(
+      new Error("No Jupiter Earn position found on-chain for this wallet and asset"),
+      { statusCode: 400 },
+    );
+  } catch (err: unknown) {
+    if (err instanceof Error && "statusCode" in err) throw err;
+    logger.error({ err, mint: params.extraData?.mint }, "Jupiter Earn withdraw SDK error");
+    throw Object.assign(
+      new Error("Jupiter Earn withdrawal failed. Please check the amount and try again."),
+      { statusCode: 400 },
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -191,8 +215,9 @@ async function getEarnBalance(
 export const jupiterAdapter: ProtocolAdapter = {
   async buildDepositTx(params) {
     if (!isEarnCategory(params.category)) {
-      throw new Error(
-        `Jupiter adapter only supports Earn (lending/supply). Got category "${params.category}".`,
+      throw Object.assign(
+        new Error(`Jupiter adapter only supports Earn (lending/supply). Got category "${params.category}".`),
+        { statusCode: 400 },
       );
     }
     return buildEarnDeposit(params);
@@ -200,8 +225,9 @@ export const jupiterAdapter: ProtocolAdapter = {
 
   async buildWithdrawTx(params) {
     if (!isEarnCategory(params.category)) {
-      throw new Error(
-        `Jupiter adapter only supports Earn (lending/supply). Got category "${params.category}".`,
+      throw Object.assign(
+        new Error(`Jupiter adapter only supports Earn (lending/supply). Got category "${params.category}".`),
+        { statusCode: 400 },
       );
     }
     return buildEarnWithdraw(params);
