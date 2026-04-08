@@ -37,6 +37,7 @@ async function loadSdk() {
     KaminoMarket: sdk.KaminoMarket,
     KaminoAction: sdk.KaminoAction,
     VanillaObligation: sdk.VanillaObligation,
+    LendingObligation: sdk.LendingObligation,
     MultiplyObligation: sdk.MultiplyObligation,
     ObligationTypeTag: sdk.ObligationTypeTag,
     PROGRAM_ID: sdk.PROGRAM_ID,
@@ -197,7 +198,7 @@ async function prepareLending(params: BuildTxParams) {
   const {
     KaminoMarket,
     KaminoAction,
-    VanillaObligation,
+    LendingObligation,
     PROGRAM_ID,
     BN,
   } = await loadSdk();
@@ -237,19 +238,25 @@ async function prepareLending(params: BuildTxParams) {
     amountBase,
     tokenMint,
     KaminoAction,
-    VanillaObligation,
+    LendingObligation,
     PROGRAM_ID,
   };
 }
 
 /** Flatten a KaminoAction result into ordered instructions. */
 function flattenLendingIxs(action: any): Instruction[] {
-  return [
+  const raw = [
     ...action.computeBudgetIxs,
     ...action.setupIxs,
     ...action.lendingIxs,
     ...action.cleanupIxs,
-  ] as unknown as Instruction[];
+  ];
+  // Ensure every instruction has an accounts array — compute budget ixs
+  // from the SDK may omit it (they have no account inputs).
+  return raw.map((ix: any) => ({
+    ...ix,
+    accounts: ix.accounts ?? [],
+  })) as unknown as Instruction[];
 }
 
 async function buildLendingDeposit(
@@ -261,7 +268,7 @@ async function buildLendingDeposit(
       amountBase,
       tokenMint,
       KaminoAction,
-      VanillaObligation,
+      LendingObligation,
       PROGRAM_ID,
     } = await prepareLending(params);
 
@@ -269,8 +276,8 @@ async function buildLendingDeposit(
       market,
       amountBase,
       addr(tokenMint),
-      addr(params.walletAddress) as any,
-      new VanillaObligation(PROGRAM_ID),
+      walletSigner(params.walletAddress),
+      new LendingObligation(addr(tokenMint), PROGRAM_ID),
       true,
       undefined,
     );
@@ -297,7 +304,7 @@ async function buildLendingWithdraw(
       amountBase,
       tokenMint,
       KaminoAction,
-      VanillaObligation,
+      LendingObligation,
       PROGRAM_ID,
     } = await prepareLending(params);
 
@@ -305,8 +312,8 @@ async function buildLendingWithdraw(
       market,
       amountBase,
       addr(tokenMint),
-      addr(params.walletAddress) as any,
-      new VanillaObligation(PROGRAM_ID),
+      walletSigner(params.walletAddress),
+      new LendingObligation(addr(tokenMint), PROGRAM_ID),
       true,
       undefined,
     );
