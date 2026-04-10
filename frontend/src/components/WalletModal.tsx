@@ -69,7 +69,7 @@ function WalletRow({
           Connecting...
         </span>
       ) : (
-        <span className="ml-auto text-[0.6rem] uppercase tracking-[0.05em] text-neon-primary font-sans font-medium">
+        <span className="ml-auto text-[0.6rem] uppercase tracking-[0.05em] text-neon font-sans font-medium">
           Detected
         </span>
       )}

@@ -12,6 +12,8 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { EXCLUDED_MULTIPLY_TOKENS } from "../../shared/constants.js";
 import { getOrNull } from "../../shared/http.js";
 import { logger } from "../../shared/logger.js";
+import { cachedAsync } from "../../shared/utils.js";
+import { getRpc } from "../../shared/rpc.js";
 import { db } from "../db/connection.js";
 import {
   safeFloat,
@@ -26,6 +28,38 @@ import {
 const KAMINO_API = "https://api.kamino.finance";
 const KAMINO_APP = "https://app.kamino.finance";
 const MIN_TVL_USD = 100_000;
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+/** Load on-chain KaminoMarket (cached 60s) for borrow limit data not in API. */
+async function loadOnChainMarket(marketPk: string): Promise<any | null> {
+  try {
+    return await cachedAsync(`kamino-market:${marketPk}`, 60_000, async () => {
+      const { KaminoMarket, DEFAULT_RECENT_SLOT_DURATION_MS } = await import(
+        "@kamino-finance/klend-sdk"
+      );
+      const { address } = await import("@solana/kit");
+      return KaminoMarket.load(
+        getRpc() as any,
+        address(marketPk),
+        DEFAULT_RECENT_SLOT_DURATION_MS,
+      );
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Get available-to-borrow for a debt reserve from on-chain data. */
+function getOnChainBorrowAvailable(
+  onChainReserve: any,
+  mintFactor: number,
+): number | null {
+  if (!onChainReserve?.stats?.reserveBorrowLimit) return null;
+  const borrowLimit = Number(onChainReserve.stats.reserveBorrowLimit) / mintFactor;
+  const borrowed = Number(onChainReserve.getBorrowedAmount?.() ?? 0) / mintFactor;
+  return Math.max(0, borrowLimit - borrowed);
+}
 
 async function kGet(path: string): Promise<unknown | null> {
   return getOrNull(`${KAMINO_API}${path}`, { logLabel: "Kamino API" });
@@ -753,21 +787,32 @@ async function fetchMultiplyMarkets(
           safeFloat(debtReserve.totalBorrow) ??
           0;
         const debtDecimals = Number(latestDebtMetrics.decimals ?? 6);
-        const debtBorrowLimitRaw =
-          safeFloat(latestDebtMetrics.reserveBorrowLimit) ?? 0;
-        const debtBorrowLimit =
-          debtBorrowLimitRaw > 0
-            ? debtBorrowLimitRaw / 10 ** debtDecimals
-            : Infinity;
         const debtPrice =
           safeFloat(latestDebtMetrics.assetPriceUSD) ?? 1.0;
 
+        // Use on-chain borrow limit (API doesn't expose it)
         const supplyAvailable = debtTotalSupply - debtTotalBorrow;
-        const borrowLimitRemaining = debtBorrowLimit - debtTotalBorrow;
-        const liqAvailableTokens = Math.max(
-          0,
-          Math.min(supplyAvailable, borrowLimitRemaining),
-        );
+        let liqAvailableTokens = Math.max(0, supplyAvailable);
+
+        const onChainMarket = await loadOnChainMarket(marketPubkey);
+        if (onChainMarket) {
+          const { address } = await import("@solana/kit");
+          const onChainDebtRes = onChainMarket.getReserveByMint(
+            address(debtReserve.liquidityTokenMint as string),
+          );
+          if (onChainDebtRes) {
+            const borrowAvail = getOnChainBorrowAvailable(
+              onChainDebtRes,
+              onChainDebtRes.getMintFactor().toNumber(),
+            );
+            if (borrowAvail !== null) {
+              liqAvailableTokens = Math.max(
+                0,
+                Math.min(supplyAvailable, borrowAvail),
+              );
+            }
+          }
+        }
         const liqAvailableUsd = liqAvailableTokens * debtPrice;
 
         const collDepositLimitRaw =
@@ -812,10 +857,12 @@ async function fetchMultiplyMarkets(
           collateral_deposit_limit: collDepositLimit,
           debt_available_usd: liqAvailableUsd,
           debt_available_tokens: liqAvailableTokens,
-          debt_borrow_limit:
-            debtBorrowLimit !== Infinity ? debtBorrowLimit : null,
-          debt_borrow_limit_remaining:
-            debtBorrowLimit !== Infinity ? borrowLimitRemaining : null,
+          debt_borrow_limit: liqAvailableTokens < supplyAvailable
+            ? liqAvailableTokens + debtTotalBorrow
+            : null,
+          debt_borrow_limit_remaining: liqAvailableTokens < supplyAvailable
+            ? liqAvailableTokens
+            : null,
           debt_price_usd: debtPrice,
           collateral_ltv: collLtvHistory,
           collateral_liquidation_threshold: collLiqThreshold,

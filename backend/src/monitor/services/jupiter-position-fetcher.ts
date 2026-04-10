@@ -8,7 +8,8 @@
  *   - Multiply: stub (REST API not yet available)
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
+import { userPositions } from "../db/schema.js";
 import { address, getAddressEncoder, getProgramDerivedAddress } from "@solana/addresses";
 import { getWithRetry, getOrNull, postJson } from "../../shared/http.js";
 import { logger } from "../../shared/logger.js";
@@ -313,7 +314,7 @@ async function fetchEarnPositions(
       buildPositionDict({
         wallet_address: wallet,
         protocol_slug: "jupiter",
-        product_type: "earn",
+        product_type: "lending",
         external_id: assetAddress,
         snapshot_at: now,
         opportunity_id: entry?.id ?? null,
@@ -415,9 +416,48 @@ export async function snapshotAllWallets(
         headers,
       );
 
+      // Detect closed positions: DB says open but not in fresh fetch
+      const freshExternalIds = new Set(earnPositions.map((p) => p.external_id));
+      const dbOpenJupiter = await database
+        .select({ id: userPositions.id, external_id: userPositions.external_id, product_type: userPositions.product_type })
+        .from(userPositions)
+        .where(
+          and(
+            eq(userPositions.wallet_address, wallet.wallet_address),
+            eq(userPositions.protocol_slug, "jupiter"),
+            eq(userPositions.is_closed, false),
+          ),
+        );
+
+      const closedPositions: typeof earnPositions = [];
+      for (const dbPos of dbOpenJupiter) {
+        if (!freshExternalIds.has(dbPos.external_id)) {
+          closedPositions.push(
+            buildPositionDict({
+              wallet_address: wallet.wallet_address,
+              protocol_slug: "jupiter",
+              product_type: dbPos.product_type,
+              external_id: dbPos.external_id,
+              snapshot_at: now,
+              deposit_amount: 0,
+              deposit_amount_usd: 0,
+              is_closed: true,
+              closed_at: now,
+              close_value_usd: 0,
+            }),
+          );
+        }
+      }
+      if (closedPositions.length > 0) {
+        logger.info(
+          { wallet: wallet.wallet_address.slice(0, 8), closed: closedPositions.length },
+          "Detected closed Jupiter positions",
+        );
+      }
+
       totalSnapshots += await storePositionRows(
         database,
-        earnPositions,
+        [...earnPositions, ...closedPositions],
         now,
       );
 

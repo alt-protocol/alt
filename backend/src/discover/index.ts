@@ -4,6 +4,7 @@ import { protocols } from "./db/schema.js";
 import { logger } from "../shared/logger.js";
 import { yieldsRoutes } from "./routes/yields.js";
 import { protocolsRoutes } from "./routes/protocols.js";
+import { stablecoinsRoutes } from "./routes/stablecoins.js";
 import { startScheduler, stopScheduler } from "./scheduler.js";
 
 // ---------------------------------------------------------------------------
@@ -104,6 +105,7 @@ export async function discoverPlugin(app: FastifyInstance) {
   // Register routes
   await app.register(yieldsRoutes);
   await app.register(protocolsRoutes);
+  await app.register(stablecoinsRoutes);
 
   // Start scheduler after server is ready
   app.addHook("onReady", async () => {

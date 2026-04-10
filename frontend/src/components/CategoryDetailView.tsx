@@ -5,7 +5,7 @@ import type { ComponentType } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import type { YieldOpportunityDetail } from "@/lib/api";
-import { fmtCategory } from "@/lib/format";
+import { fmtCategory, fmtPegAdherence, fmtDeviation, fmtVolatility, fmtTvl, pegColor } from "@/lib/format";
 import { queryKeys } from "@/lib/queryKeys";
 import { getCategoryDef } from "@/lib/categories";
 
@@ -133,6 +133,54 @@ export default function CategoryDetailView({ yield_: y, id }: Props) {
           <p className="font-sans text-[0.8rem] text-foreground-muted leading-relaxed">
             {categoryDef.strategyDescription(y)}
           </p>
+        </div>
+      )}
+
+      {y.peg_stability && (
+        <div className="bg-surface-low rounded-sm px-6 py-5 mb-[1.5rem]">
+          <p className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans mb-4">
+            Peg Stability {"\u2014"} {y.peg_stability.symbol}
+            {y.peg_stability.peg_type === "yield_bearing" && (
+              <span className="ml-2 text-[0.55rem] normal-case tracking-normal text-foreground-muted">(yield-bearing)</span>
+            )}
+          </p>
+          {y.peg_stability.snapshot_count_7d < 2 ? (
+            <p className="font-sans text-[0.8rem] text-foreground-muted">Price tracking started recently. Stats will appear shortly.</p>
+          ) : (
+            <div className="divide-y divide-outline-ghost">
+              <DetailRow label="Current Price" value={y.peg_stability.price_current != null ? `$${y.peg_stability.price_current.toFixed(4)}` : "\u2014"} />
+              {y.peg_stability.peg_type === "fixed" && y.peg_stability.peg_target != null && (
+                <DetailRow label="Peg Target" value={`$${y.peg_stability.peg_target.toFixed(2)}`} />
+              )}
+              {y.peg_stability.peg_type === "fixed" && (
+                <DetailRow
+                  label="7D Peg Adherence"
+                  value={<span className={pegColor(y.peg_stability.peg_adherence_7d)}>{fmtPegAdherence(y.peg_stability.peg_adherence_7d)}</span>}
+                />
+              )}
+              {y.peg_stability.peg_type === "fixed" && (
+                <DetailRow label="7D Max Deviation" value={fmtDeviation(y.peg_stability.max_deviation_7d)} />
+              )}
+              {y.peg_stability.peg_type === "yield_bearing" && (
+                <DetailRow label="7D Volatility" value={fmtVolatility(y.peg_stability.volatility_7d)} />
+              )}
+              {y.peg_stability.min_price_7d != null && y.peg_stability.max_price_7d != null && (
+                <DetailRow label="7D Price Range" value={`$${y.peg_stability.min_price_7d.toFixed(4)} \u2013 $${y.peg_stability.max_price_7d.toFixed(4)}`} />
+              )}
+              {y.peg_stability.snapshot_count_30d >= 2 && y.peg_stability.peg_type === "fixed" && (
+                <DetailRow
+                  label="30D Peg Adherence"
+                  value={<span className={pegColor(y.peg_stability.peg_adherence_30d)}>{fmtPegAdherence(y.peg_stability.peg_adherence_30d)}</span>}
+                />
+              )}
+              {y.peg_stability.snapshot_count_30d >= 2 && y.peg_stability.peg_type === "yield_bearing" && (
+                <DetailRow label="30D Volatility" value={fmtVolatility(y.peg_stability.volatility_30d)} />
+              )}
+              {y.peg_stability.liquidity_usd != null && (
+                <DetailRow label="Sell Depth" value={fmtTvl(y.peg_stability.liquidity_usd)} />
+              )}
+            </div>
+          )}
         </div>
       )}
 

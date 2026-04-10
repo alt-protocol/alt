@@ -112,8 +112,17 @@ export function useTransaction(
         let message = buildTransactionMessage(signer, latestBlockhash, instructions);
 
         if (lookupTableAddresses.length > 0) {
+          // Fetch ALTs individually — external sources can return stale addresses
           const altAddresses = lookupTableAddresses.map((a) => address(a));
-          const lookups = await fetchAddressesForLookupTables(altAddresses, rpc);
+          let lookups = await fetchAddressesForLookupTables([], rpc); // empty seed for type
+          for (const alt of altAddresses) {
+            try {
+              const result = await fetchAddressesForLookupTables([alt], rpc);
+              lookups = { ...lookups, ...result };
+            } catch {
+              // Skip missing ALTs
+            }
+          }
           message = compressTransactionMessageUsingAddressLookupTables(message, lookups) as typeof message;
         }
 

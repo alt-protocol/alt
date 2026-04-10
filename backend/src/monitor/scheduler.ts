@@ -38,7 +38,7 @@ export function startScheduler() {
   // Run initial snapshot in background
   snapshotAllPositionsJob().catch(() => {});
 
-  task = cron.schedule("0 */4 * * *", () => {
+  task = cron.schedule("15 */4 * * *", () => {
     void snapshotAllPositionsJob();
   });
 
@@ -55,7 +55,7 @@ export function startScheduler() {
     }
   });
 
-  logger.info("Monitor scheduler started — position snapshot every 4 hours, retention daily at 04:00 UTC");
+  logger.info("Monitor scheduler started — position snapshot every 4 hours (15 min after discover), retention daily at 04:00 UTC");
 }
 
 export function stopScheduler() {

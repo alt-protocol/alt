@@ -59,6 +59,12 @@ export const multiplyCategory: CategoryDefinition = {
     if (extra.collateral_yield_current_pct != null) fields.push({ label: "Supply APY", value: fmtApy(extra.collateral_yield_current_pct) });
     if (extra.borrow_apy_current_pct != null) fields.push({ label: "Borrow APY", value: fmtApy(extra.borrow_apy_current_pct) });
     if (y.utilization_pct != null) fields.push({ label: "Utilization", value: `${y.utilization_pct.toFixed(1)}%` });
+    if (y.underlying_tokens?.length) {
+      fields.push({
+        label: "Underlying Exposure",
+        value: y.underlying_tokens.map((t) => `${t.symbol} [${t.role}] (${t.type.replace(/_/g, " ")})`).join(" / "),
+      });
+    }
 
     // Leverage table
     if (extra.leverage_table) {

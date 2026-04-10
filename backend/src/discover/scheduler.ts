@@ -2,15 +2,17 @@ import cron from "node-cron";
 import { lt } from "drizzle-orm";
 import { logger } from "../shared/logger.js";
 import { db } from "../shared/db.js";
-import { yieldSnapshots } from "./db/schema.js";
+import { yieldSnapshots, stablecoinPriceSnapshots } from "./db/schema.js";
 import { fetchKaminoYields } from "./services/kamino-fetcher.js";
 import { fetchDriftYields } from "./services/drift-fetcher.js";
 import { fetchJupiterYields } from "./services/jupiter-fetcher.js";
+import { fetchStablecoinPrices } from "./services/stablecoin-price-fetcher.js";
 
 const FETCHERS = [
   { name: "kamino", fn: fetchKaminoYields },
   { name: "drift", fn: fetchDriftYields },
   { name: "jupiter", fn: fetchJupiterYields },
+  { name: "stablecoin-prices", fn: fetchStablecoinPrices },
 ];
 
 let tasks: cron.ScheduledTask[] = [];
@@ -53,16 +55,22 @@ export function startScheduler() {
     tasks.push(task);
   }
 
-  // Daily retention — delete snapshots older than 365 days
+  // Daily retention — delete old snapshots
   const retentionTask = cron.schedule("0 4 * * *", async () => {
     try {
-      const cutoff = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
-      const result = await db
+      const yieldCutoff = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+      const yieldResult = await db
         .delete(yieldSnapshots)
-        .where(lt(yieldSnapshots.snapshot_at, cutoff));
-      logger.info({ cutoff, deleted: result.rowCount }, "Yield snapshot retention completed");
+        .where(lt(yieldSnapshots.snapshot_at, yieldCutoff));
+      logger.info({ cutoff: yieldCutoff, deleted: yieldResult.rowCount }, "Yield snapshot retention completed");
+
+      const priceCutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+      const priceResult = await db
+        .delete(stablecoinPriceSnapshots)
+        .where(lt(stablecoinPriceSnapshots.snapshot_at, priceCutoff));
+      logger.info({ cutoff: priceCutoff, deleted: priceResult.rowCount }, "Price snapshot retention completed");
     } catch (err) {
-      logger.error({ err }, "Yield snapshot retention failed");
+      logger.error({ err }, "Snapshot retention failed");
     }
   });
   tasks.push(retentionTask);

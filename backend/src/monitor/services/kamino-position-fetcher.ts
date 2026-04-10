@@ -9,7 +9,8 @@
  *   - Multiply Obligations: Modified Dietz PnL + leverage data
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
+import { userPositions } from "../db/schema.js";
 import { getOrNull } from "../../shared/http.js";
 import { logger } from "../../shared/logger.js";
 import { safeFloat, parseTimestamp, cached, cachedAsync } from "../../shared/utils.js";
@@ -24,6 +25,7 @@ import {
   storePositionRows,
   storeEventsBatch,
   loadOpportunityMap,
+  batchEarliestSnapshots,
   type PositionDict,
   type EventDict,
 } from "./utils.js";
@@ -575,6 +577,7 @@ async function fetchObligationPositions(
   if (!allMarkets) allMarkets = await getAllMarkets();
   const results: PositionDict[] = [];
   const allObligationEvents: EventDict[] = [];
+  const earliestSnapshots = await batchEarliestSnapshots(db, wallet);
 
   const ZERO_PK = "11111111111111111111111111111111";
 
@@ -706,8 +709,8 @@ async function fetchObligationPositions(
       let pnlUsd = pnlData?.pnlUsd ?? null;
       let pnlPct = pnlData?.pnlPct ?? null;
       let initialDepositUsd = pnlData?.initialDepositUsd ?? null;
-      let openedAt = pnlData?.openedAt ?? null;
-      let heldDays = pnlData?.heldDays ?? null;
+      let openedAt: Date | null = pnlData?.openedAt ?? earliestSnapshots[obligationAddress] ?? null;
+      let heldDays = pnlData?.heldDays ?? computeHeldDays(openedAt, now);
       const isClosed = pnlData?.isClosed ?? false;
       const closedAt = pnlData?.closedAt ?? null;
       const closeValueUsd = pnlData?.closeValueUsd ?? null;
@@ -919,7 +922,49 @@ export async function snapshotAllWallets(
           oppMap,
         );
 
-      const allPositions = [...earnPositions, ...obligationPositions];
+      // Detect closed positions: DB says open but not in fresh fetch
+      // Covers all Kamino types: earn vaults, lending, and multiply
+      const freshExternalIds = new Set(
+        [...earnPositions, ...obligationPositions].map((p) => p.external_id),
+      );
+      const dbOpenKamino = await database
+        .select({ id: userPositions.id, external_id: userPositions.external_id, product_type: userPositions.product_type })
+        .from(userPositions)
+        .where(
+          and(
+            eq(userPositions.wallet_address, wallet.wallet_address),
+            eq(userPositions.protocol_slug, "kamino"),
+            eq(userPositions.is_closed, false),
+          ),
+        );
+
+      const closedPositions: PositionDict[] = [];
+      for (const dbPos of dbOpenKamino) {
+        if (!freshExternalIds.has(dbPos.external_id)) {
+          closedPositions.push(
+            buildPositionDict({
+              wallet_address: wallet.wallet_address,
+              protocol_slug: "kamino",
+              product_type: dbPos.product_type,
+              external_id: dbPos.external_id,
+              snapshot_at: now,
+              deposit_amount: 0,
+              deposit_amount_usd: 0,
+              is_closed: true,
+              closed_at: now,
+              close_value_usd: 0,
+            }),
+          );
+        }
+      }
+      if (closedPositions.length > 0) {
+        logger.info(
+          { wallet: wallet.wallet_address.slice(0, 8), closed: closedPositions.length },
+          "Detected closed Kamino positions",
+        );
+      }
+
+      const allPositions = [...earnPositions, ...obligationPositions, ...closedPositions];
       totalSnapshots += await storePositionRows(
         database,
         allPositions,

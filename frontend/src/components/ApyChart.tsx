@@ -22,30 +22,30 @@ export default function ApyChart({ data, referenceLines }: ApyChartProps) {
       <LineChart data={data} margin={{ top: 4, right: referenceLines?.length ? 50 : 8, left: 0, bottom: 0 }}>
         <XAxis
           dataKey="date"
-          tick={{ fill: "var(--foreground-muted)", fontSize: 10, fontFamily: "var(--font-sans)" }}
+          tick={{ fill: "var(--color-foreground-muted)", fontSize: 10, fontFamily: "var(--font-sans)" }}
           tickLine={false}
           axisLine={false}
         />
         <YAxis
           tickFormatter={(v) => `${v}%`}
-          tick={{ fill: "var(--foreground-muted)", fontSize: 10, fontFamily: "var(--font-sans)" }}
+          tick={{ fill: "var(--color-foreground-muted)", fontSize: 10, fontFamily: "var(--font-sans)" }}
           tickLine={false}
           axisLine={false}
           width={42}
         />
         <Tooltip
           formatter={(value) => [`${Number(value).toFixed(2)}%`, "APY"]}
-          contentStyle={{ background: "var(--surface-low)", border: "none", borderRadius: 2, fontSize: 11 }}
-          labelStyle={{ color: "var(--foreground-muted)" }}
-          itemStyle={{ color: "var(--neon-primary)" }}
+          contentStyle={{ background: "var(--color-surface-low)", border: "none", borderRadius: 2, fontSize: 11 }}
+          labelStyle={{ color: "var(--color-foreground-muted)" }}
+          itemStyle={{ color: "var(--color-neon)" }}
         />
         <Line
           type="monotone"
           dataKey="apy"
-          stroke="var(--neon-primary)"
+          stroke="var(--color-neon)"
           strokeWidth={1.5}
           dot={false}
-          activeDot={{ r: 3, fill: "var(--neon-primary)" }}
+          activeDot={{ r: 3, fill: "var(--color-neon)" }}
         />
         {referenceLines?.map((rl) => (
           <ReferenceLine

@@ -4,16 +4,17 @@ import { useQuery } from "@tanstack/react-query";
 import { Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { api, YieldOpportunity } from "@/lib/api";
-import { fmtNum, fmtTvl, fmtCategory } from "@/lib/format";
+import { fmtNum, fmtTvl, fmtCategory, fmtPriceRange, rangeSpreadColor } from "@/lib/format";
 import { useYieldFilters, type SortField } from "@/lib/hooks/useYieldFilters";
 import { queryKeys } from "@/lib/queryKeys";
 import FilterPanel from "@/components/FilterPanel";
 import StatsGrid from "@/components/StatsGrid";
-import { getCategoryDef } from "@/lib/categories";
-
-function fmtLiquidity(y: YieldOpportunity) {
-  if (y.liquidity_available_usd != null) return fmtTvl(y.liquidity_available_usd);
-  return getCategoryDef(y.category)?.uncappedLiquidity ? "\u221E" : "\u2014";
+/** Format snapshot count as approximate time span (15-min intervals) */
+function fmtPegSpan(snapshots: number): string {
+  const hours = Math.round(snapshots * 15 / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.round(hours / 24);
+  return `${days}d`;
 }
 
 function SortArrow({ field, sortField, sortDir }: { field: SortField; sortField: SortField; sortDir: "asc" | "desc" }) {
@@ -120,6 +121,7 @@ function DashboardContent() {
           activeFilterCount={f.activeFilterCount}
           sources={f.sources}
           allTokens={f.allTokens}
+          allTokenTypes={f.allTokenTypes}
           updateFilters={f.updateFilters}
           applyFilters={f.applyFilters}
           resetFilters={f.resetFilters}
@@ -174,7 +176,7 @@ function DashboardContent() {
                   >
                     <div>
                       <span className="font-display text-sm tracking-[-0.02em]">{displayName}</span>
-                      <span className="ml-2 text-[0.65rem] text-foreground-muted font-sans">{y.tokens.join(", ")}</span>
+                      <span className="ml-2 text-[0.65rem] text-foreground-muted font-sans">{y.tokens.join(", ")}{y.underlying_tokens?.[0]?.type ? ` · ${y.underlying_tokens[0].type.replace(/_/g, " ")}` : ""}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="inline-block bg-secondary text-secondary-text rounded-sm px-2.5 py-0.5 text-[0.6rem] tracking-[0.03em] font-medium">
@@ -188,8 +190,8 @@ function DashboardContent() {
                         <span className="text-[0.8rem] font-sans tabular-nums text-foreground-muted">{fmtTvl(y.tvl_usd)}</span>
                       </div>
                       <div className="flex justify-between items-baseline">
-                        <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Available Liquidity</span>
-                        <span className="text-[0.8rem] font-sans tabular-nums text-foreground-muted">{fmtLiquidity(y)}</span>
+                        <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Liquidity</span>
+                        <span className="text-[0.8rem] font-sans tabular-nums text-foreground-muted">{fmtTvl(y.liquidity_available_usd)}</span>
                       </div>
                       <div className="flex justify-between items-baseline">
                         <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">APR</span>
@@ -198,6 +200,21 @@ function DashboardContent() {
                       <div className="flex justify-between items-baseline">
                         <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">30D APR</span>
                         <span className="text-[0.8rem] font-sans tabular-nums text-foreground-muted">{y.apy_30d_avg != null ? `${fmtNum(y.apy_30d_avg)}%` : "\u2014"}</span>
+                      </div>
+                      <div className="flex justify-between items-baseline">
+                        <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Risk</span>
+                        <span className="text-[0.8rem] font-sans tabular-nums text-foreground-muted text-right">
+                          {y.peg_stability && y.peg_stability.snapshot_count_7d >= 2 ? (
+                            <>
+                              <span className={rangeSpreadColor(y.peg_stability.min_price_7d, y.peg_stability.max_price_7d)}>{"●"}</span>{" "}
+                              {fmtPriceRange(y.peg_stability.min_price_7d, y.peg_stability.max_price_7d)} · {fmtPegSpan(y.peg_stability.snapshot_count_7d)}
+                              {y.peg_stability.liquidity_usd != null && ` · ${fmtTvl(y.peg_stability.liquidity_usd)} liq`}
+                              {y.lock_period_days > 0 && ` · ${y.lock_period_days}d lock`}
+                            </>
+                          ) : y.lock_period_days > 0 ? (
+                            `${y.lock_period_days}d lock`
+                          ) : "\u2014"}
+                        </span>
                       </div>
                     </div>
                     <button
@@ -218,6 +235,7 @@ function DashboardContent() {
                     <th className="text-left px-5 py-2.5 font-medium">Name</th>
                     <th className="text-left px-5 py-2.5 font-medium">Protocol</th>
                     <th className="text-left px-5 py-2.5 font-medium">Category</th>
+                    <th className="text-left px-5 py-2.5 font-medium">Tokens</th>
                     <th
                       className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
                       onClick={() => f.toggleSort("tvl")}
@@ -228,7 +246,7 @@ function DashboardContent() {
                       className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
                       onClick={() => f.toggleSort("liquidity")}
                     >
-                      Available Liquidity<SortArrow sortField={f.sortField} sortDir={f.sortDir} field="liquidity" />
+                      Liquidity<SortArrow sortField={f.sortField} sortDir={f.sortDir} field="liquidity" />
                     </th>
                     <th
                       className="text-right px-5 py-2.5 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
@@ -242,6 +260,7 @@ function DashboardContent() {
                     >
                       30D APR<SortArrow sortField={f.sortField} sortDir={f.sortDir} field="apy30d" />
                     </th>
+                    <th className="text-right px-5 py-2.5 font-medium whitespace-nowrap">Risk</th>
                     <th className="text-right px-5 py-2.5 font-medium"></th>
                   </tr>
                 </thead>
@@ -262,7 +281,6 @@ function DashboardContent() {
                               .replace(/^[-—]\s*/, "")
                               .trim() || y.name}
                           </span>
-                          <span className="ml-2 text-[0.65rem] text-foreground-muted">{y.tokens.join(", ")}</span>
                         </div>
                       </td>
                       <td className="px-5 py-3">
@@ -273,13 +291,34 @@ function DashboardContent() {
                       <td className="px-5 py-3 text-foreground-muted">
                         {fmtCategory(y.category)}
                       </td>
+                      <td className="px-5 py-3 text-foreground-muted">
+                        {y.underlying_tokens?.map((t) => t.symbol).join(", ") ?? y.tokens.join(", ")}
+                      </td>
                       <td className="px-5 py-3 text-right text-foreground-muted tabular-nums">{fmtTvl(y.tvl_usd)}</td>
-                      <td className="px-5 py-3 text-right text-foreground-muted tabular-nums">{fmtLiquidity(y)}</td>
+                      <td className="px-5 py-3 text-right text-foreground-muted tabular-nums">{fmtTvl(y.liquidity_available_usd)}</td>
                       <td className="px-5 py-3 text-right font-semibold text-neon tabular-nums">
                         {fmtNum(y.apy_current)}%
                       </td>
                       <td className="px-5 py-3 text-right text-foreground-muted tabular-nums">
                         {y.apy_30d_avg != null ? `${fmtNum(y.apy_30d_avg)}%` : "\u2014"}
+                      </td>
+                      <td className="px-5 py-3 text-right text-foreground-muted text-[0.7rem] leading-relaxed">
+                        {y.peg_stability && y.peg_stability.snapshot_count_7d >= 2 ? (
+                          <>
+                            <div>
+                              <span className={rangeSpreadColor(y.peg_stability.min_price_7d, y.peg_stability.max_price_7d)}>{"●"}</span>{" "}
+                              {fmtPriceRange(y.peg_stability.min_price_7d, y.peg_stability.max_price_7d)}{" · "}{fmtPegSpan(y.peg_stability.snapshot_count_7d)}
+                            </div>
+                            <div className="text-foreground-muted">
+                              {y.peg_stability.liquidity_usd != null
+                                ? `${fmtTvl(y.peg_stability.liquidity_usd)} liq`
+                                : "\u2014"}
+                              {y.lock_period_days > 0 && ` · ${y.lock_period_days}d lock`}
+                            </div>
+                          </>
+                        ) : y.lock_period_days > 0 ? (
+                          `${y.lock_period_days}d lock`
+                        ) : "\u2014"}
                       </td>
                       <td className="px-5 py-3 text-right">
                         <button

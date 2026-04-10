@@ -4,6 +4,12 @@ export function safeFloat(val: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+export function numOrNull(val: string | null | undefined): number | null {
+  if (val === null || val === undefined) return null;
+  const n = Number(val);
+  return Number.isFinite(n) ? n : null;
+}
+
 export function parseTimestamp(ts: unknown): Date | null {
   if (ts === null || ts === undefined) return null;
   try {

@@ -7,7 +7,9 @@ import type { UiWalletAccount } from "@wallet-standard/react";
 import type { YieldOpportunityDetail } from "@/lib/api";
 import { api } from "@/lib/api";
 import { deserializeBuildResponse } from "@/lib/instruction-deserializer";
+import Link from "next/link";
 import { fmtApy, fmtUsd, fmtPct, pnlColor } from "@/lib/format";
+import { TOKEN_MINTS } from "@/lib/constants";
 import { useTokenBalance } from "@/lib/hooks/useTokenBalance";
 import { usePositionBalance } from "@/lib/hooks/usePositionBalance";
 import { useTransaction } from "@/lib/hooks/useTransaction";
@@ -97,8 +99,9 @@ function ConnectedMultiplyPanel({
   const debtSymbol = (extra?.debt_symbol as string) ?? "USDC";
   const borrowApy = extra?.borrow_apy_current_pct as number | null;
   const supplyApy = extra?.collateral_yield_current_pct as number | null;
-  const { data: balance } = useTokenBalance(selectedAccount.address, collSymbol);
-  const { data: vaultBalance } = usePositionBalance(
+  const collMint = yield_.underlying_tokens?.find((t) => t.role === "collateral")?.mint ?? undefined;
+  const { data: balance } = useTokenBalance(selectedAccount.address, collMint);
+  const { data: vaultBalance, isLoading: vaultBalanceLoading } = usePositionBalance(
     selectedAccount.address,
     tab !== "open" ? yield_.id : undefined,
   );
@@ -106,6 +109,9 @@ function ConnectedMultiplyPanel({
     selectedAccount.address,
     yield_.id,
   );
+
+  // On-chain balance is source of truth for position existence (same pattern as lending)
+  const hasActivePosition = vaultBalance != null && vaultBalance > 0;
 
   const { execute, status, error, txSignature, reset } = useTransaction(signer);
 
@@ -118,7 +124,7 @@ function ConnectedMultiplyPanel({
     ? (balance ?? null)
     : (vaultBalance ?? null);
   const isValid = tab === "close"
-    ? !!position
+    ? hasActivePosition
     : numAmount > 0 && (effectiveBalance == null || numAmount <= effectiveBalance);
   const isBusy = status === "preparing" || status === "building" || status === "signing" || status === "confirming";
 
@@ -152,7 +158,6 @@ function ConnectedMultiplyPanel({
     setAmount("");
     await invalidateAfterTx({
       walletAddress: selectedAccount.address,
-      tokenSymbol: collSymbol,
       opportunityId: yield_.id,
       vaultAddress: yield_.deposit_address ?? undefined,
     });
@@ -182,7 +187,7 @@ function ConnectedMultiplyPanel({
                   [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full
                   [&::-moz-range-thumb]:bg-foreground [&::-moz-range-thumb]:border-0"
                 style={{
-                  background: `linear-gradient(to right, var(--neon-primary) 0%, var(--neon-primary) ${fillPct}%, rgba(255,255,255,0.12) ${fillPct}%, rgba(255,255,255,0.12) 100%)`,
+                  background: `linear-gradient(to right, var(--color-neon) 0%, var(--color-neon) ${fillPct}%, rgba(255,255,255,0.12) ${fillPct}%, rgba(255,255,255,0.12) 100%)`,
                 }}
               />
             </div>
@@ -218,16 +223,35 @@ function ConnectedMultiplyPanel({
               </span>
             </div>
           )}
+          {tab === "open" && (() => {
+            const mint = yield_.underlying_tokens?.[0]?.mint
+              ?? TOKEN_MINTS[collSymbol as keyof typeof TOKEN_MINTS]
+              ?? null;
+            return (
+              <div className="flex justify-end mb-2 -mt-2">
+                <Link
+                  href={mint ? `/swap?outputMint=${mint}` : "/swap"}
+                  className="text-neon text-[0.65rem] font-sans hover:opacity-80"
+                >
+                  Get {collSymbol} &rarr;
+                </Link>
+              </div>
+            );
+          })()}
         </>
       )}
 
       {(tab === "withdraw" || tab === "close") && (
-        <PositionInfo position={position} positionLoading={positionLoading} closeNote={tab === "close"} />
+        <PositionInfo
+          position={hasActivePosition ? { deposit_amount: vaultBalance, pnl_usd: position?.pnl_usd, pnl_pct: position?.pnl_pct } : null}
+          positionLoading={vaultBalanceLoading}
+          closeNote={tab === "close"}
+        />
       )}
 
       {/* Amount input (open + withdraw only) */}
       {tab !== "close" && (
-        <div className="bg-surface-high rounded-sm px-4 py-3 mb-2 focus-within:shadow-[0_2px_0_0_var(--neon-primary)] transition-shadow">
+        <div className="bg-surface-high rounded-sm px-4 py-3 mb-2 focus-within:shadow-[0_2px_0_0_var(--color-neon)] transition-shadow">
           <div className="flex items-center justify-between mb-1">
             <span className="text-foreground-muted text-[0.65rem] font-sans uppercase tracking-[0.05em]">{collSymbol}</span>
             <div className="flex gap-2">
@@ -314,7 +338,7 @@ function ConnectedMultiplyPanel({
               if (e.key === "Enter") (e.target as HTMLInputElement).blur();
               if (e.key === "Escape") setEditingSlippage(false);
             }}
-            className="mt-2 w-full bg-surface-high rounded-sm px-3 py-1.5 text-[0.65rem] font-sans text-foreground outline-none focus:shadow-[0_1px_0_0_var(--neon-primary)]"
+            className="mt-2 w-full bg-surface-high rounded-sm px-3 py-1.5 text-[0.65rem] font-sans text-foreground outline-none focus:shadow-[0_1px_0_0_var(--color-neon)]"
           />
         )}
         {slippageBps < 10 && (

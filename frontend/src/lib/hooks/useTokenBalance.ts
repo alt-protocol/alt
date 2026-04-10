@@ -2,33 +2,15 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { address } from "@solana/kit";
-import { TOKEN_MINTS } from "../constants";
 import { getRpc } from "@/lib/rpc";
-import { queryKeys } from "@/lib/queryKeys";
 
-const TOKEN_DECIMALS: Record<string, number> = {
-  SOL: 9,
-  USDC: 6,
-  USDT: 6,
-  mSOL: 9,
-  jitoSOL: 9,
-  USDS: 6,
-};
+const SOL_MINT = "So11111111111111111111111111111111111111112";
 
-function getMintForSymbol(symbol: string): string | undefined {
-  return TOKEN_MINTS[symbol as keyof typeof TOKEN_MINTS];
-}
-
-async function fetchBalance(walletAddress: string, tokenSymbol: string): Promise<number> {
-  const mint = getMintForSymbol(tokenSymbol);
-
-  if (tokenSymbol === "SOL") {
+async function fetchBalance(walletAddress: string, mint: string): Promise<number> {
+  if (mint === SOL_MINT) {
     const result = await getRpc().getBalance(address(walletAddress)).send();
-    const decimals = TOKEN_DECIMALS.SOL ?? 9;
-    return Number(result.value) / 10 ** decimals;
+    return Number(result.value) / 1e9;
   }
-
-  if (!mint) return 0;
 
   const result = await getRpc()
     .getTokenAccountsByOwner(
@@ -43,17 +25,26 @@ async function fetchBalance(walletAddress: string, tokenSymbol: string): Promise
 
   let total = 0;
   for (const acc of accounts) {
-    const parsed = acc.account.data as { parsed?: { info?: { tokenAmount?: { uiAmount?: number } } } };
+    const parsed = acc.account.data as {
+      parsed?: { info?: { tokenAmount?: { uiAmount?: number } } };
+    };
     total += parsed?.parsed?.info?.tokenAmount?.uiAmount ?? 0;
   }
   return total;
 }
 
-export function useTokenBalance(walletAddress: string | undefined, tokenSymbol: string) {
+/**
+ * Fetch on-chain token balance for a wallet by mint address.
+ * Pass the SPL token mint directly — no symbol lookup needed.
+ */
+export function useTokenBalance(
+  walletAddress: string | undefined,
+  mint: string | undefined,
+) {
   return useQuery({
-    queryKey: queryKeys.wallet.tokenBalance(walletAddress!, tokenSymbol),
-    queryFn: () => fetchBalance(walletAddress!, tokenSymbol),
-    enabled: !!walletAddress && !!tokenSymbol,
+    queryKey: ["tokenBalance", walletAddress, mint],
+    queryFn: () => fetchBalance(walletAddress!, mint!),
+    enabled: !!walletAddress && !!mint,
     refetchInterval: 30_000,
     staleTime: 15_000,
   });

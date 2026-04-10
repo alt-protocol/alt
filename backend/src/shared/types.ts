@@ -1,3 +1,26 @@
+export interface PegStabilityData {
+  symbol: string;
+  price_current: number | null;
+  peg_type: string;
+  peg_target: number | null;
+  // Fixed-peg only (null for yield-bearing)
+  peg_adherence_7d: number | null;
+  max_deviation_7d: number | null;
+  peg_adherence_30d: number | null;
+  max_deviation_30d: number | null;
+  // All stables
+  volatility_7d: number | null;
+  volatility_30d: number | null;
+  min_price_7d: number | null;
+  max_price_7d: number | null;
+  min_price_30d: number | null;
+  max_price_30d: number | null;
+  snapshot_count_7d: number;
+  snapshot_count_30d: number;
+  // DEX liquidity (from Jupiter Price API)
+  liquidity_usd: number | null;
+}
+
 export interface OpportunityDetail {
   id: number;
   protocol_id: number;
@@ -23,9 +46,78 @@ export interface OpportunityMapEntry {
   first_token: string | null;
 }
 
+export interface SearchYieldsParams {
+  category?: string;
+  tokens?: string;
+  vault_tag?: string;
+  stablecoins_only?: boolean;
+  sort?: "apy_desc" | "apy_asc" | "tvl_desc" | "tvl_asc";
+  limit?: number;
+  offset?: number;
+}
+
+export interface YieldListItem {
+  id: number;
+  protocol_id: number;
+  external_id: string | null;
+  name: string;
+  category: string;
+  tokens: string[];
+  apy_current: number | null;
+  apy_7d_avg: number | null;
+  apy_30d_avg: number | null;
+  tvl_usd: number | null;
+  min_deposit: number | null;
+  lock_period_days: number;
+  risk_tier: string | null;
+  protocol_name: string | null;
+  is_active: boolean;
+  max_leverage: number | null;
+  utilization_pct: number | null;
+  liquidity_available_usd: number | null;
+  is_automated: boolean | null;
+  depeg: number | null;
+  underlying_tokens: unknown;
+  protocol_url: string | null;
+  updated_at: Date | null;
+  peg_stability: PegStabilityData | null;
+}
+
+export interface SearchYieldsResult {
+  data: YieldListItem[];
+  meta: {
+    total: number;
+    last_updated: Date | null;
+    limit: number;
+    offset: number;
+  };
+}
+
+export interface YieldHistoryResult {
+  data: Array<{ snapshot_at: Date | null; apy: number | null; tvl_usd: number | null }>;
+  meta: { total: number; period: string };
+}
+
+export interface ProtocolListResult {
+  data: Array<{
+    id: number;
+    slug: string;
+    name: string;
+    description: string | null;
+    website_url: string | null;
+    logo_url: string | null;
+    audit_status: string | null;
+    auditors: string[] | null;
+    integration: string | null;
+  }>;
+}
+
 export interface DiscoverService {
   getOpportunityById(id: number): Promise<OpportunityDetail | null>;
   getOpportunityMap(): Promise<Record<string, OpportunityMapEntry>>;
+  searchYields(params: SearchYieldsParams): Promise<SearchYieldsResult>;
+  getYieldHistory(opportunityId: number, period?: "7d" | "30d" | "90d"): Promise<YieldHistoryResult | null>;
+  getProtocols(): Promise<ProtocolListResult>;
 }
 
 /** Token exposure entry — stored in underlying_tokens JSONB column. */

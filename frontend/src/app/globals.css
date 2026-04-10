@@ -34,3 +34,11 @@ body {
   background: #131313;
   color: #ededed;
 }
+
+/* Jupiter Terminal widget theming */
+:root {
+  --jupiter-plugin-primary: 217, 249, 157;
+  --jupiter-plugin-background: 19, 19, 19;
+  --jupiter-plugin-primaryText: 237, 237, 237;
+  --jupiter-plugin-warning: 251, 191, 36;
+}

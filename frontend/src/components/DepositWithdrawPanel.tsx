@@ -7,7 +7,9 @@ import type { UiWalletAccount } from "@wallet-standard/react";
 import type { YieldOpportunityDetail } from "@/lib/api";
 import { api } from "@/lib/api";
 import { deserializeBuildResponse } from "@/lib/instruction-deserializer";
+import Link from "next/link";
 import { fmtNum, fmtUsd, fmtPct, pnlColor } from "@/lib/format";
+import { TOKEN_MINTS } from "@/lib/constants";
 import { useTokenBalance } from "@/lib/hooks/useTokenBalance";
 import { usePositionBalance } from "@/lib/hooks/usePositionBalance";
 import { useWithdrawState } from "@/lib/hooks/useWithdrawState";
@@ -49,7 +51,8 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
 
   const invalidateAfterTx = useInvalidateAfterTransaction();
   const primaryToken = yield_.tokens[0] ?? "USDC";
-  const { data: balance } = useTokenBalance(selectedAccount.address, primaryToken);
+  const depositMint = yield_.underlying_tokens?.[0]?.mint ?? undefined;
+  const { data: balance } = useTokenBalance(selectedAccount.address, depositMint);
   const { data: vaultBalance, isLoading: vaultBalanceLoading } = usePositionBalance(
     selectedAccount.address,
     tab === "withdraw" ? yield_.id : undefined,
@@ -124,7 +127,6 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
     setAmount("");
     await invalidateAfterTx({
       walletAddress: selectedAccount.address,
-      tokenSymbol: primaryToken,
       opportunityId: yield_.id,
       vaultAddress: yield_.deposit_address ?? undefined,
     });
@@ -150,6 +152,21 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
           value={<>{fmtNum(balance, 6)} {primaryToken}</>}
         />
       )}
+      {tab === "deposit" && (() => {
+        const mint = yield_.underlying_tokens?.[0]?.mint
+          ?? TOKEN_MINTS[primaryToken as keyof typeof TOKEN_MINTS]
+          ?? null;
+        return (
+          <div className="flex justify-end mb-2 -mt-2">
+            <Link
+              href={mint ? `/swap?outputMint=${mint}` : "/swap"}
+              className="text-neon text-[0.65rem] font-sans hover:opacity-80"
+            >
+              Get {primaryToken} &rarr;
+            </Link>
+          </div>
+        );
+      })()}
 
       {tab === "withdraw" && withdrawLoading && (
         <div className="flex justify-between items-center mb-4 animate-pulse">
@@ -210,7 +227,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
       {/* Amount input + actions (hidden when withdraw has no balance or redeemable) */}
       {(tab === "deposit" || (withdrawBalance != null && withdrawBalance > 0 && !isRedeemable && !isPendingWithdraw)) && (
         <>
-          <div className="bg-surface-high rounded-sm px-4 py-3 mb-2 focus-within:shadow-[0_2px_0_0_var(--neon-primary)] transition-shadow">
+          <div className="bg-surface-high rounded-sm px-4 py-3 mb-2 focus-within:shadow-[0_2px_0_0_var(--color-neon)] transition-shadow">
             <div className="flex items-center justify-between mb-1">
               <span className="text-foreground-muted text-[0.65rem] font-sans uppercase tracking-[0.05em]">
                 {primaryToken}

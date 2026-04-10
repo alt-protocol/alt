@@ -11,6 +11,7 @@ export interface Filters {
   protocol: string;
   category: string;
   token: string;
+  tokenType: string;
   apyMin: string;
   apyMax: string;
   apy30dMin: string;
@@ -21,7 +22,7 @@ export interface Filters {
   liquidityMax: string;
 }
 
-export const EMPTY_FILTERS: Filters = { protocol: "", category: "", token: "", apyMin: "", apyMax: "", apy30dMin: "", apy30dMax: "", tvlMin: "", tvlMax: "", liquidityMin: "", liquidityMax: "" };
+export const EMPTY_FILTERS: Filters = { protocol: "", category: "", token: "", tokenType: "", apyMin: "", apyMax: "", apy30dMin: "", apy30dMax: "", tvlMin: "", tvlMax: "", liquidityMin: "", liquidityMax: "" };
 
 export function useYieldFilters(allYields: YieldOpportunity[]) {
   const router = useRouter();
@@ -31,6 +32,7 @@ export function useYieldFilters(allYields: YieldOpportunity[]) {
     protocol: searchParams.get("protocol") ?? "",
     category: searchParams.get("category") ?? "",
     token: searchParams.get("token") ?? "",
+    tokenType: searchParams.get("tokenType") ?? "",
     apyMin: searchParams.get("apyMin") ?? "",
     apyMax: searchParams.get("apyMax") ?? "",
     apy30dMin: searchParams.get("apy30dMin") ?? "",
@@ -67,6 +69,7 @@ export function useYieldFilters(allYields: YieldOpportunity[]) {
     let result = allYields;
     if (filters.protocol) result = result.filter((y) => y.protocol_name === filters.protocol);
     if (filters.token) result = result.filter((y) => y.tokens.includes(filters.token));
+    if (filters.tokenType) result = result.filter((y) => y.underlying_tokens?.some((t) => t.type === filters.tokenType));
     const apyMin = filters.apyMin ? parseFloat(filters.apyMin) : null;
     const apyMax = filters.apyMax ? parseFloat(filters.apyMax) : null;
     const apy30dMin = filters.apy30dMin ? parseFloat(filters.apy30dMin) : null;
@@ -111,6 +114,11 @@ export function useYieldFilters(allYields: YieldOpportunity[]) {
     return Array.from(tokens).sort();
   }, [allYields]);
 
+  const allTokenTypes = useMemo(() => {
+    const types = new Set(allYields.flatMap((y) => y.underlying_tokens ?? []).map((t) => t.type));
+    return Array.from(types).sort();
+  }, [allYields]);
+
   function syncToUrl(f: Filters, sf: SortField, sd: SortDir) {
     const params = new URLSearchParams();
     Object.entries(f).forEach(([k, v]) => { if (v) params.set(k, v); });
@@ -150,7 +158,7 @@ export function useYieldFilters(allYields: YieldOpportunity[]) {
     syncToUrl(EMPTY_FILTERS, sortField, sortDir);
   }
 
-  const activeFilterCount = [filters.protocol, filters.category, filters.token, filters.apyMin, filters.apyMax, filters.apy30dMin, filters.apy30dMax, filters.tvlMin, filters.tvlMax, filters.liquidityMin, filters.liquidityMax].filter(Boolean).length;
+  const activeFilterCount = [filters.protocol, filters.category, filters.token, filters.tokenType, filters.apyMin, filters.apyMax, filters.apy30dMin, filters.apy30dMax, filters.tvlMin, filters.tvlMax, filters.liquidityMin, filters.liquidityMax].filter(Boolean).length;
 
   return {
     filters,
@@ -164,6 +172,7 @@ export function useYieldFilters(allYields: YieldOpportunity[]) {
     backendSort,
     sources,
     allTokens,
+    allTokenTypes,
     activeFilterCount,
     updateFilters,
     toggleSort,

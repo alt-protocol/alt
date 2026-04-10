@@ -15,8 +15,8 @@ export const BuildTxBody = z.object({
   amount: z
     .string()
     .refine(
-      (v) => !isNaN(Number(v)) && Number(v) > 0,
-      "Amount must be a positive number",
+      (v) => !isNaN(Number(v)) && Number(v) >= 0,
+      "Amount must be a non-negative number",
     ),
   simulate: z.boolean().default(false),
   extra_data: z.record(z.unknown()).optional(),

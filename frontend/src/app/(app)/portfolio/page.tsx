@@ -59,7 +59,7 @@ interface TypeSidebarProps {
 function TypeSidebar({ byType, totalCount, activeType, onSelect }: TypeSidebarProps) {
   return (
     <div className="w-full lg:w-[200px] shrink-0 bg-surface-low flex lg:flex-col overflow-x-auto">
-      {SIDEBAR_TYPES.map(({ key, label }) => {
+      {SIDEBAR_TYPES.filter(({ key }) => key === "all" || (byType[key]?.length ?? 0) > 0).map(({ key, label }) => {
         const count = key === "all" ? totalCount : (byType[key]?.length ?? 0);
         const isActive = activeType === key;
         return (

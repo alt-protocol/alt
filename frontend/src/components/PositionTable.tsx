@@ -8,6 +8,16 @@ import { ProtocolChip } from "@/components/ProtocolChip";
 import { getCategoryDef } from "@/lib/categories";
 import DriftMaintenanceBanner from "./DriftMaintenanceBanner";
 
+function TokenWithType({ p, color = "text-foreground-muted" }: { p: UserPositionOut; color?: string }) {
+  const typeLabel = p.underlying_tokens?.[0]?.type?.replace(/_/g, " ");
+  return (
+    <span className={color}>
+      {p.token_symbol ?? "\u2014"}
+      {typeLabel && <span className="ml-1 text-[0.55rem] text-foreground-muted/50 uppercase">{typeLabel}</span>}
+    </span>
+  );
+}
+
 function getWithdrawStatus(p: UserPositionOut): string | null {
   return (p.extra_data as Record<string, unknown> | null)?.withdraw_status as string | null ?? null;
 }
@@ -18,7 +28,7 @@ function NetValue({ position }: { position: UserPositionOut }) {
     <span>
       {fmtUsd(position.deposit_amount_usd)}
       {ws && (
-        <span className={`ml-1.5 text-[0.55rem] uppercase tracking-[0.05em] ${ws === "redeemable" ? "text-neon-primary" : "text-foreground-muted"}`}>
+        <span className={`ml-1.5 text-[0.55rem] uppercase tracking-[0.05em] ${ws === "redeemable" ? "text-neon" : "text-foreground-muted"}`}>
           {ws === "redeemable" ? "Ready" : "Frozen"}
         </span>
       )}
@@ -96,9 +106,14 @@ function PositionCard({ position, showProtocol, fields, onClick }: { position: U
   return (
     <div className={`bg-surface-low rounded-sm p-4 space-y-3${onClick ? " cursor-pointer" : ""}`} onClick={onClick}>
       <div className="flex items-center justify-between">
-        <span className="font-display text-sm tracking-[-0.02em]">{position.token_symbol ?? "\u2014"}</span>
+        <span className="font-display text-sm tracking-[-0.02em]">{position.token_symbol ?? "\u2014"}{position.underlying_tokens?.[0]?.type ? <span className="ml-1 text-[0.55rem] text-foreground-muted/50 font-sans uppercase">{position.underlying_tokens[0].type.replace(/_/g, " ")}</span> : null}</span>
         {showProtocol && <ProtocolChip slug={position.protocol_slug} />}
       </div>
+      {position.lock_period_days > 0 && (
+        <span className="inline-block bg-surface-high text-foreground-muted rounded-sm px-2 py-0.5 text-[0.55rem] uppercase tracking-[0.05em]">
+          {position.lock_period_days}d lock
+        </span>
+      )}
       {showProtocol && (
         <span className="inline-block bg-surface-high text-foreground-muted rounded-sm px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.05em]">
           {fmtProductType(position.product_type)}
@@ -133,7 +148,7 @@ export function getColumnsForType(type: string): ColumnDef[] {
     case "lending":
       return [
         { header: "Market", align: "left", render: (p) => <span className="text-foreground">{truncateId(p.external_id)}</span> },
-        { header: "Token", align: "left", render: (p) => <span className="text-foreground-muted">{p.token_symbol ?? "\u2014"}</span> },
+        { header: "Token", align: "left", render: (p) => <TokenWithType p={p} /> },
         { header: "Net Value", align: "right", render: (p) => <NetValue position={p} /> },
         apyCurrent,
         apyRealized,
@@ -144,7 +159,7 @@ export function getColumnsForType(type: string): ColumnDef[] {
     case "multiply":
       return [
         { header: "Strategy", align: "left", render: (p) => <span className="text-foreground">{truncateId(p.external_id)}</span> },
-        { header: "Token", align: "left", render: (p) => <span className="text-foreground-muted">{p.token_symbol ?? "\u2014"}</span> },
+        { header: "Token", align: "left", render: (p) => <TokenWithType p={p} /> },
         { header: "Net Value", align: "right", render: (p) => <NetValue position={p} /> },
         apyCurrent,
         apyRealized,
@@ -156,7 +171,7 @@ export function getColumnsForType(type: string): ColumnDef[] {
     case "earn_vault":
       return [
         { header: "Vault", align: "left", render: (p) => <span className="text-foreground">{truncateId(p.external_id)}</span> },
-        { header: "Token", align: "left", render: (p) => <span className="text-foreground-muted">{p.token_symbol ?? "\u2014"}</span> },
+        { header: "Token", align: "left", render: (p) => <TokenWithType p={p} /> },
         { header: "Net Value", align: "right", render: (p) => <NetValue position={p} /> },
         apyCurrent,
         apyRealized,
@@ -167,18 +182,19 @@ export function getColumnsForType(type: string): ColumnDef[] {
     case "insurance_fund":
       return [
         { header: "Fund", align: "left", render: (p) => <span className="text-foreground">{truncateId(p.external_id)}</span> },
-        { header: "Token", align: "left", render: (p) => <span className="text-foreground-muted">{p.token_symbol ?? "\u2014"}</span> },
+        { header: "Token", align: "left", render: (p) => <TokenWithType p={p} /> },
         { header: "Net Value", align: "right", render: (p) => <NetValue position={p} /> },
         apyCurrent,
         apyRealized,
         { header: "PnL", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtUsd(p.pnl_usd)}</span> },
+        { header: "Lock", align: "right", render: (p) => <span className="text-foreground-muted">{p.lock_period_days > 0 ? `${p.lock_period_days}d` : "\u2014"}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
         detailsAction,
       ];
     case "earn":
       return [
         { header: "Vault", align: "left", render: (p) => <span className="text-foreground">{truncateId(p.external_id)}</span> },
-        { header: "Token", align: "left", render: (p) => <span className="text-foreground-muted">{p.token_symbol ?? "\u2014"}</span> },
+        { header: "Token", align: "left", render: (p) => <TokenWithType p={p} /> },
         { header: "Net Value", align: "right", render: (p) => <NetValue position={p} /> },
         apyCurrent,
         apyRealized,
@@ -190,11 +206,12 @@ export function getColumnsForType(type: string): ColumnDef[] {
       return [
         { header: "Protocol", align: "left", render: (p) => <ProtocolChip slug={p.protocol_slug} /> },
         { header: "Type", align: "left", render: (p) => <span className="text-foreground-muted">{fmtProductType(p.product_type)}</span> },
-        { header: "Token", align: "left", render: (p) => <span className="text-foreground">{p.token_symbol ?? "\u2014"}</span> },
+        { header: "Token", align: "left", render: (p) => <TokenWithType p={p} color="text-foreground" /> },
         { header: "Net Value", align: "right", render: (p) => <NetValue position={p} /> },
         { header: "PnL", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtUsd(p.pnl_usd)}</span> },
         apyCurrent,
         apyRealized,
+        { header: "Lock", align: "right", render: (p) => <span className="text-foreground-muted">{p.lock_period_days > 0 ? `${p.lock_period_days}d` : "\u2014"}</span> },
         detailsAction,
       ];
   }

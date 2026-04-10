@@ -1,4 +1,5 @@
 import type { Address, Instruction } from "@solana/kit";
+import { getWithRetry } from "../../shared/http.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -19,12 +20,10 @@ const LUT_FINDER_API = "https://api.kamino.finance/luts/find-minimal";
 
 let _cdnResources: any = null;
 
-/** Fetch CDN resources (cached). */
+/** Fetch CDN resources (cached in-process). */
 async function getCdnResources(): Promise<any> {
   if (_cdnResources) return _cdnResources;
-  const res = await fetch(`${CDN_ENDPOINT}/resources.json`);
-  if (!res.ok) throw new Error(`CDN resources fetch failed: ${res.status}`);
-  const data = await res.json();
+  const data = (await getWithRetry(`${CDN_ENDPOINT}/resources.json`)) as any;
   _cdnResources = data["mainnet-beta"];
   return _cdnResources;
 }
@@ -41,7 +40,9 @@ export async function fetchCdnLuts(
     return collPairs[debtMint] || [];
   }
   const key = `${collMint}-${debtMint}`;
-  return resources.repayWithCollLUTs?.[key] || [];
+  const val = resources.repayWithCollLUTs?.[key];
+  // CDN stores repayWithCollLUTs as single string, not array — normalize
+  return val ? (Array.isArray(val) ? val : [val]) : [];
 }
 
 /**

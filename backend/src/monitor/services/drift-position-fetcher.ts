@@ -8,7 +8,8 @@
  *   - Strategy Vaults: daily snapshots → totalAccountValue vs netDeposits
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
+import { userPositions } from "../db/schema.js";
 import { getOrNull } from "../../shared/http.js";
 import { logger } from "../../shared/logger.js";
 import { safeFloat, parseTimestamp, cached } from "../../shared/utils.js";
@@ -25,6 +26,7 @@ import {
   storePositionRows,
   storeEventsBatch,
   loadOpportunityMap,
+  batchEarliestDeposits,
   type PositionDict,
   type EventDict,
 } from "./utils.js";
@@ -140,7 +142,10 @@ async function fetchIfPositions(
   const events = await fetchIfEvents(wallet);
   if (events.length === 0) return { positions: [], events: [] };
 
-  const ifApys = await getIfPoolApys();
+  const [ifApys, earliestDeposits] = await Promise.all([
+    getIfPoolApys(),
+    batchEarliestDeposits(db, wallet),
+  ]);
 
   // Group by marketIndex
   const byMarket: Record<number, Record<string, unknown>[]> = {};
@@ -230,6 +235,12 @@ async function fetchIfPositions(
       );
     }
 
+    // Fallback for initialDepositUsd: earliest stored snapshot
+    if (initialDepositUsd === null) {
+      const earliest = earliestDeposits[externalId];
+      if (earliest) initialDepositUsd = earliest.deposit_amount_usd;
+    }
+
     // Fallback for depositAmountUsd: event-level TVL approximation
     if (depositAmountUsd === null) {
       const totalSharesEv = safeFloat(latest.totalIfSharesAfter);
@@ -279,8 +290,7 @@ async function fetchIfPositions(
         ? (pnlUsd / initialDepositUsd) * 100
         : null;
 
-    let apy: number | null = ifApys[idx] ?? null;
-    if (apy === null && entry) apy = entry.apy_current;
+    let apy: number | null = entry?.apy_current ?? ifApys[idx] ?? null;
 
     positions.push(
       buildPositionDict({
@@ -325,6 +335,7 @@ async function fetchVaultPositions(
   now: Date,
   oppMap: Record<string, OpportunityMapEntry>,
 ): Promise<PositionDict[]> {
+  const earliestDeposits = await batchEarliestDeposits(db, wallet);
   const STALE_DAYS = 7;
   const byVault: Record<string, Record<string, unknown>[]> = {};
   const seenKeys = new Set<string>();
@@ -416,10 +427,16 @@ async function fetchVaultPositions(
       continue;
     }
 
-    const netDeposits = safeFloat(latest.netDeposits) ?? 0;
+    let netDeposits = safeFloat(latest.netDeposits) ?? 0;
     const marketIndex = latest.marketIndex;
 
     const externalId = `drift-vault-${vaultPubkey}`;
+
+    // Fallback for netDeposits: earliest stored snapshot
+    if (netDeposits <= 0) {
+      const earliest = earliestDeposits[externalId];
+      if (earliest) netDeposits = earliest.deposit_amount_usd;
+    }
     const entry =
       oppMap[vaultPubkey] ?? oppMap[externalId] ?? null;
     let tokenSymbol = entry?.first_token ?? null;
@@ -565,7 +582,46 @@ export async function snapshotAllWallets(
         oppMap,
       );
 
-      const allPositions = [...ifPositions, ...vaultPositions];
+      // Detect closed positions: DB says open but not in fresh fetch
+      const freshExternalIds = new Set([...ifPositions, ...vaultPositions].map((p) => p.external_id));
+      const dbOpenDrift = await database
+        .select({ id: userPositions.id, external_id: userPositions.external_id, product_type: userPositions.product_type })
+        .from(userPositions)
+        .where(
+          and(
+            eq(userPositions.wallet_address, wallet.wallet_address),
+            eq(userPositions.protocol_slug, "drift"),
+            eq(userPositions.is_closed, false),
+          ),
+        );
+
+      const closedPositions: typeof ifPositions = [];
+      for (const dbPos of dbOpenDrift) {
+        if (!freshExternalIds.has(dbPos.external_id)) {
+          closedPositions.push(
+            buildPositionDict({
+              wallet_address: wallet.wallet_address,
+              protocol_slug: "drift",
+              product_type: dbPos.product_type,
+              external_id: dbPos.external_id,
+              snapshot_at: now,
+              deposit_amount: 0,
+              deposit_amount_usd: 0,
+              is_closed: true,
+              closed_at: now,
+              close_value_usd: 0,
+            }),
+          );
+        }
+      }
+      if (closedPositions.length > 0) {
+        logger.info(
+          { wallet: wallet.wallet_address.slice(0, 8), closed: closedPositions.length },
+          "Detected closed Drift positions",
+        );
+      }
+
+      const allPositions = [...ifPositions, ...vaultPositions, ...closedPositions];
       totalSnapshots += await storePositionRows(database, allPositions, now);
       await storeEventsBatch(database, ifEvents);
 

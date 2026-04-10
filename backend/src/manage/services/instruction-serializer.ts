@@ -12,11 +12,13 @@ import type { BuildTxResult } from "../protocols/types.js";
 export function serializeInstruction(ix: Instruction): SerializableInstruction {
   return {
     programAddress: ix.programAddress as string,
-    accounts: (ix.accounts as any[]).map((acc) => ({
+    accounts: ((ix.accounts as any[]) ?? []).map((acc) => ({
       address: acc.address as string,
       role: acc.role as number,
     })),
-    data: Buffer.from(ix.data as Uint8Array).toString("base64"),
+    data: Buffer.from((ix.data as Uint8Array) ?? new Uint8Array()).toString(
+      "base64",
+    ),
   };
 }
 

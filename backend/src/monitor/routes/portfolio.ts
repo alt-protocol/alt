@@ -13,94 +13,13 @@ import { validateWallet, storePositionRows, storeEventsBatch } from "../services
 import { fetchWalletPositions as fetchKaminoPositions } from "../services/kamino-position-fetcher.js";
 import { fetchWalletPositions as fetchDriftPositions } from "../services/drift-position-fetcher.js";
 import { fetchWalletPositions as fetchJupiterPositions } from "../services/jupiter-position-fetcher.js";
-import { discoverService } from "../../discover/service.js";
+import { numOrNull } from "../../shared/utils.js";
 import {
   PositionsQuery,
   PositionHistoryQuery,
   EventsQuery,
 } from "./schemas.js";
-
-function numOrNull(val: string | null | undefined): number | null {
-  if (val === null || val === undefined) return null;
-  const n = Number(val);
-  return Number.isFinite(n) ? n : null;
-}
-
-function formatPosition(p: typeof userPositions.$inferSelect) {
-  return {
-    id: p.id,
-    wallet_address: p.wallet_address,
-    protocol_slug: p.protocol_slug,
-    product_type: p.product_type,
-    external_id: p.external_id,
-    opportunity_id: p.opportunity_id,
-    deposit_amount: numOrNull(p.deposit_amount),
-    deposit_amount_usd: numOrNull(p.deposit_amount_usd),
-    pnl_usd: numOrNull(p.pnl_usd),
-    pnl_pct: numOrNull(p.pnl_pct),
-    initial_deposit_usd: numOrNull(p.initial_deposit_usd),
-    opened_at: p.opened_at,
-    held_days: numOrNull(p.held_days),
-    apy: numOrNull(p.apy),
-    apy_realized: numOrNull(p.apy_realized),
-    is_closed: p.is_closed,
-    closed_at: p.closed_at,
-    close_value_usd: numOrNull(p.close_value_usd),
-    token_symbol: p.token_symbol,
-    underlying_tokens: p.underlying_tokens ?? null,
-    extra_data: p.extra_data,
-    snapshot_at: p.snapshot_at,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Latest positions helper (subquery: max snapshot_at per protocol)
-// ---------------------------------------------------------------------------
-
-async function latestPositions(
-  walletAddress: string,
-  protocol?: string,
-  productType?: string,
-) {
-  try {
-    const latestSub = db
-      .select({
-        protocol_slug: userPositions.protocol_slug,
-        latest_at: sql<Date>`MAX(${userPositions.snapshot_at})`.as("latest_at"),
-      })
-      .from(userPositions)
-      .where(eq(userPositions.wallet_address, walletAddress))
-      .groupBy(userPositions.protocol_slug)
-      .as("latest_sub");
-
-    let query = db
-      .select({ pos: userPositions })
-      .from(userPositions)
-      .innerJoin(
-        latestSub,
-        and(
-          eq(userPositions.protocol_slug, latestSub.protocol_slug),
-          eq(userPositions.snapshot_at, latestSub.latest_at),
-          eq(userPositions.wallet_address, walletAddress),
-        ),
-      );
-
-    const allConditions = [];
-    if (protocol)
-      allConditions.push(eq(userPositions.protocol_slug, protocol));
-    if (productType)
-      allConditions.push(eq(userPositions.product_type, productType));
-    if (allConditions.length > 0) {
-      query = query.where(and(...allConditions)) as typeof query;
-    }
-
-    const result = await query;
-    return result.map((r) => r.pos);
-  } catch (err) {
-    logger.error({ err, wallet: walletAddress.slice(0, 8) }, "latestPositions query failed");
-    throw err;
-  }
-}
+import { monitorService } from "../service.js";
 
 // ---------------------------------------------------------------------------
 // Background fetch (fire-and-forget)
@@ -333,16 +252,7 @@ export async function portfolioRoutes(app: FastifyInstance) {
         .limit(1);
 
       if (hasPositions.length > 0) {
-        const positions = await latestPositions(wallet);
-        const positionDicts = positions.map(formatPosition);
-        const totalValue = positions.reduce(
-          (s, p) => s + (numOrNull(p.deposit_amount_usd) ?? 0),
-          0,
-        );
-        const totalPnl = positions.reduce(
-          (s, p) => s + (numOrNull(p.pnl_usd) ?? 0),
-          0,
-        );
+        const result = await monitorService.getPortfolioPositions(wallet);
 
         // Update status and kick off background refresh
         await db
@@ -354,13 +264,7 @@ export async function portfolioRoutes(app: FastifyInstance) {
         void backgroundFetchAndStore(wallet);
 
         return {
-          wallet,
-          positions: positionDicts,
-          summary: {
-            total_value_usd: totalValue,
-            total_pnl_usd: totalPnl,
-            position_count: positionDicts.length,
-          },
+          ...result,
           fetch_status: "fetching",
         };
       }
@@ -421,29 +325,12 @@ export async function portfolioRoutes(app: FastifyInstance) {
       validateWallet(wallet);
       const q = PositionsQuery.parse(request.query);
 
-      try {
-        const positions = await latestPositions(
-          wallet,
-          q.protocol,
-          q.product_type,
-        );
-
-        // Enrich positions missing opportunity_id (stale rows from before link was established)
-        const needsEnrichment = positions.some((p) => p.opportunity_id == null);
-        if (needsEnrichment) {
-          const oppMap = await discoverService.getOpportunityMap();
-          for (const p of positions) {
-            if (p.opportunity_id != null) continue;
-            const entry = oppMap[p.external_id] ?? null;
-            if (entry) (p as any).opportunity_id = entry.id;
-          }
-        }
-
-        return positions.map(formatPosition);
-      } catch (err) {
-        logger.error({ err, wallet: wallet.slice(0, 8) }, "Positions query failed");
-        throw err;
-      }
+      const result = await monitorService.getPortfolioPositions(
+        wallet,
+        q.protocol,
+        q.product_type,
+      );
+      return result.positions;
     },
   });
 

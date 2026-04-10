@@ -51,6 +51,13 @@ export default function WalletButton({ variant = "header" }: WalletButtonProps) 
   const [open, setOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // Jupiter widget connect-wallet passthrough
+  useEffect(() => {
+    const handler = () => setOpen(true);
+    document.addEventListener("akashi:connect-wallet", handler);
+    return () => document.removeEventListener("akashi:connect-wallet", handler);
+  }, []);
+
   // Close on ESC
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === "Escape") setOpen(false);

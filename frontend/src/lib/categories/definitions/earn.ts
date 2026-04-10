@@ -16,6 +16,12 @@ export const earnCategory: CategoryDefinition = {
   detailFields: (y) => {
     const fields = [];
     if (y.tokens.length > 0) fields.push({ label: "Tokens", value: y.tokens.join(", ") });
+    if (y.underlying_tokens?.length) {
+      fields.push({
+        label: "Underlying Exposure",
+        value: y.underlying_tokens.map((t) => `${t.symbol} (${t.type.replace(/_/g, " ")})`).join(" / "),
+      });
+    }
     if (y.min_deposit != null) fields.push({ label: "Min Deposit", value: fmtTvl(y.min_deposit) });
     if (y.lock_period_days > 0) fields.push({ label: "Lock Period", value: `${y.lock_period_days}d` });
     return fields;

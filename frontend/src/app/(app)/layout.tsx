@@ -10,6 +10,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   const navLinks = [
     { href: "/dashboard", label: "Discover" },
+    { href: "/swap", label: "Swap" },
     { href: "/portfolio", label: "Portfolio" },
   ];
 

@@ -52,6 +52,7 @@ export function fmtCategory(s: string): string {
   return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+
 export function fmtProductType(t: string): string {
   const map: Record<string, string> = {
     earn_vault: "Earn Vault",
@@ -87,4 +88,57 @@ export function pnlColor(n: number | null | undefined): string {
   if (n! > 0) return "text-neon";
   if (n! < 0) return "text-red-400";
   return "text-foreground-muted";
+}
+
+export function fmtPegAdherence(n: number | null | undefined): string {
+  if (bad(n)) return "\u2014";
+  return `${n!.toFixed(1)}%`;
+}
+
+export function fmtDeviation(n: number | null | undefined): string {
+  if (bad(n)) return "\u2014";
+  return `${n!.toFixed(3)}%`;
+}
+
+export function fmtVolatility(n: number | null | undefined): string {
+  if (bad(n)) return "\u2014";
+  return `${n!.toFixed(4)}%`;
+}
+
+export function fmtDepthUsd(n: number | null | undefined): string {
+  if (bad(n)) return "\u2014";
+  if (n! >= 1_000_000) return `$${(n! / 1_000_000).toFixed(1)}M`;
+  if (n! >= 1_000) return `$${(n! / 1_000).toFixed(0)}K`;
+  return `$${n!.toFixed(0)}`;
+}
+
+export function pegColor(adherence: number | null | undefined): string {
+  if (bad(adherence)) return "text-foreground-muted";
+  if (adherence! >= 99.5) return "text-neon";
+  if (adherence! >= 99.0) return "text-foreground";
+  if (adherence! >= 98.0) return "text-yellow-400";
+  return "text-red-400";
+}
+
+export function pegColorByDeviation(maxDev: number | null | undefined): string {
+  if (bad(maxDev)) return "text-foreground-muted";
+  if (maxDev! < 0.1) return "text-neon";
+  if (maxDev! < 0.5) return "text-foreground";
+  if (maxDev! < 1.0) return "text-yellow-400";
+  return "text-red-400";
+}
+
+/** Color by price range spread width — works for all token types */
+export function rangeSpreadColor(min: number | null | undefined, max: number | null | undefined): string {
+  if (bad(min) || bad(max) || min! <= 0) return "text-foreground-muted";
+  const spread = (max! - min!) / min! * 100;
+  if (spread < 0.05) return "text-neon";
+  if (spread < 0.2) return "text-foreground";
+  if (spread < 1.0) return "text-yellow-400";
+  return "text-red-400";
+}
+
+export function fmtPriceRange(min: number | null | undefined, max: number | null | undefined): string {
+  if (bad(min) || bad(max)) return "\u2014";
+  return `$${min!.toFixed(4)}\u2013$${max!.toFixed(4)}`;
 }

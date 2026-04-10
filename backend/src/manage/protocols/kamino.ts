@@ -10,11 +10,11 @@ import type {
 } from "./types.js";
 import { getRpc } from "../../shared/rpc.js";
 import { logger } from "../../shared/logger.js";
+import { cachedAsync } from "../../shared/utils.js";
 import {
-  getKswapSdkInstance,
-  createKswapQuoter,
-  createKswapSwapper,
-} from "../services/kswap.js";
+  createJupiterMultiplyQuoter,
+  createJupiterMultiplySwapper,
+} from "../services/jupiter-multiply-swap.js";
 import {
   selectBestRoute,
   assembleMultiplyLuts,
@@ -371,10 +371,10 @@ async function prepareMultiply(params: BuildTxParams, slippageBps: number) {
   const collTokenMint = addr(collMint);
   const debtTokenMint = addr(debtMint);
 
-  const market = await KaminoMarket.load(
-    rpc,
-    addr(marketAddress),
-    DEFAULT_RECENT_SLOT_DURATION_MS,
+  const market = await cachedAsync(
+    `kamino-market:${marketAddress}`,
+    30_000,
+    () => KaminoMarket.load(rpc, addr(marketAddress), DEFAULT_RECENT_SLOT_DURATION_MS),
   );
   if (!market)
     throw Object.assign(new Error("Failed to load Kamino market"), {
@@ -385,18 +385,15 @@ async function prepareMultiply(params: BuildTxParams, slippageBps: number) {
   const debtReserve = market.getReserveByMint(debtTokenMint);
   if (!collReserve || !debtReserve) throw new Error("Failed to load reserves");
 
-  // KSwap quoter/swapper — required for klend-sdk flash loan compatibility
-  const kswapSdk = await getKswapSdkInstance();
-  const quoter = await createKswapQuoter(
-    kswapSdk,
-    params.walletAddress as any,
+  // Jupiter quoter/swapper for klend-sdk flash loan swap routing
+  const quoter = createJupiterMultiplyQuoter(
+    params.walletAddress,
     slippageBps,
     debtReserve,
     collReserve,
   );
-  const swapper = await createKswapSwapper(
-    kswapSdk,
-    params.walletAddress as any,
+  const swapper = createJupiterMultiplySwapper(
+    params.walletAddress,
     slippageBps,
     debtReserve,
     collReserve,
@@ -481,134 +478,168 @@ async function finalizeMultiplyResult(
 async function buildMultiplyOpen(
   params: BuildTxParams,
 ): Promise<BuildTxResultWithLookups | BuildTxResultWithSetup> {
-  const userSlippage = (params.extraData?.slippageBps as number) ?? 30;
-  const ctx = await prepareMultiply(params, userSlippage);
-  const {
-    sdk,
-    rpc,
-    market,
-    collTokenMint,
-    debtTokenMint,
-    collMint,
-    debtMint,
-    marketLut,
-    quoter,
-    swapper,
-    currentSlot,
-    computeIxs,
-    Decimal,
-  } = ctx;
-  const {
-    MultiplyObligation,
-    ObligationTypeTag,
-    PROGRAM_ID,
-    getDepositWithLeverageIxs,
-    getUserLutAddressAndSetupIxs,
-    getScopeRefreshIxForObligationAndReserves,
-  } = sdk;
-
-  const leverage = params.extraData!.leverage as number;
-  if (!leverage) throw new Error("Missing leverage for multiply open");
-
-  // Scope oracle refresh
-  const { Scope } = await loadScope();
-  const scope = new Scope("mainnet-beta", rpc);
-  const scopeConfig = {
-    scope,
-    scopeConfigurations: await scope.getAllConfigurations(),
-  };
-
-  // Load existing obligation (null for first open)
-  const obligationAddress = await new MultiplyObligation(
-    collTokenMint,
-    debtTokenMint,
-    PROGRAM_ID,
-  ).toPda(market.getAddress(), params.walletAddress as any);
-  let obligation: any = null;
   try {
-    obligation = await market.getObligationByAddress(obligationAddress);
-  } catch {
-    /* first open — no obligation yet */
-  }
+    const userSlippage = (params.extraData?.slippageBps as number) ?? 30;
+    const ctx = await prepareMultiply(params, userSlippage);
+    const {
+      sdk,
+      rpc,
+      market,
+      collTokenMint,
+      debtTokenMint,
+      collMint,
+      debtMint,
+      marketLut,
+      quoter,
+      swapper,
+      currentSlot,
+      computeIxs,
+      Decimal,
+    } = ctx;
+    const {
+      MultiplyObligation,
+      ObligationTypeTag,
+      PROGRAM_ID,
+      getDepositWithLeverageIxs,
+      getUserLutAddressAndSetupIxs,
+      getScopeRefreshIxForObligationAndReserves,
+    } = sdk;
 
-  const scopeRefreshIx = obligation
-    ? await getScopeRefreshIxForObligationAndReserves(
-        market,
-        ctx.collReserve,
-        ctx.debtReserve,
-        obligation,
-        scopeConfig,
-      )
-    : [];
+    const leverage = params.extraData!.leverage as number;
+    if (!leverage) {
+      throw Object.assign(new Error("Missing leverage for multiply open"), {
+        statusCode: 400,
+      });
+    }
 
-  // User LUT + setup txs
-  const multiplyMints = [{ coll: collTokenMint, debt: debtTokenMint }];
-  const [userLut, setupTxsIxs] = await getUserLutAddressAndSetupIxs(
-    market,
-    addr(params.walletAddress) as any,
-    none(),
-    true,
-    multiplyMints,
-    [],
-  );
-
-  // Price: fetch both USD prices via Jupiter and compute debt-to-coll ratio
-  const priceRes = await fetch(
-    `https://lite-api.jup.ag/price/v3?ids=${debtMint},${collMint}`,
-  );
-  if (!priceRes.ok)
-    throw new Error(`Jupiter price fetch failed: ${priceRes.status}`);
-  const priceData = await priceRes.json();
-  const debtPriceUsd = Number(priceData?.[debtMint]?.usdPrice || 0);
-  const collPriceUsd = Number(priceData?.[collMint]?.usdPrice || 0);
-
-  if (!debtPriceUsd || !collPriceUsd) {
-    throw new Error(
-      `Price unavailable — debt: $${debtPriceUsd}, coll: $${collPriceUsd}`,
+    // Check borrow capacity before building (uses on-chain data from loaded market)
+    const maxBorrow = ctx.debtReserve.getMaxBorrowAmountWithCollReserve(
+      market,
+      ctx.collReserve,
     );
+    if (maxBorrow.lessThanOrEqualTo(0)) {
+      const debtSymbol =
+        (params.extraData?.debt_symbol as string) ?? "debt token";
+      throw Object.assign(
+        new Error(
+          `No ${debtSymbol} available to borrow on this market`,
+        ),
+        { statusCode: 400 },
+      );
+    }
+
+    // Scope oracle refresh
+    const { Scope } = await loadScope();
+    const scope = new Scope("mainnet-beta", rpc);
+    const scopeConfig = {
+      scope,
+      scopeConfigurations: await scope.getAllConfigurations(),
+    };
+
+    // Load existing obligation (null for first open)
+    const obligationAddress = await new MultiplyObligation(
+      collTokenMint,
+      debtTokenMint,
+      PROGRAM_ID,
+    ).toPda(market.getAddress(), params.walletAddress as any);
+    let obligation: any = null;
+    try {
+      obligation = await market.getObligationByAddress(obligationAddress);
+    } catch {
+      /* first open — no obligation yet */
+    }
+
+    const scopeRefreshIx = obligation
+      ? await getScopeRefreshIxForObligationAndReserves(
+          market,
+          ctx.collReserve,
+          ctx.debtReserve,
+          obligation,
+          scopeConfig,
+        )
+      : [];
+
+    // User LUT + setup txs
+    const multiplyMints = [{ coll: collTokenMint, debt: debtTokenMint }];
+    const [userLut, setupTxsIxs] = await getUserLutAddressAndSetupIxs(
+      market,
+      walletSigner(params.walletAddress),
+      none(),
+      true,
+      multiplyMints,
+      [],
+    );
+
+    // Use on-chain oracle prices from loaded reserves (no extra HTTP call)
+    const debtPrice = ctx.debtReserve.getOracleMarketPrice();
+    const collPrice = ctx.collReserve.getOracleMarketPrice();
+    if (!debtPrice || !collPrice || collPrice.isZero()) {
+      throw Object.assign(
+        new Error("Oracle price unavailable for debt or collateral reserve"),
+        { statusCode: 400 },
+      );
+    }
+    const priceDebtToColl = debtPrice.div(collPrice);
+
+    logger.info(
+      {
+        wallet: params.walletAddress.slice(0, 8),
+        leverage,
+        slippage: userSlippage,
+        collMint: collMint.slice(0, 8),
+        debtMint: debtMint.slice(0, 8),
+      },
+      "Building multiply open",
+    );
+
+    const routes = await getDepositWithLeverageIxs({
+      owner: walletSigner(params.walletAddress),
+      kaminoMarket: market,
+      debtTokenMint,
+      collTokenMint,
+      depositAmount: new Decimal(params.amount),
+      priceDebtToColl,
+      slippagePct: new Decimal(userSlippage / 100),
+      obligation,
+      referrer: none(),
+      currentSlot,
+      targetLeverage: new Decimal(leverage),
+      selectedTokenMint:
+        params.extraData?.deposit_token === "debt" ? debtTokenMint : collTokenMint,
+      obligationTypeTagOverride: ObligationTypeTag.Multiply,
+      scopeRefreshIx,
+      budgetAndPriorityFeeIxs: computeIxs,
+      quoteBufferBps: new Decimal(100),
+      quoter,
+      swapper,
+      useV2Ixs: true,
+    });
+
+    // Filter to non-empty setup instruction sets
+    const nonEmptySetups = (setupTxsIxs as any[][])
+      .filter((ixs: any[]) => ixs.length > 0)
+      .map((ixs: any[]) => ixs as unknown as Instruction[]);
+
+    return finalizeMultiplyResult(routes, {
+      userLut,
+      collMint,
+      debtMint,
+      marketLut,
+      isMultiply: true,
+      setupInstructionSets:
+        nonEmptySetups.length > 0 ? nonEmptySetups : undefined,
+    });
+  } catch (err: unknown) {
+    if (err instanceof Error && "statusCode" in err) throw err;
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    logger.error(
+      { err, wallet: params.walletAddress.slice(0, 8) },
+      `Multiply open failed: ${msg}`,
+    );
+    throw Object.assign(new Error(`Multiply open failed: ${msg}`), {
+      statusCode: 502,
+    });
   }
-  const priceDebtToColl = new Decimal(debtPriceUsd / collPriceUsd);
-
-  // Validate inputs before SDK call
-  if (priceDebtToColl.isZero() || priceDebtToColl.isNaN()) {
-    throw new Error("Invalid price ratio — cannot calculate leverage");
-  }
-
-  const routes = await getDepositWithLeverageIxs({
-    owner: addr(params.walletAddress) as any,
-    kaminoMarket: market,
-    debtTokenMint,
-    collTokenMint,
-    depositAmount: new Decimal(params.amount),
-    priceDebtToColl,
-    slippagePct: new Decimal(userSlippage / 100),
-    obligation,
-    referrer: none(),
-    currentSlot,
-    targetLeverage: new Decimal(leverage),
-    selectedTokenMint: collTokenMint,
-    obligationTypeTagOverride: ObligationTypeTag.Multiply,
-    scopeRefreshIx,
-    budgetAndPriorityFeeIxs: computeIxs,
-    quoteBufferBps: new Decimal(100),
-    quoter,
-    swapper,
-    useV2Ixs: true,
-  });
-
-  // Filter to non-empty setup instruction sets
-  const nonEmptySetups = (setupTxsIxs as any[][])
-    .filter((ixs: any[]) => ixs.length > 0)
-    .map((ixs: any[]) => ixs as unknown as Instruction[]);
-
-  return finalizeMultiplyResult(routes, {
-    userLut,
-    collMint,
-    debtMint,
-    marketLut,
-    isMultiply: true,
-    setupInstructionSets: nonEmptySetups.length > 0 ? nonEmptySetups : undefined,
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -618,74 +649,100 @@ async function buildMultiplyOpen(
 async function buildMultiplyClose(
   params: BuildTxParams,
 ): Promise<BuildTxResultWithLookups> {
-  const userSlippage = (params.extraData?.slippageBps as number) ?? 50;
-  const ctx = await prepareMultiply(params, userSlippage);
-  const {
-    sdk,
-    market,
-    collTokenMint,
-    debtTokenMint,
-    collMint,
-    debtMint,
-    marketLut,
-    quoter,
-    swapper,
-    currentSlot,
-    computeIxs,
-    Decimal,
-  } = ctx;
-  const {
-    VanillaObligation,
-    PROGRAM_ID,
-    getRepayWithCollIxs,
-    getUserLutAddressAndSetupIxs,
-  } = sdk;
+  try {
+    const userSlippage = (params.extraData?.slippageBps as number) ?? 50;
+    const ctx = await prepareMultiply(params, userSlippage);
+    const {
+      sdk,
+      market,
+      collTokenMint,
+      debtTokenMint,
+      collMint,
+      debtMint,
+      marketLut,
+      quoter,
+      swapper,
+      currentSlot,
+      computeIxs,
+      Decimal,
+    } = ctx;
+    const {
+      MultiplyObligation,
+      PROGRAM_ID,
+      getRepayWithCollIxs,
+      getUserLutAddressAndSetupIxs,
+    } = sdk;
 
-  const isClosingPosition = params.extraData!.isClosingPosition === true;
+    const isClosingPosition = params.extraData!.isClosingPosition === true;
 
-  // Load obligation (required for withdraw/close)
-  const obligation = await market.getObligationByWallet(
-    params.walletAddress as any,
-    new VanillaObligation(PROGRAM_ID),
-  );
-  if (!obligation) throw new Error("No active multiply position found");
+    // Load obligation — must use MultiplyObligation (not VanillaObligation)
+    // to match the PDA derived at position open time
+    const multiplyOblType = new MultiplyObligation(
+      collTokenMint,
+      debtTokenMint,
+      PROGRAM_ID,
+    );
+    const obligation = await market.getObligationByWallet(
+      params.walletAddress as any,
+      multiplyOblType,
+    );
+    if (!obligation) {
+      throw Object.assign(
+        new Error("No active multiply position found"),
+        { statusCode: 400 },
+      );
+    }
 
-  // User LUT (setup handled separately)
-  const [userLut] = await getUserLutAddressAndSetupIxs(
-    market,
-    addr(params.walletAddress) as any,
-    none(),
-    false,
-  );
+    // User LUT (setup handled separately)
+    const [userLut] = await getUserLutAddressAndSetupIxs(
+      market,
+      walletSigner(params.walletAddress),
+      none(),
+      false,
+    );
 
-  const repayAmount = isClosingPosition
-    ? new Decimal(0)
-    : new Decimal(params.amount);
+    // For full close, pass the actual borrow amount (not 0) — the SDK's
+    // swap calculator multiplies repayAmount by interest rate, so 0 → 0 swap.
+    // userTotalBorrow is in human-readable units (e.g. 0.985 PYUSD).
+    const repayAmount = isClosingPosition
+      ? new Decimal(obligation.refreshedStats.userTotalBorrow.toString())
+      : new Decimal(params.amount);
 
-  const routes = await getRepayWithCollIxs({
-    kaminoMarket: market,
-    debtTokenMint,
-    collTokenMint,
-    owner: addr(params.walletAddress) as any,
-    obligation,
-    referrer: none(),
-    currentSlot,
-    repayAmount,
-    isClosingPosition,
-    budgetAndPriorityFeeIxs: computeIxs,
-    scopeRefreshIx: [],
-    useV2Ixs: true,
-    quoter,
-    swapper,
-  });
+    const routes = await getRepayWithCollIxs({
+      kaminoMarket: market,
+      debtTokenMint,
+      collTokenMint,
+      owner: walletSigner(params.walletAddress),
+      obligation,
+      referrer: none(),
+      currentSlot,
+      repayAmount,
+      isClosingPosition,
+      budgetAndPriorityFeeIxs: computeIxs,
+      scopeRefreshIx: [],
+      useV2Ixs: true,
+      quoter,
+      swapper,
+    });
 
-  return finalizeMultiplyResult(routes, {
-    userLut,
-    collMint,
-    debtMint,
-    marketLut,
-    isMultiply: false,
-  });
+    return finalizeMultiplyResult(routes, {
+      userLut,
+      collMint,
+      debtMint,
+      marketLut,
+      isMultiply: false,
+    });
+  } catch (err: unknown) {
+    if (err instanceof Error && "statusCode" in err) throw err;
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    logger.error(
+      { err, wallet: params.walletAddress.slice(0, 8) },
+      `Multiply close failed: ${msg}`,
+    );
+    throw Object.assign(new Error(`Multiply close failed: ${msg}`), {
+      statusCode: 502,
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -749,6 +806,48 @@ async function getLendingBalance(
   }
 }
 
+async function getMultiplyBalance(
+  params: GetBalanceParams,
+): Promise<number | null> {
+  try {
+    const { KaminoMarket, MultiplyObligation, PROGRAM_ID, DEFAULT_RECENT_SLOT_DURATION_MS } =
+      await loadSdk();
+
+    const marketAddress = params.extraData?.market as string | undefined;
+    // Support both discover format (collateral_mint) and monitor format (collateral[0].mint)
+    const collMint =
+      (params.extraData?.collateral_mint as string | undefined) ??
+      (params.extraData?.collateral as any)?.[0]?.mint;
+    const debtMint =
+      (params.extraData?.debt_mint as string | undefined) ??
+      (params.extraData?.debt as any)?.[0]?.mint;
+    if (!marketAddress || !collMint || !debtMint) return null;
+
+    const market = await cachedAsync(
+      `kamino-market:${marketAddress}`,
+      30_000,
+      () => KaminoMarket.load(getRpc() as any, addr(marketAddress), DEFAULT_RECENT_SLOT_DURATION_MS),
+    );
+    if (!market) return null;
+
+    const oblType = new MultiplyObligation(
+      addr(collMint),
+      addr(debtMint),
+      PROGRAM_ID,
+    );
+    const obligation = await market.getObligationByWallet(
+      addr(params.walletAddress) as any,
+      oblType,
+    );
+    if (!obligation) return 0;
+
+    const netValue = Number(obligation.refreshedStats.netAccountValue ?? 0);
+    return netValue < 0.01 ? 0 : netValue;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Adapter export
 // ---------------------------------------------------------------------------
@@ -771,6 +870,8 @@ export const kaminoAdapter: ProtocolAdapter = {
       return getVaultBalance({ walletAddress, depositAddress, category, extraData });
     if (category === "lending")
       return getLendingBalance({ walletAddress, depositAddress, category, extraData });
+    if (category === "multiply")
+      return getMultiplyBalance({ walletAddress, depositAddress, category, extraData });
     return null;
   },
 };

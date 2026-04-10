@@ -3,10 +3,10 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { queryKeys } from "@/lib/queryKeys";
+import { api } from "@/lib/api";
 
 interface InvalidateParams {
   walletAddress: string;
-  tokenSymbol?: string;
   opportunityId?: number;
   vaultAddress?: string;
 }
@@ -15,16 +15,16 @@ export function useInvalidateAfterTransaction() {
   const queryClient = useQueryClient();
 
   const invalidateAfterTx = useCallback(
-    async ({ walletAddress, tokenSymbol, opportunityId, vaultAddress }: InvalidateParams) => {
+    async ({ walletAddress, opportunityId, vaultAddress }: InvalidateParams) => {
       // Critical refetches — await so UI has fresh blockchain data before re-enabling
       const critical: Promise<void>[] = [];
-      if (tokenSymbol) {
-        critical.push(
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.wallet.tokenBalance(walletAddress, tokenSymbol),
-          }),
-        );
-      }
+      // Invalidate all token balance queries for this wallet
+      critical.push(
+        queryClient.invalidateQueries({
+          queryKey: ["tokenBalance", walletAddress],
+          exact: false,
+        }),
+      );
       if (vaultAddress) {
         critical.push(
           queryClient.invalidateQueries({
@@ -41,6 +41,9 @@ export function useInvalidateAfterTransaction() {
         );
       }
       await Promise.allSettled(critical);
+
+      // Trigger backend to re-fetch positions from blockchain (fire-and-forget)
+      api.trackWallet(walletAddress).catch(() => {});
 
       // Non-critical — fire-and-forget (backend-dependent, slow)
       queryClient.invalidateQueries({ queryKey: queryKeys.positions.list(walletAddress) });
@@ -68,9 +71,7 @@ export function useInvalidateAfterTransaction() {
           queryClient.invalidateQueries({ queryKey: ["positionBalance", walletAddress], exact: false });
           queryClient.invalidateQueries({ queryKey: queryKeys.vault.balance(walletAddress, vaultAddress) });
         }
-        if (tokenSymbol) {
-          queryClient.invalidateQueries({ queryKey: queryKeys.wallet.tokenBalance(walletAddress, tokenSymbol) });
-        }
+        queryClient.invalidateQueries({ queryKey: ["tokenBalance", walletAddress], exact: false });
       }, 5000);
 
       // Safety net — some RPCs lag 5-10s for account state changes

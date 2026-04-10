@@ -76,7 +76,7 @@ export function usePortfolioData() {
     prevFetchStatus.current = status;
   }, [statusQuery.data?.fetch_status]);
 
-  const positions = positionsQuery.data ?? [];
+  const positions = (positionsQuery.data ?? []).filter((p) => !p.is_closed);
 
   const byType = useMemo(() => {
     const result: Record<string, UserPositionOut[]> = {};

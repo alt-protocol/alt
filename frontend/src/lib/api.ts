@@ -23,6 +23,26 @@ export interface UnderlyingToken {
   type: "stablecoin" | "yield_bearing_stable" | "lst" | "volatile";
 }
 
+export interface PegStability {
+  symbol: string;
+  price_current: number | null;
+  peg_type: "fixed" | "yield_bearing";
+  peg_target: number | null;
+  peg_adherence_7d: number | null;
+  max_deviation_7d: number | null;
+  peg_adherence_30d: number | null;
+  max_deviation_30d: number | null;
+  volatility_7d: number | null;
+  volatility_30d: number | null;
+  min_price_7d: number | null;
+  max_price_7d: number | null;
+  min_price_30d: number | null;
+  max_price_30d: number | null;
+  snapshot_count_7d: number;
+  snapshot_count_30d: number;
+  liquidity_usd: number | null;
+}
+
 export interface YieldOpportunity {
   id: number;
   protocol_id: number;
@@ -47,6 +67,7 @@ export interface YieldOpportunity {
   underlying_tokens: UnderlyingToken[] | null;
   protocol_url: string | null;
   updated_at: string | null;
+  peg_stability: PegStability | null;
 }
 
 export interface YieldOpportunityDetail extends YieldOpportunity {
@@ -98,6 +119,7 @@ export interface UserPositionOut {
   close_value_usd: number | null;
   token_symbol: string | null;
   underlying_tokens: UnderlyingToken[] | null;
+  lock_period_days: number;
   extra_data: Record<string, unknown> | null;
   snapshot_at: string;
 }

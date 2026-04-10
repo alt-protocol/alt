@@ -21,29 +21,29 @@ export default function PortfolioChart({ data }: PortfolioChartProps) {
       <LineChart data={data} margin={{ top: 8, right: 20, bottom: 8, left: 0 }}>
         <XAxis
           dataKey="date"
-          tick={{ fontSize: 10, fill: "var(--foreground-muted)" }}
+          tick={{ fontSize: 10, fill: "var(--color-foreground-muted)" }}
           axisLine={false}
           tickLine={false}
         />
         <YAxis
           tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`}
-          tick={{ fontSize: 10, fill: "var(--foreground-muted)" }}
+          tick={{ fontSize: 10, fill: "var(--color-foreground-muted)" }}
           axisLine={false}
           tickLine={false}
           width={48}
         />
         <Tooltip
-          contentStyle={{ background: "var(--surface-low)", border: "none", borderRadius: 2, fontSize: 12 }}
-          labelStyle={{ color: "var(--foreground-muted)" }}
+          contentStyle={{ background: "var(--color-surface-low)", border: "none", borderRadius: 2, fontSize: 12 }}
+          labelStyle={{ color: "var(--color-foreground-muted)" }}
           formatter={(value) => [fmtUsd(value as number), "Value"]}
         />
         <Line
           type="monotone"
           dataKey="value"
-          stroke="var(--neon-primary)"
+          stroke="var(--color-neon)"
           strokeWidth={1.5}
           dot={false}
-          activeDot={{ r: 3, fill: "var(--neon-primary)" }}
+          activeDot={{ r: 3, fill: "var(--color-neon)" }}
         />
       </LineChart>
     </ResponsiveContainer>

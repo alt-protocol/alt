@@ -14,6 +14,23 @@ export const KNOWN_TOKEN_MINTS: Record<string, string> = {
   A1KLoBrKBde8Ty9qtNQUtq3C2ortoC3u7twggz7sEto6: "USDY",
   HzwqbKZw8HxMN6bF2yFZNrht3c2iXXzpKcFu7uBEDKtr: "EURC",
   USDH1SM1ojwWUga67PGrgFWUHibbjqMvuMaDkRJTgkX: "USDH",
+  // Additional stablecoins (discovered from underlying_tokens)
+  AUSD1jCcCyPLybk1YnvPWsHQSrZ46dxwoMniN4N2UEB9: "AUSD",
+  CASHx9KJUStyftLFWGvEVf59SGeG9sh5FfcnZMVPCASH: "CASH",
+  "9zNQRsGLjNKwCUU5Gq5LR8beUCPzQMVMqKAi3SSZh54u": "FDUSD",
+  JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD: "JupUSD",
+  USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB: "USD1",
+  "2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH": "USDG",
+  "6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG": "USX",
+  // Yield-bearing stablecoins
+  "3ThdFZQKM6kRyVGLG48kaPg5TRMhYMKY1iCRa9xop1WC": "eUSX",
+  "7GzQgf6DPo6ZANjnbhe9tNCpkGTv3zqHbsDx74jyQf9": "FWDI",
+  "7GxATsNMnaC88vdwd2t3mwrFuQwwGvmYPrUQ4D6FotXk": "JUICED",
+  "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5": "ONyc",
+  "3b8X44fLF9ooXaUm3hhSgjpmVs6rZZ3pPoGnGahc3Uu7": "PRIME",
+  "59obFNBzyTBGowrkif5uK7ojS58vsuWz3ZCvg6tfZAGw": "PST",
+  AvZZF1YaZDziPY2RCK4oJrRVrbN3mTD9NL24hPeaZeUj: "syrupUSDC",
+  BTRR3sj1Bn2ZjuemgbeQ6SCtf84iXS81CS7UDTSxUCaK: "USCC",
 };
 
 // ---------------------------------------------------------------------------
@@ -64,9 +81,57 @@ export const STABLECOIN_SYMBOLS = new Set([
 // Tokens to skip when building multiply pairs (not real stablecoins, illiquid, etc.)
 export const EXCLUDED_MULTIPLY_TOKENS = new Set(["wYLDS"]);
 
+// ---------------------------------------------------------------------------
+// Stablecoin peg tracking config — mints we actively monitor via Jupiter
+// ---------------------------------------------------------------------------
+
+export interface StablecoinPegEntry {
+  mint: string;
+  symbol: string;
+  pegTarget: number | null; // null for yield-bearing (no fixed peg)
+  pegType: "fixed" | "yield_bearing";
+  decimals: number;
+}
+
+export const STABLECOIN_PEG_CONFIG: StablecoinPegEntry[] = [
+  // Regular stables — fixed $1 peg
+  { mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", symbol: "USDC",   pegTarget: 1.0,  pegType: "fixed",          decimals: 6 },
+  { mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",  symbol: "USDT",   pegTarget: 1.0,  pegType: "fixed",          decimals: 6 },
+  { mint: "USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA",   symbol: "USDS",   pegTarget: 1.0,  pegType: "fixed",          decimals: 6 },
+  { mint: "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo",  symbol: "PYUSD",  pegTarget: 1.0,  pegType: "fixed",          decimals: 6 },
+  { mint: "DEkqHyPN7GMRJ5cArtQFAWNfQT7dJQ262PuVhdxAGune",   symbol: "USDe",   pegTarget: 1.0,  pegType: "fixed",          decimals: 6 },
+  { mint: "USDH1SM1ojwWUga67PGrgFWUHibbjqMvuMaDkRJTgkX",    symbol: "USDH",   pegTarget: 1.0,  pegType: "fixed",          decimals: 6 },
+  { mint: "HzwqbKZw8HxMN6bF2yFZNrht3c2iXXzpKcFu7uBEDKtr",  symbol: "EURC",   pegTarget: 1.08, pegType: "fixed",          decimals: 6 },
+  { mint: "AUSD1jCcCyPLybk1YnvPWsHQSrZ46dxwoMniN4N2UEB9",   symbol: "AUSD",   pegTarget: 1.0,  pegType: "fixed",          decimals: 6 },
+  { mint: "CASHx9KJUStyftLFWGvEVf59SGeG9sh5FfcnZMVPCASH",   symbol: "CASH",   pegTarget: 1.0,  pegType: "fixed",          decimals: 6 },
+  { mint: "9zNQRsGLjNKwCUU5Gq5LR8beUCPzQMVMqKAi3SSZh54u",  symbol: "FDUSD",  pegTarget: 1.0,  pegType: "fixed",          decimals: 6 },
+  { mint: "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD",    symbol: "JupUSD", pegTarget: 1.0,  pegType: "fixed",          decimals: 6 },
+  { mint: "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB",     symbol: "USD1",   pegTarget: 1.0,  pegType: "fixed",          decimals: 6 },
+  { mint: "2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH",   symbol: "USDG",   pegTarget: 1.0,  pegType: "fixed",          decimals: 6 },
+  { mint: "6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG",   symbol: "USX",    pegTarget: 1.0,  pegType: "fixed",          decimals: 6 },
+  // Yield-bearing stables — no fixed peg, track volatility only
+  { mint: "Eh6XEPhSwoLv5wFApuLc5bTjQE2G4dEkVktFbEAuhuFQ",   symbol: "sUSDe",     pegTarget: null, pegType: "yield_bearing", decimals: 9 },
+  { mint: "A1KLoBrKBde8Ty9qtNQUtq3C2ortoC3u7twggz7sEto6",   symbol: "USDY",      pegTarget: null, pegType: "yield_bearing", decimals: 6 },
+  { mint: "3ThdFZQKM6kRyVGLG48kaPg5TRMhYMKY1iCRa9xop1WC",  symbol: "eUSX",      pegTarget: null, pegType: "yield_bearing", decimals: 6 },
+  { mint: "7GzQgf6DPo6ZANjnbhe9tNCpkGTv3zqHbsDx74jyQf9",   symbol: "FWDI",      pegTarget: null, pegType: "yield_bearing", decimals: 6 },
+  { mint: "7GxATsNMnaC88vdwd2t3mwrFuQwwGvmYPrUQ4D6FotXk",   symbol: "JUICED",    pegTarget: null, pegType: "yield_bearing", decimals: 6 },
+  { mint: "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5",  symbol: "ONyc",      pegTarget: null, pegType: "yield_bearing", decimals: 9 },
+  { mint: "3b8X44fLF9ooXaUm3hhSgjpmVs6rZZ3pPoGnGahc3Uu7",  symbol: "PRIME",     pegTarget: null, pegType: "yield_bearing", decimals: 6 },
+  { mint: "59obFNBzyTBGowrkif5uK7ojS58vsuWz3ZCvg6tfZAGw",   symbol: "PST",       pegTarget: null, pegType: "yield_bearing", decimals: 6 },
+  { mint: "AvZZF1YaZDziPY2RCK4oJrRVrbN3mTD9NL24hPeaZeUj",  symbol: "syrupUSDC", pegTarget: null, pegType: "yield_bearing", decimals: 6 },
+  { mint: "BTRR3sj1Bn2ZjuemgbeQ6SCtf84iXS81CS7UDTSxUCaK",  symbol: "USCC",      pegTarget: null, pegType: "yield_bearing", decimals: 6 },
+];
+
+/** Lookup peg config by symbol */
+export function getPegConfig(symbol: string): StablecoinPegEntry | undefined {
+  return STABLECOIN_PEG_CONFIG.find((e) => e.symbol === symbol);
+}
+
 export function classifyToken(symbol: string): string {
-  const upper = symbol.toUpperCase();
-  if (YIELD_BEARING_STABLES.has(symbol)) return "yield_bearing_stable";
+  // Strip common token wrapper prefixes (e.g., "PT eUSX" → "eUSX")
+  const bare = symbol.replace(/^(PT|YT)\s+/, "");
+  if (YIELD_BEARING_STABLES.has(bare)) return "yield_bearing_stable";
+  const upper = bare.toUpperCase();
   for (const s of REGULAR_STABLES) {
     if (s.toUpperCase() === upper) return "stable";
   }
@@ -88,5 +153,7 @@ export function computeDepeg(
   priceUsd: number | null,
 ): number | null {
   if (!STABLECOIN_SYMBOLS.has(symbol) || priceUsd === null) return null;
-  return Math.round(Math.abs(priceUsd - 1.0) * 1e6) / 1e6;
+  const cfg = getPegConfig(symbol);
+  const target = cfg?.pegTarget ?? 1.0;
+  return Math.round(Math.abs(priceUsd - target) * 1e6) / 1e6;
 }

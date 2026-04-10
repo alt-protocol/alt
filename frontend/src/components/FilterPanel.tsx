@@ -19,6 +19,7 @@ interface FilterPanelProps {
   activeFilterCount: number;
   sources: string[];
   allTokens: string[];
+  allTokenTypes: string[];
   updateFilters: (f: Filters) => void;
   applyFilters: () => void;
   resetFilters: () => void;
@@ -33,6 +34,7 @@ export default function FilterPanel({
   activeFilterCount,
   sources,
   allTokens,
+  allTokenTypes,
   updateFilters,
   applyFilters,
   resetFilters,
@@ -45,6 +47,7 @@ export default function FilterPanel({
   const protocolOptions = [{ value: "", label: "All Protocols" }, ...sources.map((s) => ({ value: s, label: s }))];
   const tokenOptions = [{ value: "", label: "All Tokens" }, ...allTokens.map((t) => ({ value: t, label: t }))];
   const categoryOptions = [{ value: "", label: "All Categories" }, ...getCategorySlugs().map((c) => ({ value: c, label: fmtCategory(c) }))];
+  const tokenTypeOptions = [{ value: "", label: "All Token Types" }, ...allTokenTypes.map((t) => ({ value: t, label: fmtCategory(t) }))];
 
   return (
     <div className="px-5 py-3 flex items-center justify-between gap-3">
@@ -85,6 +88,12 @@ export default function FilterPanel({
             <button onClick={() => updateFilters({ ...filters, category: "" })} className="text-foreground-muted hover:text-foreground transition-colors leading-none">&times;</button>
           </span>
         )}
+        {filters.tokenType && (
+          <span className="flex items-center gap-1.5 bg-surface-high text-foreground text-[0.7rem] font-sans rounded-sm px-2.5 py-1 hover:bg-secondary hover:text-secondary-text transition-colors cursor-default">
+            {fmtCategory(filters.tokenType)}
+            <button onClick={() => updateFilters({ ...filters, tokenType: "" })} className="text-foreground-muted hover:text-foreground transition-colors leading-none">&times;</button>
+          </span>
+        )}
         {(filters.apyMin || filters.apyMax) && (
           <span className="flex items-center gap-1.5 bg-surface-high text-foreground text-[0.7rem] font-sans rounded-sm px-2.5 py-1 hover:bg-secondary hover:text-secondary-text transition-colors cursor-default">
             APR: {filters.apyMin || "0"}% – {filters.apyMax || "\u221e"}%
@@ -111,7 +120,7 @@ export default function FilterPanel({
         )}
         {activeFilterCount > 0 && (
           <button
-            onClick={() => updateFilters({ protocol: "", category: "", token: "", apyMin: "", apyMax: "", apy30dMin: "", apy30dMax: "", tvlMin: "", tvlMax: "", liquidityMin: "", liquidityMax: "" })}
+            onClick={() => updateFilters({ protocol: "", category: "", token: "", tokenType: "", apyMin: "", apyMax: "", apy30dMin: "", apy30dMax: "", tvlMin: "", tvlMax: "", liquidityMin: "", liquidityMax: "" })}
             className="text-foreground-muted hover:text-foreground text-[0.7rem] font-sans transition-colors"
           >
             Clear all
@@ -184,6 +193,17 @@ export default function FilterPanel({
                     options={categoryOptions}
                     onChange={(v) => setDraftFilters({ ...draftFilters, category: v })}
                     placeholder="All Categories"
+                  />
+                </div>
+
+                {/* Token Type */}
+                <div className="flex items-center justify-between gap-4">
+                  <label className="text-[0.8rem] text-foreground-muted font-sans shrink-0 w-24">Token Type</label>
+                  <Dropdown
+                    value={draftFilters.tokenType}
+                    options={tokenTypeOptions}
+                    onChange={(v) => setDraftFilters({ ...draftFilters, tokenType: v })}
+                    placeholder="All Token Types"
                   />
                 </div>
 

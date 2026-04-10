@@ -99,3 +99,58 @@ export const yieldSnapshots = discoverSchema.table(
     index("idx_ys_snap_at").on(t.snapshot_at),
   ],
 );
+
+// ---------------------------------------------------------------------------
+// stablecoin_price_snapshots — raw price time-series from Jupiter Price API
+// ---------------------------------------------------------------------------
+export const stablecoinPriceSnapshots = discoverSchema.table(
+  "stablecoin_price_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    mint: varchar("mint", { length: 64 }).notNull(),
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    price_usd: numeric("price_usd", { precision: 20, scale: 10 }).notNull(),
+    snapshot_at: timestamp("snapshot_at").notNull(),
+  },
+  (t) => [
+    index("idx_sps_mint_snap").on(t.mint, t.snapshot_at),
+    index("idx_sps_snap_at").on(t.snapshot_at),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// stablecoin_peg_stats — pre-computed rolling stats (1 row per stablecoin)
+// ---------------------------------------------------------------------------
+export const stablecoinPegStats = discoverSchema.table(
+  "stablecoin_peg_stats",
+  {
+    id: serial("id").primaryKey(),
+    mint: varchar("mint", { length: 64 }).notNull().unique(),
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    price_current: numeric("price_current", { precision: 20, scale: 10 }),
+    peg_type: varchar("peg_type", { length: 20 }).notNull(),
+    peg_target: numeric("peg_target", { precision: 20, scale: 10 }),
+    // 7-day peg metrics (fixed-peg only, NULL for yield-bearing)
+    max_deviation_7d: numeric("max_deviation_7d", { precision: 10, scale: 6 }),
+    min_price_7d: numeric("min_price_7d", { precision: 20, scale: 10 }),
+    max_price_7d: numeric("max_price_7d", { precision: 20, scale: 10 }),
+    peg_adherence_7d: numeric("peg_adherence_7d", { precision: 6, scale: 2 }),
+    // 7-day volatility (all stables)
+    volatility_7d: numeric("volatility_7d", { precision: 10, scale: 6 }),
+    snapshot_count_7d: integer("snapshot_count_7d").default(0),
+    // 30-day peg metrics
+    max_deviation_30d: numeric("max_deviation_30d", { precision: 10, scale: 6 }),
+    min_price_30d: numeric("min_price_30d", { precision: 20, scale: 10 }),
+    max_price_30d: numeric("max_price_30d", { precision: 20, scale: 10 }),
+    peg_adherence_30d: numeric("peg_adherence_30d", { precision: 6, scale: 2 }),
+    // 30-day volatility
+    volatility_30d: numeric("volatility_30d", { precision: 10, scale: 6 }),
+    snapshot_count_30d: integer("snapshot_count_30d").default(0),
+    // DEX liquidity from Jupiter Price API (refreshed each cycle)
+    liquidity_usd: numeric("liquidity_usd", { precision: 20, scale: 2 }),
+    updated_at: timestamp("updated_at").defaultNow(),
+  },
+  (t) => [
+    index("idx_spst_symbol").on(t.symbol),
+  ],
+);
