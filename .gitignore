@@ -22,3 +22,6 @@ frontend/.env.production.local
 
 # Temp task prompts (planner → executor/validator)
 tasks/
+
+# Claude Code — machine-specific; do not commit (paths, future secrets)
+.claude/settings.local.json
