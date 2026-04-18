@@ -55,7 +55,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
   const { data: balance } = useTokenBalance(selectedAccount.address, depositMint);
   const { data: vaultBalance, isLoading: vaultBalanceLoading } = usePositionBalance(
     selectedAccount.address,
-    tab === "withdraw" ? yield_.id : undefined,
+    yield_.id,
   );
   const { position, isLoading: positionLoading } = usePositionForOpportunity(
     selectedAccount.address,

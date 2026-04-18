@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { createPortal } from "react-dom";
 import {
   useConnect,
@@ -33,24 +34,66 @@ function WalletRow({
   onConnected: (account: UiWalletAccount) => void;
 }) {
   const [isConnecting, connect] = useConnect(wallet);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleClick() {
+    setError(null);
     try {
       const accounts = await connect();
       if (accounts[0]) {
         onConnected(accounts[0]);
       }
-    } catch {
-      // User rejected or wallet error — do nothing
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const isRejection = /reject|cancel|denied|closed/i.test(message);
+      if (!isRejection) {
+        setError("Connection failed. Check that Solana is selected in your wallet.");
+      }
     }
   }
 
   return (
-    <button
-      onClick={handleClick}
-      disabled={isConnecting}
-      className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-surface-high transition-colors disabled:opacity-50"
-    >
+    <div>
+      <button
+        onClick={handleClick}
+        disabled={isConnecting}
+        className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-surface-high transition-colors disabled:opacity-50"
+      >
+        {wallet.icon && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={wallet.icon}
+            alt={wallet.name}
+            width={28}
+            height={28}
+            className="rounded-sm"
+          />
+        )}
+        <span className="text-[0.8rem] font-sans text-foreground">
+          {wallet.name}
+        </span>
+        {isConnecting ? (
+          <span className="ml-auto text-[0.65rem] text-foreground-muted animate-pulse">
+            Connecting...
+          </span>
+        ) : (
+          <span className="ml-auto text-[0.6rem] uppercase tracking-[0.05em] text-neon font-sans font-medium">
+            Detected
+          </span>
+        )}
+      </button>
+      {error && (
+        <p className="px-5 pb-2 text-[0.65rem] font-sans text-amber-400">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function WrongChainWalletRow({ wallet }: { wallet: UiWallet }) {
+  return (
+    <div className="w-full flex items-center gap-3 px-5 py-3">
       {wallet.icon && (
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -58,22 +101,18 @@ function WalletRow({
           alt={wallet.name}
           width={28}
           height={28}
-          className="rounded-sm"
+          className="rounded-sm opacity-70"
         />
       )}
-      <span className="text-[0.8rem] font-sans text-foreground">
-        {wallet.name}
-      </span>
-      {isConnecting ? (
-        <span className="ml-auto text-[0.65rem] text-foreground-muted animate-pulse">
-          Connecting...
+      <div className="flex flex-col gap-0.5">
+        <span className="text-[0.8rem] font-sans text-foreground">
+          {wallet.name}
         </span>
-      ) : (
-        <span className="ml-auto text-[0.6rem] uppercase tracking-[0.05em] text-neon font-sans font-medium">
-          Detected
+        <span className="text-[0.6rem] font-sans text-amber-400">
+          Switch to Solana in your wallet
         </span>
-      )}
-    </button>
+      </div>
+    </div>
   );
 }
 
@@ -111,14 +150,23 @@ function UndetectedWalletRow({
 
 interface WalletModalProps {
   filteredWallets: readonly UiWallet[];
+  allWallets: readonly UiWallet[];
   onConnected: (account: UiWalletAccount) => void;
   onClose: () => void;
 }
 
-export default function WalletModal({ filteredWallets, onConnected, onClose }: WalletModalProps) {
+export default function WalletModal({ filteredWallets, allWallets, onConnected, onClose }: WalletModalProps) {
   const detectedNames = new Set(filteredWallets.map((w) => w.name));
+
+  // Wallets installed but not on Solana
+  const wrongChainWallets = allWallets.filter(
+    (w) => !detectedNames.has(w.name)
+  );
+  const wrongChainNames = new Set(wrongChainWallets.map((w) => w.name));
+
+  // Popular wallets that are truly not installed
   const undetectedWallets = POPULAR_WALLETS.filter(
-    (pw) => !detectedNames.has(pw.name)
+    (pw) => !detectedNames.has(pw.name) && !wrongChainNames.has(pw.name)
   );
 
   return createPortal(
@@ -157,6 +205,20 @@ export default function WalletModal({ filteredWallets, onConnected, onClose }: W
           </div>
         )}
 
+        {/* Wrong-chain wallets */}
+        {wrongChainWallets.length > 0 && (
+          <div>
+            <div className="px-5 pt-3 pb-1">
+              <p className="text-[0.6rem] uppercase tracking-[0.05em] text-foreground-muted font-sans">
+                Wrong Network
+              </p>
+            </div>
+            {wrongChainWallets.map((wallet) => (
+              <WrongChainWalletRow key={wallet.name} wallet={wallet} />
+            ))}
+          </div>
+        )}
+
         {/* Undetected popular wallets */}
         {undetectedWallets.length > 0 && (
           <div>
@@ -179,7 +241,7 @@ export default function WalletModal({ filteredWallets, onConnected, onClose }: W
         )}
 
         {/* No wallets at all */}
-        {filteredWallets.length === 0 && undetectedWallets.length === 0 && (
+        {filteredWallets.length === 0 && wrongChainWallets.length === 0 && undetectedWallets.length === 0 && (
           <div className="px-5 py-6 text-center">
             <p className="text-[0.8rem] font-sans text-foreground-muted">
               No Solana wallets found

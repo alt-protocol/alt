@@ -43,7 +43,8 @@ async function loadSdk() {
     PROGRAM_ID: sdk.PROGRAM_ID,
     DEFAULT_RECENT_SLOT_DURATION_MS: sdk.DEFAULT_RECENT_SLOT_DURATION_MS,
     getDepositWithLeverageIxs: sdk.getDepositWithLeverageIxs,
-    getRepayWithCollIxs: sdk.getRepayWithCollIxs,
+    getWithdrawWithLeverageIxs: sdk.getWithdrawWithLeverageIxs,
+    getAdjustLeverageIxs: sdk.getAdjustLeverageIxs,
     getUserLutAddressAndSetupIxs: sdk.getUserLutAddressAndSetupIxs,
     getScopeRefreshIxForObligationAndReserves:
       sdk.getScopeRefreshIxForObligationAndReserves,
@@ -60,6 +61,23 @@ async function loadScope() {
 
 function addr(s: string): any {
   return address(s);
+}
+
+const MARKET_CACHE_TTL = 120_000; // 2 minutes — market config changes rarely
+
+/** Load KaminoMarket with deduplication + caching. Shared by all multiply operations. */
+async function loadMarketCached(marketAddress: string): Promise<any> {
+  const sdk = await loadSdk();
+  return cachedAsync(
+    `kamino-market:${marketAddress}`,
+    MARKET_CACHE_TTL,
+    () =>
+      sdk.KaminoMarket.load(
+        getRpc() as any,
+        addr(marketAddress),
+        sdk.DEFAULT_RECENT_SLOT_DURATION_MS,
+      ),
+  );
 }
 
 /**
@@ -371,11 +389,7 @@ async function prepareMultiply(params: BuildTxParams, slippageBps: number) {
   const collTokenMint = addr(collMint);
   const debtTokenMint = addr(debtMint);
 
-  const market = await cachedAsync(
-    `kamino-market:${marketAddress}`,
-    30_000,
-    () => KaminoMarket.load(rpc, addr(marketAddress), DEFAULT_RECENT_SLOT_DURATION_MS),
-  );
+  const market = await loadMarketCached(marketAddress);
   if (!market)
     throw Object.assign(new Error("Failed to load Kamino market"), {
       statusCode: 502,
@@ -643,12 +657,12 @@ async function buildMultiplyOpen(
 }
 
 // ---------------------------------------------------------------------------
-// Multiply — Withdraw / Close (repay with collateral)
+// Multiply — Withdraw / Close (proportional deleverage via flash loan)
 // ---------------------------------------------------------------------------
 
-async function buildMultiplyClose(
+async function buildMultiplyWithdraw(
   params: BuildTxParams,
-): Promise<BuildTxResultWithLookups> {
+): Promise<BuildTxResultWithLookups | BuildTxResultWithSetup> {
   try {
     const userSlippage = (params.extraData?.slippageBps as number) ?? 50;
     const ctx = await prepareMultiply(params, userSlippage);
@@ -669,14 +683,13 @@ async function buildMultiplyClose(
     const {
       MultiplyObligation,
       PROGRAM_ID,
-      getRepayWithCollIxs,
+      getWithdrawWithLeverageIxs,
       getUserLutAddressAndSetupIxs,
     } = sdk;
 
     const isClosingPosition = params.extraData!.isClosingPosition === true;
 
-    // Load obligation — must use MultiplyObligation (not VanillaObligation)
-    // to match the PDA derived at position open time
+    // Load obligation
     const multiplyOblType = new MultiplyObligation(
       collTokenMint,
       debtTokenMint,
@@ -693,37 +706,73 @@ async function buildMultiplyClose(
       );
     }
 
-    // User LUT (setup handled separately)
-    const [userLut] = await getUserLutAddressAndSetupIxs(
+    // Current deposited/borrowed amounts from obligation
+    const collReserve = ctx.collReserve;
+    const debtReserve = ctx.debtReserve;
+    const collDeposit = obligation.getDepositByReserve(collReserve.address);
+    const debtBorrow = obligation.getBorrowByReserve(debtReserve.address);
+    // SDK expects human-readable token amounts, not lamports.
+    // obligation.amount is in lamports — divide by mintFactor to convert.
+    const deposited = (collDeposit?.amount ?? new Decimal(0)).div(collReserve.getMintFactor());
+    const borrowed = (debtBorrow?.amount ?? new Decimal(0)).div(debtReserve.getMintFactor());
+
+    // withdrawAmount: full deposit for close, user-specified for partial
+    const withdrawAmount = isClosingPosition
+      ? deposited
+      : new Decimal(params.amount);
+
+    // Oracle price ratio
+    const debtPrice = debtReserve.getOracleMarketPrice();
+    const collPrice = collReserve.getOracleMarketPrice();
+    const priceCollToDebt = collPrice.div(debtPrice);
+
+    // User LUT
+    const multiplyMints = [{ coll: collTokenMint, debt: debtTokenMint }];
+    const [userLut, setupTxsIxs] = await getUserLutAddressAndSetupIxs(
       market,
       walletSigner(params.walletAddress),
       none(),
-      false,
+      true,
+      multiplyMints,
+      [],
     );
 
-    // For full close, pass the actual borrow amount (not 0) — the SDK's
-    // swap calculator multiplies repayAmount by interest rate, so 0 → 0 swap.
-    // userTotalBorrow is in human-readable units (e.g. 0.985 PYUSD).
-    const repayAmount = isClosingPosition
-      ? new Decimal(obligation.refreshedStats.userTotalBorrow.toString())
-      : new Decimal(params.amount);
+    logger.info(
+      {
+        wallet: params.walletAddress.slice(0, 8),
+        withdrawAmount: withdrawAmount.toString(),
+        isClosingPosition,
+      },
+      "Building multiply withdraw",
+    );
 
-    const routes = await getRepayWithCollIxs({
+    const routes = await getWithdrawWithLeverageIxs({
+      owner: walletSigner(params.walletAddress),
       kaminoMarket: market,
       debtTokenMint,
       collTokenMint,
-      owner: walletSigner(params.walletAddress),
       obligation,
+      deposited,
+      borrowed,
       referrer: none(),
       currentSlot,
-      repayAmount,
+      withdrawAmount,
+      priceCollToDebt,
+      slippagePct: new Decimal(userSlippage / 100),
       isClosingPosition,
+      selectedTokenMint: collTokenMint,
       budgetAndPriorityFeeIxs: computeIxs,
       scopeRefreshIx: [],
-      useV2Ixs: true,
+      quoteBufferBps: new Decimal(userSlippage),
       quoter,
       swapper,
+      useV2Ixs: true,
+      userSolBalanceLamports: 0,
     });
+
+    const nonEmptySetups = (setupTxsIxs as any[][])
+      .filter((ixs: any[]) => ixs.length > 0)
+      .map((ixs: any[]) => ixs as unknown as Instruction[]);
 
     return finalizeMultiplyResult(routes, {
       userLut,
@@ -731,17 +780,307 @@ async function buildMultiplyClose(
       debtMint,
       marketLut,
       isMultiply: false,
+      setupInstructionSets:
+        nonEmptySetups.length > 0 ? nonEmptySetups : undefined,
     });
   } catch (err: unknown) {
     if (err instanceof Error && "statusCode" in err) throw err;
     const msg = err instanceof Error ? err.message : "Unknown error";
     logger.error(
       { err, wallet: params.walletAddress.slice(0, 8) },
-      `Multiply close failed: ${msg}`,
+      `Multiply withdraw failed: ${msg}`,
     );
-    throw Object.assign(new Error(`Multiply close failed: ${msg}`), {
+    throw Object.assign(new Error(`Multiply withdraw failed: ${msg}`), {
       statusCode: 502,
     });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Multiply — Adjust leverage (increase or decrease)
+// ---------------------------------------------------------------------------
+
+async function buildMultiplyAdjust(
+  params: BuildTxParams,
+): Promise<BuildTxResultWithLookups | BuildTxResultWithSetup> {
+  try {
+    const userSlippage = (params.extraData?.slippageBps as number) ?? 50;
+    const ctx = await prepareMultiply(params, userSlippage);
+    const {
+      sdk,
+      market,
+      collTokenMint,
+      debtTokenMint,
+      collMint,
+      debtMint,
+      marketLut,
+      quoter,
+      swapper,
+      currentSlot,
+      computeIxs,
+      Decimal,
+    } = ctx;
+    const {
+      MultiplyObligation,
+      PROGRAM_ID,
+      getAdjustLeverageIxs,
+      getUserLutAddressAndSetupIxs,
+    } = sdk;
+
+    const targetLeverage = params.extraData!.leverage as number;
+    if (!targetLeverage) {
+      throw Object.assign(new Error("Missing target leverage"), {
+        statusCode: 400,
+      });
+    }
+
+    // Load obligation (required — must have existing position)
+    const multiplyOblType = new MultiplyObligation(
+      collTokenMint,
+      debtTokenMint,
+      PROGRAM_ID,
+    );
+    const obligation = await market.getObligationByWallet(
+      params.walletAddress as any,
+      multiplyOblType,
+    );
+    if (!obligation) {
+      throw Object.assign(
+        new Error("No active multiply position to adjust"),
+        { statusCode: 400 },
+      );
+    }
+
+    // Get current deposit/borrow amounts from obligation
+    const collReserve = ctx.collReserve;
+    const debtReserve = ctx.debtReserve;
+    const collDeposit = obligation.getDepositByReserve(collReserve.address);
+    const debtBorrow = obligation.getBorrowByReserve(debtReserve.address);
+    // SDK expects human-readable token amounts, not lamports.
+    const depositedLamports = (collDeposit?.amount ?? new Decimal(0)).div(collReserve.getMintFactor());
+    const borrowedLamports = (debtBorrow?.amount ?? new Decimal(0)).div(debtReserve.getMintFactor());
+
+    // Oracle prices for both directions
+    const debtPrice = debtReserve.getOracleMarketPrice();
+    const collPrice = collReserve.getOracleMarketPrice();
+    const priceDebtToColl = debtPrice.div(collPrice);
+    const priceCollToDebt = collPrice.div(debtPrice);
+
+    // User LUT
+    const multiplyMints = [{ coll: collTokenMint, debt: debtTokenMint }];
+    const [userLut, setupTxsIxs] = await getUserLutAddressAndSetupIxs(
+      market,
+      walletSigner(params.walletAddress),
+      none(),
+      true,
+      multiplyMints,
+      [],
+    );
+
+    logger.info(
+      {
+        wallet: params.walletAddress.slice(0, 8),
+        currentLeverage: Number(obligation.refreshedStats.leverage).toFixed(2),
+        targetLeverage,
+      },
+      "Adjusting multiply leverage",
+    );
+
+    const routes = await getAdjustLeverageIxs({
+      owner: walletSigner(params.walletAddress),
+      kaminoMarket: market,
+      debtTokenMint,
+      collTokenMint,
+      obligation,
+      depositedLamports,
+      borrowedLamports,
+      referrer: none(),
+      currentSlot,
+      targetLeverage: new Decimal(targetLeverage),
+      priceCollToDebt,
+      priceDebtToColl,
+      slippagePct: new Decimal(userSlippage / 100),
+      budgetAndPriorityFeeIxs: computeIxs,
+      scopeRefreshIx: [],
+      quoteBufferBps: new Decimal(100),
+      quoter,
+      swapper,
+      useV2Ixs: true,
+      userSolBalanceLamports: 0,
+    });
+
+    const nonEmptySetups = (setupTxsIxs as any[][])
+      .filter((ixs: any[]) => ixs.length > 0)
+      .map((ixs: any[]) => ixs as unknown as Instruction[]);
+
+    return finalizeMultiplyResult(routes, {
+      userLut,
+      collMint,
+      debtMint,
+      marketLut,
+      isMultiply: true,
+      setupInstructionSets:
+        nonEmptySetups.length > 0 ? nonEmptySetups : undefined,
+    });
+  } catch (err: unknown) {
+    if (err instanceof Error && "statusCode" in err) throw err;
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    logger.error(
+      { err, wallet: params.walletAddress.slice(0, 8) },
+      `Multiply adjust failed: ${msg}`,
+    );
+    throw Object.assign(new Error(`Multiply adjust failed: ${msg}`), {
+      statusCode: 502,
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Multiply — Manage collateral & debt (simple lending ops on obligation)
+// ---------------------------------------------------------------------------
+
+type ManageAction =
+  | "add_collateral"
+  | "withdraw_collateral"
+  | "borrow_more"
+  | "repay_debt";
+
+async function buildMultiplyManage(
+  params: BuildTxParams,
+): Promise<BuildTxResult> {
+  try {
+    const sdk = await loadSdk();
+    const { KaminoMarket, KaminoAction, MultiplyObligation, PROGRAM_ID, DEFAULT_RECENT_SLOT_DURATION_MS } = sdk;
+
+    const { marketAddress, collMint, debtMint } = parseMultiplyParams(params.extraData);
+    const rpc = getRpc() as any;
+    const action = params.extraData!.action as ManageAction;
+
+    const market = await loadMarketCached(marketAddress);
+    if (!market)
+      throw Object.assign(new Error("Failed to load Kamino market"), { statusCode: 502 });
+
+    // Load existing obligation
+    const oblType = new MultiplyObligation(addr(collMint), addr(debtMint), PROGRAM_ID);
+    const obligation = await market.getObligationByWallet(
+      params.walletAddress as any,
+      oblType,
+    );
+    if (!obligation)
+      throw Object.assign(new Error("No active multiply position"), { statusCode: 400 });
+
+    // Determine mint, decimals, and SDK method based on action
+    const isCollateral = action === "add_collateral" || action === "withdraw_collateral";
+    const mintStr = isCollateral ? collMint : debtMint;
+    const mint = addr(mintStr);
+    const reserve = market.getReserveByMint(mint);
+    const decimals = reserve?.stats?.decimals ?? 6;
+
+    // Convert human-readable amount to lamports (KaminoAction expects smallest unit)
+    const amountLamports = Math.round(
+      parseFloat(params.amount) * 10 ** decimals,
+    ).toString();
+
+    const buildFn =
+      action === "add_collateral" ? KaminoAction.buildDepositTxns
+        : action === "withdraw_collateral" ? KaminoAction.buildWithdrawTxns
+          : action === "borrow_more" ? KaminoAction.buildBorrowTxns
+            : KaminoAction.buildRepayTxns;
+
+    const axn = await (buildFn as any)(
+      market,
+      amountLamports,
+      mint,
+      walletSigner(params.walletAddress),
+      obligation,
+      true, // useV2Ixs
+      undefined, // scopeRefreshConfig
+      1_000_000, // computeBudget
+    );
+
+    // Combine setup + lending instructions
+    const allIxs = [
+      ...axn.setupIxs,
+      ...axn.lendingIxs,
+      ...axn.cleanupIxs,
+    ] as unknown as Instruction[];
+
+    logger.info(
+      { action, wallet: params.walletAddress.slice(0, 8), ixCount: allIxs.length },
+      "Multiply manage built",
+    );
+
+    return allIxs;
+  } catch (err: unknown) {
+    if (err instanceof Error && "statusCode" in err) throw err;
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    logger.error(
+      { err, wallet: params.walletAddress.slice(0, 8) },
+      `Multiply manage failed: ${msg}`,
+    );
+    throw Object.assign(new Error(`Multiply manage failed: ${msg}`), {
+      statusCode: 502,
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Multiply position stats (on-chain)
+// ---------------------------------------------------------------------------
+
+export interface MultiplyPositionStats {
+  balance: number;
+  leverage: number;
+  ltv: number;
+  liquidationLtv: number;
+  totalDepositUsd: number;
+  totalBorrowUsd: number;
+  borrowLimit: number;
+  healthFactor: number;
+}
+
+export async function getMultiplyStats(
+  walletAddress: string,
+  extraData: Record<string, unknown>,
+): Promise<MultiplyPositionStats | null> {
+  try {
+    const { KaminoMarket, MultiplyObligation, PROGRAM_ID, DEFAULT_RECENT_SLOT_DURATION_MS } =
+      await loadSdk();
+
+    const marketAddress = extraData.market as string | undefined;
+    const collMint =
+      (extraData.collateral_mint as string | undefined) ??
+      (extraData.collateral as any)?.[0]?.mint;
+    const debtMint =
+      (extraData.debt_mint as string | undefined) ??
+      (extraData.debt as any)?.[0]?.mint;
+    if (!marketAddress || !collMint || !debtMint) return null;
+
+    const market = await loadMarketCached(marketAddress);
+    if (!market) return null;
+
+    const oblType = new MultiplyObligation(addr(collMint), addr(debtMint), PROGRAM_ID);
+    const obligation = await market.getObligationByWallet(
+      walletAddress as any,
+      oblType,
+    );
+    if (!obligation) return null;
+
+    const stats = obligation.refreshedStats;
+    return {
+      balance: Number(stats.netAccountValue ?? 0),
+      leverage: Number(stats.leverage ?? 0),
+      ltv: Number(stats.loanToValue ?? 0),
+      liquidationLtv: Number(stats.liquidationLtv ?? 0),
+      totalDepositUsd: Number(stats.userTotalDeposit ?? 0),
+      totalBorrowUsd: Number(stats.userTotalBorrow ?? 0),
+      borrowLimit: Number(stats.borrowLimit ?? 0),
+      healthFactor: Number(stats.liquidationLtv) > 0
+        ? Number(stats.liquidationLtv) / Math.max(0.001, Number(stats.loanToValue))
+        : 0,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -823,11 +1162,7 @@ async function getMultiplyBalance(
       (params.extraData?.debt as any)?.[0]?.mint;
     if (!marketAddress || !collMint || !debtMint) return null;
 
-    const market = await cachedAsync(
-      `kamino-market:${marketAddress}`,
-      30_000,
-      () => KaminoMarket.load(getRpc() as any, addr(marketAddress), DEFAULT_RECENT_SLOT_DURATION_MS),
-    );
+    const market = await loadMarketCached(marketAddress);
     if (!market) return null;
 
     const oblType = new MultiplyObligation(
@@ -854,13 +1189,24 @@ async function getMultiplyBalance(
 
 export const kaminoAdapter: ProtocolAdapter = {
   async buildDepositTx(params) {
-    if (params.category === "multiply") return buildMultiplyOpen(params);
+    if (params.category === "multiply") {
+      const action = params.extraData?.action as string | undefined;
+      if (action === "adjust") return buildMultiplyAdjust(params);
+      if (action === "add_collateral" || action === "borrow_more")
+        return buildMultiplyManage(params);
+      return buildMultiplyOpen(params);
+    }
     if (isVaultCategory(params.category)) return buildVaultDeposit(params);
     return buildLendingDeposit(params);
   },
 
   async buildWithdrawTx(params) {
-    if (params.category === "multiply") return buildMultiplyClose(params);
+    if (params.category === "multiply") {
+      const action = params.extraData?.action as string | undefined;
+      if (action === "withdraw_collateral" || action === "repay_debt")
+        return buildMultiplyManage(params);
+      return buildMultiplyWithdraw(params);
+    }
     if (isVaultCategory(params.category)) return buildVaultWithdraw(params);
     return buildLendingWithdraw(params);
   },

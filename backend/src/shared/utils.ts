@@ -37,17 +37,32 @@ export function cached<T>(key: string, ttlMs: number, fn: () => T): T {
   return result;
 }
 
+const _pending = new Map<string, Promise<unknown>>();
+
 export async function cachedAsync<T>(
   key: string,
   ttlMs: number,
   fn: () => Promise<T>,
 ): Promise<T> {
   const entry = _cache.get(key);
-  const now = Date.now();
-  if (entry && now - entry.at < ttlMs) return entry.value as T;
-  const result = await fn();
-  if (result !== null && result !== undefined) {
-    _cache.set(key, { at: now, value: result });
+  if (entry && Date.now() - entry.at < ttlMs) return entry.value as T;
+
+  // Request deduplication: concurrent callers share the same promise
+  let pending = _pending.get(key) as Promise<T> | undefined;
+  if (!pending) {
+    pending = fn()
+      .then((result) => {
+        _pending.delete(key);
+        if (result !== null && result !== undefined) {
+          _cache.set(key, { at: Date.now(), value: result });
+        }
+        return result;
+      })
+      .catch((err) => {
+        _pending.delete(key);
+        throw err;
+      });
+    _pending.set(key, pending);
   }
-  return result;
+  return pending;
 }

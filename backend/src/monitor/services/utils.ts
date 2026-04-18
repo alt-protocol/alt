@@ -98,8 +98,12 @@ function r4(v: number | null | undefined): number | null {
   return v != null ? Math.round(v * 10000) / 10000 : null;
 }
 
+function r6(v: number | null | undefined): number | null {
+  return v != null ? Math.round(v * 1_000_000) / 1_000_000 : null;
+}
+
 export function buildPositionDict(p: PositionParams): PositionDict {
-  const pnlUsd = r2(p.pnl_usd);
+  const pnlUsd = r6(p.pnl_usd);
   const initialDeposit = r2(p.initial_deposit_usd);
   const heldDays = p.held_days ?? null;
 
@@ -247,8 +251,11 @@ export async function batchEarliestSnapshots(
   const result: Record<string, Date> = {};
   for (const row of rows.rows) {
     const extId = row.external_id as string;
-    const minSnap = row.min_snap as Date | null;
-    if (minSnap) result[extId] = minSnap;
+    const raw = row.min_snap;
+    const minSnap = raw instanceof Date ? raw
+      : (typeof raw === "string" || typeof raw === "number") ? new Date(raw)
+      : null;
+    if (minSnap && !isNaN(minSnap.getTime())) result[extId] = minSnap;
   }
   return result;
 }
@@ -275,9 +282,12 @@ export async function batchEarliestDeposits(
   const result: Record<string, { snapshot_at: Date; deposit_amount_usd: number }> = {};
   for (const row of rows.rows) {
     const extId = row.external_id as string;
-    const snapAt = row.snapshot_at as Date | null;
+    const rawSnap = row.snapshot_at;
+    const snapAt = rawSnap instanceof Date ? rawSnap
+      : (typeof rawSnap === "string" || typeof rawSnap === "number") ? new Date(rawSnap)
+      : null;
     const depUsd = Number(row.deposit_amount_usd);
-    if (snapAt && Number.isFinite(depUsd) && depUsd > 0) {
+    if (snapAt && !isNaN(snapAt.getTime()) && Number.isFinite(depUsd) && depUsd > 0) {
       result[extId] = { snapshot_at: snapAt, deposit_amount_usd: depUsd };
     }
   }

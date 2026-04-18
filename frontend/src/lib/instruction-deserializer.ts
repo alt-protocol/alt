@@ -33,6 +33,7 @@ export interface BuildTxApiResponse {
   instructions: SerializableInstruction[];
   lookupTableAddresses?: string[];
   setupInstructionSets?: SerializableInstruction[][];
+  metadata?: Record<string, unknown>;
 }
 
 /** Convert a full API build response to a BuildTxResult for useTransaction. */
@@ -51,6 +52,7 @@ export function deserializeBuildResponse(response: BuildTxApiResponse): BuildTxR
     return {
       instructions,
       lookupTableAddresses: response.lookupTableAddresses,
+      metadata: response.metadata,
     };
   }
 

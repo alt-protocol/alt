@@ -62,6 +62,47 @@ export const PositionsSummary = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Analytics schemas
+// ---------------------------------------------------------------------------
+
+export const DistributionItem = z.object({
+  label: z.string(),
+  value_usd: z.number(),
+  pct: z.number(),
+});
+
+export const PortfolioAnalyticsOut = z.object({
+  summary: z.object({
+    total_value_usd: z.number(),
+    total_pnl_usd: z.number(),
+    total_initial_deposit_usd: z.number(),
+    roi_pct: z.number(),
+    weighted_apy: z.number(),
+    weighted_apy_realized: z.number(),
+    projected_yield_yearly_usd: z.number(),
+    position_count: z.number(),
+  }),
+  stablecoin: z.object({
+    total_usd: z.number(),
+    idle_usd: z.number(),
+    allocated_usd: z.number(),
+    allocation_pct: z.number(),
+    apy_total: z.number(),
+    apy_allocated: z.number(),
+    idle_balances: z.array(z.object({
+      mint: z.string(),
+      symbol: z.string().nullable(),
+      ui_amount: z.number(),
+    })),
+  }),
+  diversification: z.object({
+    by_protocol: z.array(DistributionItem),
+    by_category: z.array(DistributionItem),
+    by_token: z.array(DistributionItem),
+  }),
+});
+
+// ---------------------------------------------------------------------------
 // Query param schemas
 // ---------------------------------------------------------------------------
 

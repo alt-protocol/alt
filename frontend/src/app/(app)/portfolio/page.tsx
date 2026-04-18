@@ -10,6 +10,7 @@ import TabBar from "@/components/TabBar";
 import EventsTable from "@/components/EventsTable";
 import { LoadingSkeleton, NoWalletState, ErrorState, SyncingState } from "@/components/PortfolioStates";
 import RefreshButton from "@/components/RefreshButton";
+import DiversificationSection from "@/components/DiversificationSection";
 import { usePortfolioData } from "@/lib/hooks/usePortfolioData";
 import { queryKeys } from "@/lib/queryKeys";
 import { getAllCategories } from "@/lib/categories";
@@ -100,6 +101,7 @@ export default function Portfolio() {
     visiblePositions,
     summary,
     stableSummary,
+    diversification,
     chartData,
     showSyncing,
     shortAddr,
@@ -129,7 +131,7 @@ export default function Portfolio() {
                   ["positionHistory", walletAddress],
                   queryKeys.positions.events(walletAddress),
                   queryKeys.wallet.status(walletAddress),
-                  queryKeys.wallet.portfolio(walletAddress),
+                  queryKeys.wallet.analytics(walletAddress),
                 ]}
                 className="ml-auto"
               />
@@ -138,31 +140,32 @@ export default function Portfolio() {
 
           <StatsGrid
             stats={[
-              { label: "Net Value", value: fmtUsd(summary.totalValue) },
-              { label: "PnL ($)", value: fmtUsd(summary.totalPnlUsd), colorClass: pnlColor(summary.totalPnlUsd) },
-              { label: "ROI", value: fmtPct(summary.roi), colorClass: pnlColor(summary.roi) },
-              { label: "Current APY", value: fmtApy(summary.weightedApy), colorClass: pnlColor(summary.weightedApy) },
-              { label: "Real APY", value: fmtApy(summary.weightedApyRealized), colorClass: pnlColor(summary.weightedApyRealized) },
-              { label: "Positions", value: `${summary.count}` },
+              { label: "Net Value", value: fmtUsd(summary.total_value_usd) },
+              { label: "PnL ($)", value: fmtUsd(summary.total_pnl_usd), colorClass: pnlColor(summary.total_pnl_usd) },
+              { label: "ROI", value: fmtPct(summary.roi_pct), colorClass: pnlColor(summary.roi_pct) },
+              { label: "Current APY", value: fmtApy(summary.weighted_apy), colorClass: pnlColor(summary.weighted_apy) },
+              { label: "Real APY", value: fmtApy(summary.weighted_apy_realized), colorClass: pnlColor(summary.weighted_apy_realized) },
+              { label: "Proj. Yield/yr", value: fmtUsd(summary.projected_yield_yearly_usd), colorClass: pnlColor(summary.projected_yield_yearly_usd) },
+              { label: "Positions", value: `${summary.position_count}` },
             ]}
             size="lg"
             className="mb-[2.25rem]"
           />
 
-          {stableSummary.total > 0 && (
+          {stableSummary.total_usd > 0 && (
             <>
               <StatsGrid
                 stats={[
-                  { label: "Total Stablecoins", value: fmtUsd(stableSummary.total) },
-                  { label: "Idle", value: fmtUsd(stableSummary.idle) },
-                  { label: "Allocated", value: fmtUsd(stableSummary.allocated), sub: `${stableSummary.allocationPct.toFixed(0)}% deployed` },
-                  { label: "APY (Total)", value: fmtApy(stableSummary.aprTotal) },
-                  { label: "APY (Allocated)", value: fmtApy(stableSummary.aprAllocated), colorClass: pnlColor(stableSummary.aprAllocated) },
+                  { label: "Total Stablecoins", value: fmtUsd(stableSummary.total_usd) },
+                  { label: "Idle", value: fmtUsd(stableSummary.idle_usd) },
+                  { label: "Allocated", value: fmtUsd(stableSummary.allocated_usd), sub: `${stableSummary.allocation_pct.toFixed(0)}% deployed` },
+                  { label: "APY (Total)", value: fmtApy(stableSummary.apy_total) },
+                  { label: "APY (Allocated)", value: fmtApy(stableSummary.apy_allocated), colorClass: pnlColor(stableSummary.apy_allocated) },
                 ]}
-                className={stableSummary.idleBalances.length > 0 ? "mb-3" : "mb-[2.25rem]"}
+                className={stableSummary.idle_balances.length > 0 ? "mb-3" : "mb-[2.25rem]"}
               />
 
-              {stableSummary.idleBalances.length > 0 && (
+              {stableSummary.idle_balances.length > 0 && (
                 <div className="bg-surface-low rounded-sm overflow-hidden mb-[2.25rem]">
                   <div className="px-5 py-3">
                     <h3 className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">
@@ -171,7 +174,7 @@ export default function Portfolio() {
                   </div>
                   <table className="w-full text-[0.8rem] font-sans">
                     <tbody>
-                      {stableSummary.idleBalances.map((b) => (
+                      {stableSummary.idle_balances.map((b) => (
                         <tr key={b.mint} className="border-t border-outline-ghost">
                           <td className="px-5 py-2.5 font-display tracking-[-0.02em]">
                             {b.symbol ?? truncateId(b.mint)}
@@ -197,6 +200,8 @@ export default function Portfolio() {
             onPeriod={setChartPeriod}
             isSuccess={historyQuery.isSuccess}
           />
+
+          {diversification && <DiversificationSection data={diversification} />}
 
           {/* Tab bar */}
           <TabBar

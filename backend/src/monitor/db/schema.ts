@@ -44,7 +44,7 @@ export const userPositions = monitorSchema.table(
     opportunity_id: integer("opportunity_id"),
     deposit_amount: numeric("deposit_amount", { precision: 30, scale: 10 }),
     deposit_amount_usd: numeric("deposit_amount_usd", { precision: 20, scale: 2 }),
-    pnl_usd: numeric("pnl_usd", { precision: 20, scale: 2 }),
+    pnl_usd: numeric("pnl_usd", { precision: 20, scale: 6 }),
     pnl_pct: numeric("pnl_pct", { precision: 10, scale: 4 }),
     initial_deposit_usd: numeric("initial_deposit_usd", { precision: 20, scale: 2 }),
     opened_at: timestamp("opened_at"),

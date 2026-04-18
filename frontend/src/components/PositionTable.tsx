@@ -3,7 +3,7 @@
 import { memo } from "react";
 import { useRouter } from "next/navigation";
 import type { UserPositionOut } from "@/lib/api";
-import { fmtUsd, fmtApy, fmtPct, fmtDays, fmtProductType, truncateId, pnlColor } from "@/lib/format";
+import { fmtUsd, fmtPnlUsd, fmtApy, fmtPct, fmtDays, fmtProductType, truncateId, pnlColor } from "@/lib/format";
 import { ProtocolChip } from "@/components/ProtocolChip";
 import { getCategoryDef } from "@/lib/categories";
 import DriftMaintenanceBanner from "./DriftMaintenanceBanner";
@@ -56,14 +56,21 @@ function fmtNetValue(p: UserPositionOut): string {
   return `${val} (${ws === "redeemable" ? "Ready" : "Frozen"})`;
 }
 
+function projYieldVal(p: UserPositionOut): number | null {
+  const v = (p.deposit_amount_usd ?? 0) * ((p.apy ?? 0) / 100);
+  return v || null;
+}
+
 function getCardFields(position: UserPositionOut, type: string): PositionCardField[] {
+  const py = projYieldVal(position);
   switch (type) {
     case "lending":
       return [
         { label: "Net Value", value: fmtNetValue(position) },
         { label: "APY Current", value: fmtApy(position.apy), colorClass: pnlColor(position.apy) },
         { label: "APY Realized", value: fmtApy(position.apy_realized), colorClass: pnlColor(position.apy_realized) },
-        { label: "Interest Earned", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
+        { label: "Proj. Yield/yr", value: fmtUsd(py) },
+        { label: "Interest Earned", value: fmtPnlUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
         { label: "Days Held", value: fmtDays(position.held_days) },
       ];
     case "multiply":
@@ -71,7 +78,8 @@ function getCardFields(position: UserPositionOut, type: string): PositionCardFie
         { label: "Net Value", value: fmtNetValue(position) },
         { label: "APY Current", value: fmtApy(position.apy), colorClass: pnlColor(position.apy) },
         { label: "APY Realized", value: fmtApy(position.apy_realized), colorClass: pnlColor(position.apy_realized) },
-        { label: "PnL ($)", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
+        { label: "Proj. Yield/yr", value: fmtUsd(py) },
+        { label: "PnL ($)", value: fmtPnlUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
         { label: "PnL (%)", value: fmtPct(position.pnl_pct), colorClass: pnlColor(position.pnl_pct) },
         { label: "Days Held", value: fmtDays(position.held_days) },
       ];
@@ -81,7 +89,8 @@ function getCardFields(position: UserPositionOut, type: string): PositionCardFie
         { label: "Net Value", value: fmtNetValue(position) },
         { label: "APY Current", value: fmtApy(position.apy), colorClass: pnlColor(position.apy) },
         { label: "APY Realized", value: fmtApy(position.apy_realized), colorClass: pnlColor(position.apy_realized) },
-        { label: "Interest Earned", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
+        { label: "Proj. Yield/yr", value: fmtUsd(py) },
+        { label: "Interest Earned", value: fmtPnlUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
         { label: "Days Held", value: fmtDays(position.held_days) },
       ];
     case "insurance_fund":
@@ -89,15 +98,17 @@ function getCardFields(position: UserPositionOut, type: string): PositionCardFie
         { label: "Net Value", value: fmtNetValue(position) },
         { label: "APY Current", value: fmtApy(position.apy), colorClass: pnlColor(position.apy) },
         { label: "APY Realized", value: fmtApy(position.apy_realized), colorClass: pnlColor(position.apy_realized) },
-        { label: "PnL", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
+        { label: "Proj. Yield/yr", value: fmtUsd(py) },
+        { label: "PnL", value: fmtPnlUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
         { label: "Days Held", value: fmtDays(position.held_days) },
       ];
     default: // "all"
       return [
         { label: "Net Value", value: fmtNetValue(position) },
-        { label: "PnL", value: fmtUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
+        { label: "PnL", value: fmtPnlUsd(position.pnl_usd), colorClass: pnlColor(position.pnl_usd) },
         { label: "APY Current", value: fmtApy(position.apy), colorClass: pnlColor(position.apy) },
         { label: "APY Realized", value: fmtApy(position.apy_realized), colorClass: pnlColor(position.apy_realized) },
+        { label: "Proj. Yield/yr", value: fmtUsd(py) },
       ];
   }
 }
@@ -143,6 +154,7 @@ export function getColumnsForType(type: string): ColumnDef[] {
 
   const apyCurrent: ColumnDef = { header: "APY Current", title: "Current market APY from the protocol. For multiply, net of borrow costs.", align: "right", render: (p) => <span className={pnlColor(p.apy)}>{fmtApy(p.apy)}</span> };
   const apyRealized: ColumnDef = { header: "APY Realized", title: "Your actual annualized return based on PnL and time held.", align: "right", render: (p) => <span className={pnlColor(p.apy_realized)}>{fmtApy(p.apy_realized)}</span> };
+  const projYield: ColumnDef = { header: "Proj. Yield/yr", title: "Estimated annual yield based on current APY", align: "right", render: (p) => { const v = (p.deposit_amount_usd ?? 0) * ((p.apy ?? 0) / 100); return <span className="text-foreground">{fmtUsd(v || null)}</span>; } };
 
   switch (type) {
     case "lending":
@@ -152,7 +164,8 @@ export function getColumnsForType(type: string): ColumnDef[] {
         { header: "Net Value", align: "right", render: (p) => <NetValue position={p} /> },
         apyCurrent,
         apyRealized,
-        { header: "Interest Earned", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtUsd(p.pnl_usd)}</span> },
+        projYield,
+        { header: "Interest Earned", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtPnlUsd(p.pnl_usd)}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
         detailsAction,
       ];
@@ -163,7 +176,8 @@ export function getColumnsForType(type: string): ColumnDef[] {
         { header: "Net Value", align: "right", render: (p) => <NetValue position={p} /> },
         apyCurrent,
         apyRealized,
-        { header: "PnL ($)", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtUsd(p.pnl_usd)}</span> },
+        projYield,
+        { header: "PnL ($)", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtPnlUsd(p.pnl_usd)}</span> },
         { header: "PnL (%)", align: "right", render: (p) => <span className={pnlColor(p.pnl_pct)}>{fmtPct(p.pnl_pct)}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
         detailsAction,
@@ -175,7 +189,8 @@ export function getColumnsForType(type: string): ColumnDef[] {
         { header: "Net Value", align: "right", render: (p) => <NetValue position={p} /> },
         apyCurrent,
         apyRealized,
-        { header: "Interest Earned", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtUsd(p.pnl_usd)}</span> },
+        projYield,
+        { header: "Interest Earned", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtPnlUsd(p.pnl_usd)}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
         detailsAction,
       ];
@@ -186,7 +201,8 @@ export function getColumnsForType(type: string): ColumnDef[] {
         { header: "Net Value", align: "right", render: (p) => <NetValue position={p} /> },
         apyCurrent,
         apyRealized,
-        { header: "PnL", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtUsd(p.pnl_usd)}</span> },
+        projYield,
+        { header: "PnL", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtPnlUsd(p.pnl_usd)}</span> },
         { header: "Lock", align: "right", render: (p) => <span className="text-foreground-muted">{p.lock_period_days > 0 ? `${p.lock_period_days}d` : "\u2014"}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
         detailsAction,
@@ -198,7 +214,8 @@ export function getColumnsForType(type: string): ColumnDef[] {
         { header: "Net Value", align: "right", render: (p) => <NetValue position={p} /> },
         apyCurrent,
         apyRealized,
-        { header: "Interest Earned", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtUsd(p.pnl_usd)}</span> },
+        projYield,
+        { header: "Interest Earned", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtPnlUsd(p.pnl_usd)}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
         detailsAction,
       ];
@@ -208,10 +225,11 @@ export function getColumnsForType(type: string): ColumnDef[] {
         { header: "Type", align: "left", render: (p) => <span className="text-foreground-muted">{fmtProductType(p.product_type)}</span> },
         { header: "Token", align: "left", render: (p) => <TokenWithType p={p} color="text-foreground" /> },
         { header: "Net Value", align: "right", render: (p) => <NetValue position={p} /> },
-        { header: "PnL", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtUsd(p.pnl_usd)}</span> },
+        { header: "PnL", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtPnlUsd(p.pnl_usd)}</span> },
         apyCurrent,
         apyRealized,
-        { header: "Lock", align: "right", render: (p) => <span className="text-foreground-muted">{p.lock_period_days > 0 ? `${p.lock_period_days}d` : "\u2014"}</span> },
+        projYield,
+        { header: "Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}{p.lock_period_days > 0 ? ` (${p.lock_period_days}d lock)` : ""}</span> },
         detailsAction,
       ];
   }

@@ -1,4 +1,10 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(railway service:*)",
+      "Bash(find /Users/andreiyazepchyk/Projects/alt/frontend -name .env* -type f)"
+    ]
+  },
   "allowedTools": [
     "Edit",
     "Write",
@@ -21,7 +27,6 @@
     "WebFetch",
     "WebSearch",
     "NotebookEdit",
-
     "Bash(npm run *)",
     "Bash(npm install*)",
     "Bash(npm list *)",
@@ -32,7 +37,6 @@
     "Bash(npx *)",
     "Bash(node *)",
     "Bash(tsx *)",
-
     "Bash(cd *)",
     "Bash(ls*)",
     "Bash(cat *)",
@@ -73,7 +77,6 @@
     "Bash([ *)",
     "Bash(tput *)",
     "Bash(printf *)",
-
     "Bash(git status*)",
     "Bash(git log*)",
     "Bash(git diff*)",
@@ -93,13 +96,11 @@
     "Bash(git rev-parse *)",
     "Bash(git ls-files *)",
     "Bash(git worktree *)",
-
     "Bash(gh pr *)",
     "Bash(gh run *)",
     "Bash(gh api *)",
     "Bash(gh issue *)",
     "Bash(gh repo *)",
-
     "Bash(docker compose *)",
     "Bash(docker build *)",
     "Bash(docker run *)",
@@ -109,10 +110,8 @@
     "Bash(docker rm *)",
     "Bash(docker images*)",
     "Bash(docker exec *)",
-
     "Bash(PGPASSWORD=*psql*)",
     "Bash(drizzle-kit *)",
-
     "Bash(tar *)",
     "Bash(zip *)",
     "Bash(unzip *)",

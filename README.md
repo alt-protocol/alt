@@ -7,8 +7,7 @@ A curated, non-custodial Solana yield dashboard. Discover, deposit, and monitor 
 ```
 alt/
 ├── frontend/           # Next.js 16, TypeScript, Tailwind
-├── backend/            # Node.js, Fastify, Drizzle, PostgreSQL
-├── mcp-server/         # MCP server (thin API wrapper)
+├── backend/            # Node.js, Fastify, Drizzle, PostgreSQL (MCP at /api/mcp)
 └── README.md
 ```
 

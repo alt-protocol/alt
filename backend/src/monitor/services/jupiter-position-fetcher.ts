@@ -171,15 +171,17 @@ async function fetchEarnPositions(
 
   const positionIds: string[] = [];
   const positionsByAsset: Record<string, Record<string, unknown>> = {};
+  const jlTokenMap: Record<string, string> = {};
   for (const pos of positionsData as Record<string, unknown>[]) {
-    const assetAddress =
-      ((pos.token as Record<string, unknown>)?.assetAddress as string) ??
-      "";
+    const tokenObj = pos.token as Record<string, unknown> | undefined;
+    const assetAddress = (tokenObj?.assetAddress as string) ?? "";
     if (!assetAddress) continue;
     const shares = safeFloat(pos.shares);
     if (!shares || shares <= 0) continue;
     positionsByAsset[assetAddress] = pos;
     positionIds.push(assetAddress);
+    const jlMint = (tokenObj?.address as string) ?? "";
+    if (jlMint) jlTokenMap[assetAddress] = jlMint;
   }
 
   // Fetch earnings
@@ -306,7 +308,10 @@ async function fetchEarnPositions(
 
     let openedAt: Date | null = null;
     if (heliusUrl) {
-      openedAt = await firstDepositTs(wallet, assetAddress, heliusUrl);
+      // Use jlToken mint (not underlying asset) — the jlToken ATA was created on
+      // first deposit and has far fewer transactions than e.g. a USDC ATA.
+      const mintForTs = jlTokenMap[assetAddress] ?? assetAddress;
+      openedAt = await firstDepositTs(wallet, mintForTs, heliusUrl);
     }
     if (!openedAt) openedAt = earliestMap[assetAddress] ?? null;
 

@@ -209,6 +209,19 @@ async function fetchMultiplyVaults(
       const collateralApy = collateralAprPct;
       const borrowCostApy = borrowAprPct;
 
+      // Build leverage table (same pattern as Kamino fetcher)
+      const leverageTable: Record<string, Record<string, number | null>> = {};
+      const levSteps = [2, 3, 5, 8, 10];
+      for (const lev of levSteps) {
+        if (lev > maxLeverage + 0.1) continue;
+        const netApy = collateralAprPct * lev - borrowAprPct * (lev - 1);
+        leverageTable[`${lev}x`] = {
+          net_apy_current_pct: Math.round(netApy * 10000) / 10000,
+          net_apy_7d_pct: null,
+          net_apy_30d_pct: null,
+        };
+      }
+
       // Liquidity available
       const liquidityData =
         (v.liquidityBorrowData as Record<string, unknown>) ?? {};
@@ -269,6 +282,10 @@ async function fetchMultiplyVaults(
           staking_apr_bps: stakingApr,
           supply_token_mint: supplyToken.address ?? "",
           borrow_token_mint: borrowToken.address ?? "",
+          leverage_table: leverageTable,
+          net_apy_current_pct: netAprPct,
+          collateral_yield_current_pct: collateralAprPct,
+          borrow_apy_current_pct: borrowAprPct,
         },
         now,
         source: "jupiter_api",

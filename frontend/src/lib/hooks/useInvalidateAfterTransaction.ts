@@ -9,13 +9,15 @@ interface InvalidateParams {
   walletAddress: string;
   opportunityId?: number;
   vaultAddress?: string;
+  /** Protocol metadata to store with the position (e.g. Jupiter nft_id). */
+  metadata?: Record<string, unknown>;
 }
 
 export function useInvalidateAfterTransaction() {
   const queryClient = useQueryClient();
 
   const invalidateAfterTx = useCallback(
-    async ({ walletAddress, opportunityId, vaultAddress }: InvalidateParams) => {
+    async ({ walletAddress, opportunityId, vaultAddress, metadata }: InvalidateParams) => {
       // Critical refetches — await so UI has fresh blockchain data before re-enabling
       const critical: Promise<void>[] = [];
       // Invalidate all token balance queries for this wallet
@@ -42,7 +44,18 @@ export function useInvalidateAfterTransaction() {
       }
       await Promise.allSettled(critical);
 
-      // Trigger backend to re-fetch positions from blockchain (fire-and-forget)
+      // Sync the specific position to Monitor DB (fast: 1 RPC call + DB write)
+      // Then invalidate portfolio queries so the position appears immediately
+      if (opportunityId) {
+        api.syncPosition(walletAddress, opportunityId, metadata).then(() => {
+          queryClient.invalidateQueries({ queryKey: queryKeys.positions.list(walletAddress) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.positions.events(walletAddress) });
+          queryClient.invalidateQueries({ queryKey: ["positionHistory", walletAddress] });
+          queryClient.invalidateQueries({ queryKey: queryKeys.wallet.status(walletAddress) });
+        }).catch(() => {});
+      }
+
+      // Full background re-fetch for all positions (fire-and-forget, slower)
       api.trackWallet(walletAddress).catch(() => {});
 
       // Non-critical — fire-and-forget (backend-dependent, slow)

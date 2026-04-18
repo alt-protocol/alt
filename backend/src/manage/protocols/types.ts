@@ -12,6 +12,8 @@ export interface BuildTxParams {
 export interface BuildTxResultWithLookups {
   instructions: Instruction[];
   lookupTableAddresses: string[];
+  /** Protocol-specific metadata returned alongside the tx (e.g. Jupiter nftId). */
+  metadata?: Record<string, unknown>;
 }
 
 /** Extended result with setup transactions (needed for Kamino Multiply user LUT creation). */

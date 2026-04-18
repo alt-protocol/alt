@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { api, YieldOpportunity } from "@/lib/api";
-import { fmtNum, fmtTvl, fmtCategory, fmtPriceRange, rangeSpreadColor } from "@/lib/format";
+import { fmtNum, fmtTvl, fmtCategory, fmtPriceRange, fmtSpread, fmtShieldWarning } from "@/lib/format";
 import { useYieldFilters, type SortField } from "@/lib/hooks/useYieldFilters";
 import { queryKeys } from "@/lib/queryKeys";
 import FilterPanel from "@/components/FilterPanel";
@@ -206,14 +206,21 @@ function DashboardContent() {
                         <span className="text-[0.8rem] font-sans tabular-nums text-foreground-muted text-right">
                           {y.peg_stability && y.peg_stability.snapshot_count_7d >= 2 ? (
                             <>
-                              <span className={rangeSpreadColor(y.peg_stability.min_price_7d, y.peg_stability.max_price_7d)}>{"●"}</span>{" "}
-                              {fmtPriceRange(y.peg_stability.min_price_7d, y.peg_stability.max_price_7d)} · {fmtPegSpan(y.peg_stability.snapshot_count_7d)}
+                              {fmtPriceRange(y.peg_stability.min_price_7d, y.peg_stability.max_price_7d)} · {fmtSpread(y.peg_stability.min_price_7d, y.peg_stability.max_price_7d)} · {fmtPegSpan(y.peg_stability.snapshot_count_7d)}
                               {y.peg_stability.liquidity_usd != null && ` · ${fmtTvl(y.peg_stability.liquidity_usd)} liq`}
                               {y.lock_period_days > 0 && ` · ${y.lock_period_days}d lock`}
                             </>
                           ) : y.lock_period_days > 0 ? (
                             `${y.lock_period_days}d lock`
                           ) : "\u2014"}
+                          {y.token_warnings && y.token_warnings.length > 0 && (
+                            <span
+                              className={`ml-1 ${y.token_warnings.some(w => w.severity === "warning") ? "text-yellow-400" : "text-foreground-muted"}`}
+                              title={y.token_warnings.map(w => `${fmtShieldWarning(w.type)}: ${w.message}`).join("\n")}
+                            >
+                              · {y.token_warnings.length} {y.token_warnings.length === 1 ? "warning" : "warnings"}
+                            </span>
+                          )}
                         </span>
                       </div>
                     </div>
@@ -306,8 +313,7 @@ function DashboardContent() {
                         {y.peg_stability && y.peg_stability.snapshot_count_7d >= 2 ? (
                           <>
                             <div>
-                              <span className={rangeSpreadColor(y.peg_stability.min_price_7d, y.peg_stability.max_price_7d)}>{"●"}</span>{" "}
-                              {fmtPriceRange(y.peg_stability.min_price_7d, y.peg_stability.max_price_7d)}{" · "}{fmtPegSpan(y.peg_stability.snapshot_count_7d)}
+                              {fmtPriceRange(y.peg_stability.min_price_7d, y.peg_stability.max_price_7d)}{" · "}{fmtSpread(y.peg_stability.min_price_7d, y.peg_stability.max_price_7d)}{" · "}{fmtPegSpan(y.peg_stability.snapshot_count_7d)}
                             </div>
                             <div className="text-foreground-muted">
                               {y.peg_stability.liquidity_usd != null
@@ -319,6 +325,14 @@ function DashboardContent() {
                         ) : y.lock_period_days > 0 ? (
                           `${y.lock_period_days}d lock`
                         ) : "\u2014"}
+                        {y.token_warnings && y.token_warnings.length > 0 && (
+                          <div
+                            className={`text-[0.65rem] mt-0.5 ${y.token_warnings.some(w => w.severity === "warning") ? "text-yellow-400" : "text-foreground-muted"}`}
+                            title={y.token_warnings.map(w => `${fmtShieldWarning(w.type)}: ${w.message}`).join("\n")}
+                          >
+                            {y.token_warnings.map(w => fmtShieldWarning(w.type)).join(" · ")}
+                          </div>
+                        )}
                       </td>
                       <td className="px-5 py-3 text-right">
                         <button

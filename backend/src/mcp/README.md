@@ -1,42 +1,42 @@
 # Akashi MCP Server
 
-Non-custodial Solana yield aggregator exposed as an MCP (Model Context Protocol) server. Provides 17 tools across 3 modules — Discover (yield data), Monitor (portfolio tracking), and Manage (transaction building). Any MCP-compatible agent (Claude Desktop, Claude Code, custom bots) can search yields, check portfolios, and build transactions.
+Non-custodial Solana yield aggregator exposed as an MCP (Model Context Protocol) server. Provides 17 tools across 3 modules — Discover (yield data), Monitor (portfolio tracking), and Manage (transaction building). Any MCP-compatible agent (Claude Desktop, Claude Code, Cursor, ChatGPT) can search yields, check portfolios, and build transactions.
 
 **Non-custodial:** The server never handles private keys. Transaction tools return unsigned base64-encoded transactions. The agent or user signs externally.
 
-## Quick Start
+## Connect
 
-```bash
-cd backend
-npm run mcp          # starts MCP server over stdio
-```
+The MCP server is exposed as an HTTP endpoint on the backend at `POST /api/mcp` using the Streamable HTTP transport.
 
-Required environment variables (in `backend/.env`):
-```
-DATABASE_URL=postgresql://localhost:5432/alt
-HELIUS_API_KEY=your-helius-key
-HELIUS_RPC_URL=https://mainnet.helius-rpc.com/?api-key=your-helius-key
-```
-
-## Claude Desktop Configuration
-
-Add to `~/.claude/claude_desktop_config.json`:
+### Claude Desktop / Claude Code
 
 ```json
 {
   "mcpServers": {
     "akashi": {
-      "command": "npx",
-      "args": ["tsx", "src/mcp/cli.ts"],
-      "cwd": "/absolute/path/to/backend",
-      "env": {
-        "DATABASE_URL": "postgresql://localhost:5432/alt",
-        "HELIUS_API_KEY": "your-key",
-        "HELIUS_RPC_URL": "https://mainnet.helius-rpc.com/?api-key=your-key"
-      }
+      "type": "url",
+      "url": "https://your-app.railway.app/api/mcp"
     }
   }
 }
+```
+
+For local development (backend running on :8001):
+```json
+{
+  "mcpServers": {
+    "akashi": {
+      "type": "url",
+      "url": "http://localhost:8001/api/mcp"
+    }
+  }
+}
+```
+
+### MCP Inspector (testing)
+
+```bash
+npx @modelcontextprotocol/inspector --url http://localhost:8001/api/mcp
 ```
 
 ## Tool Reference
@@ -98,7 +98,7 @@ Some operations (e.g. Kamino Multiply) return `setup_transactions[]` — these m
 ```
 backend/src/mcp/
   server.ts              MCP server creation + tool registration
-  cli.ts                 stdio entry point (Claude Desktop / Claude Code)
+  plugin.ts              Fastify plugin — Streamable HTTP transport at /api/mcp
   tools/
     discover.ts          4 tools wrapping discoverService
     monitor.ts           6 tools wrapping monitorService

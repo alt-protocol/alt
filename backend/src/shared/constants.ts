@@ -22,6 +22,7 @@ export const KNOWN_TOKEN_MINTS: Record<string, string> = {
   USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB: "USD1",
   "2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH": "USDG",
   "6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG": "USX",
+  "5YMkXAYccHSGnHn9nob9xEvv6Pvka9DZWH7nTbotTu9E": "hyUSD",
   // Yield-bearing stablecoins
   "3ThdFZQKM6kRyVGLG48kaPg5TRMhYMKY1iCRa9xop1WC": "eUSX",
   "7GzQgf6DPo6ZANjnbhe9tNCpkGTv3zqHbsDx74jyQf9": "FWDI",
@@ -50,6 +51,7 @@ export const REGULAR_STABLES = new Set([
   "AUSD",
   "USDH",
   "USX",
+  "hyUSD",
   "JupUSD",
   "CASH",
 ]);
@@ -146,6 +148,13 @@ export function getSymbolForMint(mint: string): string | null {
 export function isStablecoinMint(mint: string): boolean {
   const symbol = getSymbolForMint(mint);
   return symbol !== null && STABLECOIN_SYMBOLS.has(symbol);
+}
+
+export const APP_URL = process.env.APP_URL ?? "http://localhost:8001";
+export const FRONTEND_URL = process.env.FRONTEND_URL ?? "http://localhost:3000";
+
+if (!process.env.APP_URL && process.env.NODE_ENV === "production") {
+  console.warn("[WARN] APP_URL not set in production — action URLs will point to localhost");
 }
 
 export function computeDepeg(

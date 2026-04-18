@@ -18,6 +18,7 @@ import {
   PositionsQuery,
   PositionHistoryQuery,
   EventsQuery,
+  PortfolioAnalyticsOut,
 } from "./schemas.js";
 import { monitorService } from "../service.js";
 
@@ -291,6 +292,29 @@ export async function portfolioRoutes(app: FastifyInstance) {
   });
 
   // -----------------------------------------------------------------------
+  // POST /portfolio/:wallet/sync — sync a single position after transaction
+  // -----------------------------------------------------------------------
+  app.post<{ Params: { wallet: string } }>("/portfolio/:wallet/sync", {
+    config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    handler: async (request) => {
+      const { wallet } = request.params;
+      validateWallet(wallet);
+
+      const body = request.body as Record<string, unknown> | null;
+      const opportunityId = Number(body?.opportunity_id);
+      if (!Number.isFinite(opportunityId) || opportunityId <= 0) {
+        const err = new Error("opportunity_id is required") as Error & { statusCode: number };
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const metadata = body?.metadata as Record<string, unknown> | undefined;
+      await monitorService.syncPosition(wallet, opportunityId, metadata);
+      return { ok: true };
+    },
+  });
+
+  // -----------------------------------------------------------------------
   // GET /portfolio/:wallet/status
   // -----------------------------------------------------------------------
   app.get<{ Params: { wallet: string } }>("/portfolio/:wallet/status", {
@@ -312,6 +336,19 @@ export async function portfolioRoutes(app: FastifyInstance) {
         fetch_status: rows[0].fetch_status,
         last_fetched_at: rows[0].last_fetched_at,
       };
+    },
+  });
+
+  // -----------------------------------------------------------------------
+  // GET /portfolio/:wallet/analytics
+  // -----------------------------------------------------------------------
+  app.get<{ Params: { wallet: string } }>("/portfolio/:wallet/analytics", {
+    config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+    schema: { response: { 200: PortfolioAnalyticsOut } },
+    handler: async (request) => {
+      const { wallet } = request.params;
+      validateWallet(wallet);
+      return monitorService.getPortfolioAnalytics(wallet);
     },
   });
 

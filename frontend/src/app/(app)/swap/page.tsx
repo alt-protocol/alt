@@ -15,22 +15,20 @@ declare global {
   }
 }
 
-const DEFAULT_OUTPUT_MINT = "EPjFWdd5AufqSSqeM2qN1xzBZf8ZEDSYJdTziTKhQPNb"; // USDC
-
 function SwapContent() {
   const initialized = useRef(false);
   const walletPassthrough = useJupiterWalletPassthrough();
   const searchParams = useSearchParams();
-  const outputMint = searchParams.get("outputMint") || DEFAULT_OUTPUT_MINT;
+  const outputMint = searchParams.get("outputMint");
 
   const jupiterConfig = {
     displayMode: "integrated",
     integratedTargetId: "jupiter-terminal",
     formProps: {
       initialInputMint: "So11111111111111111111111111111111111111112",
-      initialOutputMint: outputMint,
+      ...(outputMint && { initialOutputMint: outputMint }),
     },
-    strictTokenList: false,
+    containerStyles: { height: "500px" },
     defaultExplorer: "Solscan",
     enableWalletPassthrough: true,
     onRequestConnectWallet: () => {

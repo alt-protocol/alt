@@ -7,42 +7,31 @@ import { guardWalletValid, guardProgramWhitelist } from "../../manage/services/g
 import { getSwapQuote, buildSwapInstructions } from "../../manage/services/jupiter-swap.js";
 import { getAdapter } from "../../manage/protocols/index.js";
 import { discoverService } from "../../discover/service.js";
-import { getLegacyConnection } from "../../shared/rpc.js";
-import { logger } from "../../shared/logger.js";
+import { APP_URL, FRONTEND_URL } from "../../shared/constants.js";
+import { withToolHandler, toolResult, mcpError } from "./utils.js";
+import QRCode from "qrcode";
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
-function mcpError(message: string) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }],
-    isError: true,
-  };
-}
+const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const TX_SUBMIT_TIMEOUT_MS = 30_000;
 
 async function buildAndAssemble(
   opportunityId: number,
   walletAddress: string,
   amount: string,
   action: "deposit" | "withdraw",
+  extraData?: Record<string, unknown>,
 ) {
-  // Build instructions
   const result = await buildTransaction(
-    {
-      opportunity_id: opportunityId,
-      wallet_address: walletAddress,
-      amount,
-    },
+    { opportunity_id: opportunityId, wallet_address: walletAddress, amount, extra_data: extraData },
     action,
   );
 
-  // Assemble main transaction
   const assembled = await assembleTransaction(
     result.instructions,
     walletAddress,
     result.lookupTableAddresses,
   );
 
-  // Assemble setup transactions if any
   let setupTransactions: string[] | undefined;
   if (result.setupInstructionSets?.length) {
     setupTransactions = [];
@@ -57,17 +46,18 @@ async function buildAndAssemble(
     }
   }
 
-  // Build human-readable summary
   const opp = await discoverService.getOpportunityById(opportunityId);
   const oppName = opp?.name ?? `opportunity #${opportunityId}`;
   const protocol = opp?.protocol?.name ?? "unknown protocol";
-  const apyStr = opp?.apy_current
-    ? ` (~${opp.apy_current.toFixed(1)}% APY)`
-    : "";
+  const apyStr = opp?.apy_current ? ` (~${opp.apy_current.toFixed(1)}% APY)` : "";
   const summary =
     action === "deposit"
       ? `Deposit ${amount} into ${oppName} on ${protocol}${apyStr}`
       : `Withdraw ${amount} from ${oppName} on ${protocol}`;
+
+  const actionApiUrl = `${APP_URL}/api/manage/actions/${action}?opportunity_id=${opportunityId}&amount=${encodeURIComponent(amount)}&wallet=${walletAddress}`;
+  const deeplinkUrl = `solana-action:${actionApiUrl}`;
+  const qr = await QRCode.toDataURL(deeplinkUrl, { width: 256, margin: 1 });
 
   return {
     transaction: assembled.transaction,
@@ -75,128 +65,92 @@ async function buildAndAssemble(
     lastValidBlockHeight: assembled.lastValidBlockHeight,
     ...(setupTransactions?.length ? { setup_transactions: setupTransactions } : {}),
     summary,
+    sign: {
+      web: `${FRONTEND_URL}/sign?action=${encodeURIComponent(actionApiUrl)}`,
+      deeplink: deeplinkUrl,
+      qr,
+      action_api: actionApiUrl,
+    },
   };
 }
 
 export function registerManageTools(server: McpServer) {
   server.tool(
     "build_deposit_tx",
-    "Build an unsigned deposit transaction for a yield opportunity. Returns a base64-encoded transaction ready for signing. The transaction expires in ~60 seconds.",
+    "Build an unsigned deposit transaction for a yield opportunity. Returns a base64-encoded transaction ready for signing. The transaction expires in ~60 seconds. For multiply positions, include leverage (required) and optionally action, position_id.",
     {
-      opportunity_id: z
-        .number()
-        .int()
-        .positive()
-        .describe("The yield opportunity ID (from search_yields)"),
-      wallet_address: z
-        .string()
-        .describe("Solana wallet address that will sign and pay fees"),
-      amount: z
-        .string()
-        .describe("Amount to deposit in human-readable format, e.g. '100.5'"),
+      opportunity_id: z.number().int().positive().describe("The yield opportunity ID (from search_yields)"),
+      wallet_address: z.string().describe("Solana wallet address that will sign and pay fees"),
+      amount: z.string().describe("Amount to deposit in human-readable format, e.g. '100.5'"),
+      leverage: z.number().min(1).optional().describe("Leverage multiplier for multiply positions (e.g. 2.0 = 2x). Only needed for multiply category. Typical range: 1.5–5.0"),
+      slippage_bps: z.number().int().min(1).max(1000).optional().default(30).describe("Slippage tolerance in basis points. Default: 30 (0.3%). Use 100-300 for multiply positions."),
+      action: z.enum(["open", "close", "adjust", "add_collateral", "withdraw_collateral", "borrow_more", "repay_debt"]).optional().default("open").describe("Position action. Default: open (new position). Only change for managing existing multiply positions."),
+      position_id: z.string().optional().describe("Existing position ID — only needed for multiply close/adjust, not for new deposits."),
+      deposit_token: z.enum(["debt", "collateral"]).optional().describe("Which token to deposit for multiply positions. Leave empty for lending/vault/earn."),
     },
-    async (args) => {
-      try {
-        const result = await buildAndAssemble(
-          args.opportunity_id,
-          args.wallet_address,
-          args.amount,
-          "deposit",
-        );
+    withToolHandler("build_deposit_tx", async (args) => {
+      const extraData: Record<string, unknown> = {};
+      if (args.leverage != null) extraData.leverage = args.leverage;
+      if (args.slippage_bps != null) extraData.slippageBps = args.slippage_bps;
+      if (args.action && args.action !== "open") extraData.action = args.action;
+      if (args.position_id) extraData.position_id = args.position_id;
+      if (args.deposit_token) extraData.deposit_token = args.deposit_token;
 
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Failed to build deposit transaction";
-        logger.error({ err }, "MCP build_deposit_tx failed");
-        return mcpError(message);
-      }
-    },
+      const result = await buildAndAssemble(
+        args.opportunity_id, args.wallet_address, args.amount, "deposit",
+        Object.keys(extraData).length ? extraData : undefined,
+      );
+      return toolResult(result);
+    }),
   );
 
   server.tool(
     "build_withdraw_tx",
-    "Build an unsigned withdrawal transaction from a yield opportunity. Returns a base64-encoded transaction ready for signing. The transaction expires in ~60 seconds.",
+    "Build an unsigned withdrawal transaction from a yield opportunity. Returns a base64-encoded transaction ready for signing. The transaction expires in ~60 seconds. For multiply positions, include position_id and optionally action.",
     {
-      opportunity_id: z
-        .number()
-        .int()
-        .positive()
-        .describe("The yield opportunity ID"),
-      wallet_address: z
-        .string()
-        .describe("Solana wallet address that will sign and pay fees"),
-      amount: z
-        .string()
-        .describe("Amount to withdraw in human-readable format, e.g. '100.5'"),
+      opportunity_id: z.number().int().positive().describe("The yield opportunity ID"),
+      wallet_address: z.string().describe("Solana wallet address that will sign and pay fees"),
+      amount: z.string().describe("Amount to withdraw in human-readable format, e.g. '100.5'"),
+      slippage_bps: z.number().int().min(1).max(1000).optional().default(30).describe("Slippage tolerance in basis points. Default: 30 (0.3%). Use 100-300 for multiply positions."),
+      action: z.enum(["close", "adjust", "withdraw_collateral", "repay_debt"]).optional().default("close").describe("Position action. Default: close. Only change for managing existing multiply positions."),
+      position_id: z.string().optional().describe("Existing position ID — only needed for multiply close/adjust."),
     },
-    async (args) => {
-      try {
-        const result = await buildAndAssemble(
-          args.opportunity_id,
-          args.wallet_address,
-          args.amount,
-          "withdraw",
-        );
+    withToolHandler("build_withdraw_tx", async (args) => {
+      const extraData: Record<string, unknown> = {};
+      if (args.slippage_bps != null) extraData.slippageBps = args.slippage_bps;
+      if (args.action && args.action !== "close") extraData.action = args.action;
+      if (args.position_id) extraData.position_id = args.position_id;
 
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Failed to build withdraw transaction";
-        logger.error({ err }, "MCP build_withdraw_tx failed");
-        return mcpError(message);
-      }
-    },
+      const result = await buildAndAssemble(
+        args.opportunity_id, args.wallet_address, args.amount, "withdraw",
+        Object.keys(extraData).length ? extraData : undefined,
+      );
+      return toolResult(result);
+    }),
   );
 
   server.tool(
     "submit_transaction",
     "Submit a signed Solana transaction to the network. The transaction must already be signed.",
     {
-      signed_transaction: z
-        .string()
-        .min(1)
-        .describe("Base64-encoded signed transaction"),
+      signed_transaction: z.string().min(1).describe("Base64-encoded signed transaction"),
     },
-    async (args) => {
-      try {
-        const connection = await getLegacyConnection();
+    withToolHandler("submit_transaction", async (args) => {
+      const web3 = await import("@solana/web3.js");
+      const connection = new web3.Connection(process.env.HELIUS_RPC_URL!);
+      const txBytes = Buffer.from(args.signed_transaction, "base64");
 
-        const txBytes = Buffer.from(args.signed_transaction, "base64");
-        const signature = await (connection as any).sendRawTransaction(
-          txBytes,
-          {
-            skipPreflight: false,
-            maxRetries: 3,
-          },
-        );
+      const sendPromise = connection.sendRawTransaction(txBytes, {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Transaction submission timed out (30s)")), TX_SUBMIT_TIMEOUT_MS),
+      );
+      const signature = await Promise.race([sendPromise, timeoutPromise]);
 
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ signature, status: "submitted" }),
-            },
-          ],
-        };
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Transaction submission failed";
-        logger.error({ err }, "MCP submit_transaction failed");
-        return mcpError(message);
-      }
-    },
+      return toolResult({ signature, status: "submitted" });
+    }),
   );
 
   server.tool(
@@ -206,43 +160,23 @@ export function registerManageTools(server: McpServer) {
       opportunity_id: z.number().int().positive().describe("The yield opportunity ID"),
       wallet_address: z.string().describe("Solana wallet address (base58)"),
     },
-    async (args) => {
-      try {
-        const opp = await discoverService.getOpportunityById(args.opportunity_id);
-        if (!opp?.protocol?.slug || !opp.deposit_address) {
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify({ error: "Opportunity not found or missing deposit address" }) }],
-            isError: true,
-          };
-        }
-        const adapter = await getAdapter(opp.protocol.slug);
-        if (!adapter) {
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify({ error: `No adapter for ${opp.protocol.slug}` }) }],
-            isError: true,
-          };
-        }
-        if (!adapter.getBalance) {
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify({ error: `Balance check not supported for ${opp.protocol.slug}` }) }],
-            isError: true,
-          };
-        }
-        const balance = await adapter.getBalance({
-          walletAddress: args.wallet_address,
-          depositAddress: opp.deposit_address,
-          category: opp.category,
-          extraData: opp.extra_data ?? {},
-        });
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ balance, opportunity: opp.name, protocol: opp.protocol.name }) }],
-        };
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Balance check failed";
-        logger.error({ err }, "MCP get_balance failed");
-        return mcpError(message);
+    withToolHandler("get_balance", async (args) => {
+      const opp = await discoverService.getOpportunityById(args.opportunity_id);
+      if (!opp?.protocol?.slug || !opp.deposit_address) {
+        return mcpError("Opportunity not found or missing deposit address");
       }
-    },
+      const adapter = await getAdapter(opp.protocol.slug);
+      if (!adapter?.getBalance) {
+        return mcpError(`Balance check not supported for ${opp.protocol.slug}`);
+      }
+      const balance = await adapter.getBalance({
+        walletAddress: args.wallet_address,
+        depositAddress: opp.deposit_address,
+        category: opp.category,
+        extraData: opp.extra_data ?? {},
+      });
+      return toolResult({ balance, opportunity: opp.name, protocol: opp.protocol.name });
+    }),
   );
 
   server.tool(
@@ -252,73 +186,45 @@ export function registerManageTools(server: McpServer) {
       opportunity_id: z.number().int().positive().describe("The yield opportunity ID"),
       wallet_address: z.string().describe("Solana wallet address (base58)"),
     },
-    async (args) => {
-      try {
-        const opp = await discoverService.getOpportunityById(args.opportunity_id);
-        if (!opp?.protocol?.slug || !opp.deposit_address) {
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify({ error: "Opportunity not found" }) }],
-            isError: true,
-          };
-        }
-        const adapter = await getAdapter(opp.protocol.slug);
-        if (!adapter) {
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify({ error: `No adapter for ${opp.protocol.slug}` }) }],
-            isError: true,
-          };
-        }
-        if (!adapter.getWithdrawState) {
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify({ error: `Withdraw state not supported for ${opp.protocol.slug}` }) }],
-            isError: true,
-          };
-        }
-        const state = await adapter.getWithdrawState({
-          walletAddress: args.wallet_address,
-          depositAddress: opp.deposit_address,
-          category: opp.category,
-          extraData: opp.extra_data ?? {},
-        });
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ withdraw_state: state }) }],
-        };
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Withdraw state check failed";
-        logger.error({ err }, "MCP get_withdraw_state failed");
-        return mcpError(message);
+    withToolHandler("get_withdraw_state", async (args) => {
+      const opp = await discoverService.getOpportunityById(args.opportunity_id);
+      if (!opp?.protocol?.slug || !opp.deposit_address) {
+        return mcpError("Opportunity not found");
       }
-    },
+      const adapter = await getAdapter(opp.protocol.slug);
+      if (!adapter?.getWithdrawState) {
+        return mcpError(`Withdraw state not supported for ${opp.protocol.slug}`);
+      }
+      const state = await adapter.getWithdrawState({
+        walletAddress: args.wallet_address,
+        depositAddress: opp.deposit_address,
+        category: opp.category,
+        extraData: opp.extra_data ?? {},
+      });
+      return toolResult({ withdraw_state: state });
+    }),
   );
 
   server.tool(
     "get_swap_quote",
     "Get a Jupiter swap quote for exchanging one token for another on Solana.",
     {
-      input_mint: z.string().describe("Input token mint address"),
-      output_mint: z.string().describe("Output token mint address"),
+      input_mint: z.string().regex(BASE58_RE, "Invalid Solana address").describe("Input token mint address"),
+      output_mint: z.string().regex(BASE58_RE, "Invalid Solana address").describe("Output token mint address"),
       amount: z.string().describe("Amount in smallest units (lamports for SOL, etc.)"),
       slippage_bps: z.number().int().min(1).max(500).optional().default(50).describe("Slippage tolerance in basis points (default: 50 = 0.5%)"),
       taker: z.string().describe("Wallet address of the taker"),
     },
-    async (args) => {
-      try {
-        const quote = await getSwapQuote({
-          inputMint: args.input_mint,
-          outputMint: args.output_mint,
-          amount: args.amount,
-          slippageBps: args.slippage_bps,
-          taker: args.taker,
-        });
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(quote, null, 2) }],
-        };
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Swap quote failed";
-        logger.error({ err }, "MCP get_swap_quote failed");
-        return mcpError(message);
-      }
-    },
+    withToolHandler("get_swap_quote", async (args) => {
+      const quote = await getSwapQuote({
+        inputMint: args.input_mint,
+        outputMint: args.output_mint,
+        amount: args.amount,
+        slippageBps: args.slippage_bps,
+        taker: args.taker,
+      });
+      return toolResult(quote);
+    }),
   );
 
   server.tool(
@@ -326,45 +232,37 @@ export function registerManageTools(server: McpServer) {
     "Build an unsigned Jupiter swap transaction. Returns a base64-encoded transaction ready for signing.",
     {
       wallet_address: z.string().describe("Solana wallet address that will sign"),
-      input_mint: z.string().describe("Input token mint address"),
-      output_mint: z.string().describe("Output token mint address"),
+      input_mint: z.string().regex(BASE58_RE, "Invalid Solana address").describe("Input token mint address"),
+      output_mint: z.string().regex(BASE58_RE, "Invalid Solana address").describe("Output token mint address"),
       amount: z.string().describe("Amount in smallest units"),
       slippage_bps: z.number().int().min(1).max(500).optional().default(50).describe("Slippage tolerance in basis points"),
     },
-    async (args) => {
-      try {
-        guardWalletValid(args.wallet_address);
+    withToolHandler("build_swap_tx", async (args) => {
+      guardWalletValid(args.wallet_address);
 
-        const result = await buildSwapInstructions({
-          inputMint: args.input_mint,
-          outputMint: args.output_mint,
-          amount: args.amount,
-          slippageBps: args.slippage_bps,
-          taker: args.wallet_address,
-        });
+      const result = await buildSwapInstructions({
+        inputMint: args.input_mint,
+        outputMint: args.output_mint,
+        amount: args.amount,
+        slippageBps: args.slippage_bps,
+        taker: args.wallet_address,
+      });
 
-        const serialized = serializeResult(result);
-        guardProgramWhitelist(serialized.instructions);
+      const serialized = serializeResult(result);
+      guardProgramWhitelist(serialized.instructions);
 
-        const assembled = await assembleTransaction(
-          serialized.instructions,
-          args.wallet_address,
-          serialized.lookupTableAddresses,
-        );
+      const assembled = await assembleTransaction(
+        serialized.instructions,
+        args.wallet_address,
+        serialized.lookupTableAddresses,
+      );
 
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({
-            transaction: assembled.transaction,
-            blockhash: assembled.blockhash,
-            lastValidBlockHeight: assembled.lastValidBlockHeight,
-            summary: `Swap ${args.amount} (${args.input_mint.slice(0, 8)}...) → ${args.output_mint.slice(0, 8)}...`,
-          }, null, 2) }],
-        };
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Swap build failed";
-        logger.error({ err }, "MCP build_swap_tx failed");
-        return mcpError(message);
-      }
-    },
+      return toolResult({
+        transaction: assembled.transaction,
+        blockhash: assembled.blockhash,
+        lastValidBlockHeight: assembled.lastValidBlockHeight,
+        summary: `Swap ${args.amount} (${args.input_mint.slice(0, 8)}...) → ${args.output_mint.slice(0, 8)}...`,
+      });
+    }),
   );
 }

@@ -11,6 +11,7 @@ import { errorHandler } from "./shared/error-handler.js";
 import { discoverPlugin } from "./discover/index.js";
 import { managePlugin } from "./manage/index.js";
 import { monitorPlugin } from "./monitor/index.js";
+import { mcpPlugin } from "./mcp/plugin.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -27,8 +28,9 @@ export async function buildApp() {
   const origins = (process.env.CORS_ORIGINS ?? "http://localhost:3000").split(",");
   await app.register(cors, {
     origin: origins,
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    methods: ["GET", "POST", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Mcp-Session-Id"],
+    exposedHeaders: ["Mcp-Session-Id"],
   });
 
   // Rate limiting
@@ -93,6 +95,20 @@ export async function buildApp() {
 
   // Monitor module
   await app.register(monitorPlugin, { prefix: "/api/monitor" });
+
+  // MCP endpoint for AI agents (Streamable HTTP)
+  await app.register(mcpPlugin, { prefix: "/api/mcp" });
+
+  // Solana Actions spec: actions.json maps URL patterns to action endpoints
+  app.get("/actions.json", async (_request, reply) => {
+    void reply.header("Access-Control-Allow-Origin", "*");
+    return {
+      rules: [
+        { pathPattern: "/api/manage/actions/deposit**", apiPath: "/api/manage/actions/deposit**" },
+        { pathPattern: "/api/manage/actions/withdraw**", apiPath: "/api/manage/actions/withdraw**" },
+      ],
+    };
+  });
 
   return app;
 }

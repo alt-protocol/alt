@@ -46,6 +46,12 @@ export interface OpportunityMapEntry {
   first_token: string | null;
 }
 
+export interface ShieldWarning {
+  type: string;
+  message: string;
+  severity: "info" | "warning";
+}
+
 export interface SearchYieldsParams {
   category?: string;
   tokens?: string;
@@ -81,6 +87,7 @@ export interface YieldListItem {
   protocol_url: string | null;
   updated_at: Date | null;
   peg_stability: PegStabilityData | null;
+  token_warnings: ShieldWarning[] | null;
 }
 
 export interface SearchYieldsResult {

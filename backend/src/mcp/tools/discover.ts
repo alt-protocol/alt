@@ -1,14 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { discoverService } from "../../discover/service.js";
-import { logger } from "../../shared/logger.js";
-
-function mcpError(message: string) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }],
-    isError: true,
-  };
-}
+import { withToolHandler, toolResult, mcpError } from "./utils.js";
 
 export function registerDiscoverTools(server: McpServer) {
   server.tool(
@@ -42,25 +35,16 @@ export function registerDiscoverTools(server: McpServer) {
         .default(10)
         .describe("Max results to return (default: 10, max: 50)"),
     },
-    async (args) => {
-      try {
-        const result = await discoverService.searchYields({
-          category: args.category,
-          tokens: args.tokens,
-          stablecoins_only: args.stablecoins_only,
-          sort: args.sort,
-          limit: args.limit,
-        });
-
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Search failed";
-        logger.error({ err }, "MCP search_yields failed");
-        return mcpError(message);
-      }
-    },
+    withToolHandler("search_yields", async (args) => {
+      const result = await discoverService.searchYields({
+        category: args.category,
+        tokens: args.tokens,
+        stablecoins_only: args.stablecoins_only,
+        sort: args.sort,
+        limit: args.limit,
+      });
+      return toolResult(result);
+    }),
   );
 
   server.tool(
@@ -73,20 +57,11 @@ export function registerDiscoverTools(server: McpServer) {
         .positive()
         .describe("The yield opportunity ID"),
     },
-    async (args) => {
-      try {
-        const opp = await discoverService.getOpportunityById(args.opportunity_id);
-        if (!opp) return mcpError("Opportunity not found");
-
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(opp, null, 2) }],
-        };
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Failed to get yield details";
-        logger.error({ err }, "MCP get_yield_details failed");
-        return mcpError(message);
-      }
-    },
+    withToolHandler("get_yield_details", async (args) => {
+      const opp = await discoverService.getOpportunityById(args.opportunity_id);
+      if (!opp) return mcpError("Opportunity not found");
+      return toolResult(opp);
+    }),
   );
 
   server.tool(
@@ -104,37 +79,20 @@ export function registerDiscoverTools(server: McpServer) {
         .default("7d")
         .describe("Time period (default: 7d)"),
     },
-    async (args) => {
-      try {
-        const result = await discoverService.getYieldHistory(args.opportunity_id, args.period);
-        if (!result) return mcpError("Opportunity not found");
-
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Failed to get yield history";
-        logger.error({ err }, "MCP get_yield_history failed");
-        return mcpError(message);
-      }
-    },
+    withToolHandler("get_yield_history", async (args) => {
+      const result = await discoverService.getYieldHistory(args.opportunity_id, args.period);
+      if (!result) return mcpError("Opportunity not found");
+      return toolResult(result);
+    }),
   );
 
   server.tool(
     "get_protocols",
     "List all supported DeFi protocols with their audit status and integration details.",
     {},
-    async () => {
-      try {
-        const result = await discoverService.getProtocols();
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Failed to get protocols";
-        logger.error({ err }, "MCP get_protocols failed");
-        return mcpError(message);
-      }
-    },
+    withToolHandler("get_protocols", async () => {
+      const result = await discoverService.getProtocols();
+      return toolResult(result);
+    }),
   );
 }

@@ -2,16 +2,36 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useSelectedWalletAccount } from "@solana/react";
 import { api } from "@/lib/api";
-import type { UserPositionOut } from "@/lib/api";
+import type { UserPositionOut, PortfolioAnalytics } from "@/lib/api";
 import { fmtDate } from "@/lib/format";
 import { queryKeys } from "@/lib/queryKeys";
-import { STABLECOIN_SYMBOLS } from "@/lib/constants";
 
 export interface ChartPoint {
   date: string;
   value: number | null;
   pnl: number | null;
 }
+
+const EMPTY_SUMMARY: PortfolioAnalytics["summary"] = {
+  total_value_usd: 0,
+  total_pnl_usd: 0,
+  total_initial_deposit_usd: 0,
+  roi_pct: 0,
+  weighted_apy: 0,
+  weighted_apy_realized: 0,
+  projected_yield_yearly_usd: 0,
+  position_count: 0,
+};
+
+const EMPTY_STABLECOIN: PortfolioAnalytics["stablecoin"] = {
+  total_usd: 0,
+  idle_usd: 0,
+  allocated_usd: 0,
+  allocation_pct: 0,
+  apy_total: 0,
+  apy_allocated: 0,
+  idle_balances: [],
+};
 
 export function usePortfolioData() {
   const [selectedAccount] = useSelectedWalletAccount();
@@ -58,9 +78,9 @@ export function usePortfolioData() {
     enabled: !!walletAddress && activeTab === "history",
   });
 
-  const portfolioQuery = useQuery({
-    queryKey: queryKeys.wallet.portfolio(walletAddress!),
-    queryFn: () => api.getPortfolio(walletAddress!),
+  const analyticsQuery = useQuery({
+    queryKey: queryKeys.wallet.analytics(walletAddress!),
+    queryFn: () => api.getPortfolioAnalytics(walletAddress!),
     enabled: !!walletAddress,
     refetchInterval: 60_000,
     staleTime: 30_000,
@@ -72,6 +92,7 @@ export function usePortfolioData() {
     if (prevFetchStatus.current !== "ready" && status === "ready") {
       positionsQuery.refetch();
       historyQuery.refetch();
+      analyticsQuery.refetch();
     }
     prevFetchStatus.current = status;
   }, [statusQuery.data?.fetch_status]);
@@ -89,19 +110,9 @@ export function usePortfolioData() {
 
   const visiblePositions = activeType === "all" ? positions : (byType[activeType] ?? []);
 
-  const summary = useMemo(() => {
-    const totalValue = positions.reduce((sum, p) => sum + (p.deposit_amount_usd ?? 0), 0);
-    const totalPnlUsd = positions.reduce((sum, p) => sum + (p.pnl_usd ?? 0), 0);
-    const totalInitialDeposit = positions.reduce((sum, p) => sum + (p.initial_deposit_usd ?? 0), 0);
-    const roi = totalInitialDeposit > 0 ? (totalPnlUsd / totalInitialDeposit) * 100 : 0;
-    const weightedApy = totalValue > 0
-      ? positions.reduce((sum, p) => sum + (p.apy ?? 0) * (p.deposit_amount_usd ?? 0), 0) / totalValue
-      : 0;
-    const weightedApyRealized = totalValue > 0
-      ? positions.reduce((sum, p) => sum + (p.apy_realized ?? 0) * (p.deposit_amount_usd ?? 0), 0) / totalValue
-      : 0;
-    return { totalValue, totalPnlUsd, roi, weightedApy, weightedApyRealized, count: positions.length };
-  }, [positions]);
+  const summary = analyticsQuery.data?.summary ?? EMPTY_SUMMARY;
+  const stableSummary = analyticsQuery.data?.stablecoin ?? EMPTY_STABLECOIN;
+  const diversification = analyticsQuery.data?.diversification ?? null;
 
   const chartData: ChartPoint[] = useMemo(() => {
     if (!historyQuery.data) return [];
@@ -111,32 +122,6 @@ export function usePortfolioData() {
       pnl: pt.pnl_usd,
     }));
   }, [historyQuery.data]);
-
-  const stableSummary = useMemo(() => {
-    const idleBalances = (portfolioQuery.data?.positions ?? [])
-      .filter((p) => p.is_stablecoin && p.ui_amount > 0)
-      .sort((a, b) => b.ui_amount - a.ui_amount);
-
-    const idle = idleBalances.reduce((sum, p) => sum + p.ui_amount, 0);
-
-    const stablePositions = positions.filter(
-      (p) => p.token_symbol && STABLECOIN_SYMBOLS.has(p.token_symbol),
-    );
-    const allocated = stablePositions.reduce(
-      (sum, p) => sum + (p.deposit_amount_usd ?? 0), 0,
-    );
-
-    const total = idle + allocated;
-    const allocationPct = total > 0 ? (allocated / total) * 100 : 0;
-
-    const aprAllocated = allocated > 0
-      ? stablePositions.reduce((sum, p) => sum + (p.apy ?? 0) * (p.deposit_amount_usd ?? 0), 0) / allocated
-      : 0;
-
-    const aprTotal = total > 0 ? (aprAllocated * allocated) / total : 0;
-
-    return { total, idle, allocated, allocationPct, aprTotal, aprAllocated, idleBalances };
-  }, [portfolioQuery.data, positions]);
 
   const showSyncing = positionsQuery.isSuccess && positions.length === 0 && statusQuery.data?.fetch_status === "fetching";
 
@@ -155,11 +140,13 @@ export function usePortfolioData() {
     positionsQuery,
     historyQuery,
     eventsQuery,
+    analyticsQuery,
     positions,
     byType,
     visiblePositions,
     summary,
     stableSummary,
+    diversification,
     chartData,
     showSyncing,
     shortAddr,

@@ -739,8 +739,8 @@ async function fetchObligationPositions(
         pnlUsd = 0;
         pnlPct = 0;
         initialDepositUsd = netValue;
-        openedAt = null;
-        heldDays = null;
+        openedAt = now;
+        heldDays = 0;
       }
 
       const apy = resolveForwardApy(

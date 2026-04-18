@@ -4,6 +4,7 @@ import type { Instruction } from "@solana/kit";
 export interface BuildTxResultWithLookups {
   instructions: Instruction[];
   lookupTableAddresses: string[];
+  metadata?: Record<string, unknown>;
 }
 
 /** Extended result with setup transactions (e.g. Kamino Multiply user LUT creation). */

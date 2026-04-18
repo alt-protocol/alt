@@ -8,7 +8,7 @@ npm run db:push  # drizzle-kit push
 npm run db:pull  # drizzle-kit pull
 npm test         # vitest — run all tests (requires Docker Postgres)
 npm run test:watch  # vitest watch mode
-npm run mcp      # start MCP server over stdio
+                 # MCP endpoint at /api/mcp (Streamable HTTP, no separate process)
 ```
 
 ## Architecture

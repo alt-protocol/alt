@@ -3,9 +3,13 @@ import { buildTransaction } from "../services/tx-builder.js";
 import { simulateTransaction } from "../services/tx-preview.js";
 import { discoverService } from "../../discover/service.js";
 import { getAdapter } from "../protocols/index.js";
+import { getMultiplyStats } from "../protocols/kamino.js";
+import { getJupiterMultiplyStats } from "../protocols/jupiter.js";
 import { authHook } from "../../shared/auth.js";
 import { logger } from "../../shared/logger.js";
-import { BuildTxBody, SubmitTxBody, BalanceBody, WithdrawStateBody } from "./schemas.js";
+import { BuildTxBody, SubmitTxBody, BalanceBody, WalletBalanceBody, WithdrawStateBody } from "./schemas.js";
+import { fetchWalletBalance } from "../services/wallet-balance.js";
+import { cachedAsync } from "../../shared/utils.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -104,6 +108,21 @@ export async function txRoutes(app: FastifyInstance) {
     },
   );
 
+  // POST /wallet-balance — on-chain wallet token balance (cached 15s server-side)
+  app.post(
+    "/wallet-balance",
+    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const body = WalletBalanceBody.parse(request.body);
+      const balance = await cachedAsync(
+        `wallet_bal_${body.wallet_address}_${body.mint}`,
+        15_000,
+        () => fetchWalletBalance(body.wallet_address, body.mint),
+      );
+      return reply.send({ balance });
+    },
+  );
+
   // POST /balance — fetch protocol-specific vault/position balance
   app.post(
     "/balance",
@@ -157,6 +176,27 @@ export async function txRoutes(app: FastifyInstance) {
       });
 
       return reply.send(state);
+    },
+  );
+
+  // POST /tx/position-stats — on-chain multiply position stats
+  app.post(
+    "/tx/position-stats",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const body = BalanceBody.parse(request.body);
+
+      const opp = await discoverService.getOpportunityById(body.opportunity_id);
+      if (!opp?.extra_data || opp.category !== "multiply") {
+        return reply.send(null);
+      }
+
+      const extra = { ...(opp.extra_data as Record<string, unknown>), ...body.extra_data };
+      const stats = opp.protocol?.slug === "jupiter"
+        ? await getJupiterMultiplyStats(body.wallet_address, extra)
+        : await getMultiplyStats(body.wallet_address, extra);
+
+      return reply.send(stats);
     },
   );
 }

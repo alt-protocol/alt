@@ -1,0 +1,31 @@
+{
+  "name": "akashi-telegram-bot",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "db:push": "drizzle-kit push"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^1.0.0",
+    "@ai-sdk/google": "^1.0.0",
+    "@ai-sdk/openai": "^1.0.0",
+    "@grammyjs/parse-mode": "^2.3.0",
+    "@grammyjs/runner": "^2.0.3",
+    "ai": "^4.0.0",
+    "dotenv": "^17.4.1",
+    "drizzle-orm": "^0.38.4",
+    "grammy": "^1.30.0",
+    "pg": "^8.13.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "drizzle-kit": "^0.30.4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

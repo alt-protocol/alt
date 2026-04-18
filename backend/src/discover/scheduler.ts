@@ -7,11 +7,14 @@ import { fetchKaminoYields } from "./services/kamino-fetcher.js";
 import { fetchDriftYields } from "./services/drift-fetcher.js";
 import { fetchJupiterYields } from "./services/jupiter-fetcher.js";
 import { fetchStablecoinPrices } from "./services/stablecoin-price-fetcher.js";
+import { fetchShieldWarnings } from "./services/shield-warning-fetcher.js";
+import { fetchExponentYields } from "./services/exponent-fetcher.js";
 
 const FETCHERS = [
   { name: "kamino", fn: fetchKaminoYields },
   { name: "drift", fn: fetchDriftYields },
   { name: "jupiter", fn: fetchJupiterYields },
+  { name: "exponent", fn: fetchExponentYields },
   { name: "stablecoin-prices", fn: fetchStablecoinPrices },
 ];
 
@@ -55,6 +58,13 @@ export function startScheduler() {
     tasks.push(task);
   }
 
+  // Shield warnings — every 6 hours
+  const shieldFetcher = { name: "shield-warnings", fn: fetchShieldWarnings };
+  const shieldTask = cron.schedule("0 */6 * * *", () => {
+    void runFetcher(shieldFetcher);
+  });
+  tasks.push(shieldTask);
+
   // Daily retention — delete old snapshots
   const retentionTask = cron.schedule("0 4 * * *", async () => {
     try {
@@ -91,5 +101,7 @@ async function runAllFetchers() {
   for (const fetcher of FETCHERS) {
     await runFetcher(fetcher);
   }
+  // Shield warnings after main fetchers (needs underlying_tokens populated)
+  await runFetcher({ name: "shield-warnings", fn: fetchShieldWarnings });
   logger.info("Initial yield fetch complete");
 }

@@ -43,6 +43,12 @@ export interface PegStability {
   liquidity_usd: number | null;
 }
 
+export interface ShieldWarning {
+  type: string;
+  message: string;
+  severity: "info" | "warning";
+}
+
 export interface YieldOpportunity {
   id: number;
   protocol_id: number;
@@ -68,6 +74,7 @@ export interface YieldOpportunity {
   protocol_url: string | null;
   updated_at: string | null;
   peg_stability: PegStability | null;
+  token_warnings: ShieldWarning[] | null;
 }
 
 export interface YieldOpportunityDetail extends YieldOpportunity {
@@ -122,6 +129,39 @@ export interface UserPositionOut {
   lock_period_days: number;
   extra_data: Record<string, unknown> | null;
   snapshot_at: string;
+}
+
+export interface DistributionItem {
+  label: string;
+  value_usd: number;
+  pct: number;
+}
+
+export interface PortfolioAnalytics {
+  summary: {
+    total_value_usd: number;
+    total_pnl_usd: number;
+    total_initial_deposit_usd: number;
+    roi_pct: number;
+    weighted_apy: number;
+    weighted_apy_realized: number;
+    projected_yield_yearly_usd: number;
+    position_count: number;
+  };
+  stablecoin: {
+    total_usd: number;
+    idle_usd: number;
+    allocated_usd: number;
+    allocation_pct: number;
+    apy_total: number;
+    apy_allocated: number;
+    idle_balances: Array<{ mint: string; symbol: string | null; ui_amount: number }>;
+  };
+  diversification: {
+    by_protocol: DistributionItem[];
+    by_category: DistributionItem[];
+    by_token: DistributionItem[];
+  };
 }
 
 export interface UserPositionHistoryPoint {
@@ -202,6 +242,14 @@ export const api = {
     };
   })(),
 
+  /** Sync a single position to Monitor DB after transaction. No throttle. */
+  syncPosition: (wallet: string, opportunityId: number, metadata?: Record<string, unknown>) =>
+    fetch(`${API_URL}/api/monitor/portfolio/${wallet}/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ opportunity_id: opportunityId, metadata }),
+    }).then(r => r.json()).catch(() => {}),
+
   getPositions: (wallet: string, params?: { protocol?: string; product_type?: string }) => {
     const qs = new URLSearchParams(
       Object.fromEntries(Object.entries(params ?? {}).filter(([, v]) => v != null) as [string, string][])
@@ -219,6 +267,9 @@ export const api = {
 
   getPositionEvents: (wallet: string) =>
     apiFetch<UserPositionEventOut[]>(`/api/monitor/portfolio/${wallet}/events`),
+
+  getPortfolioAnalytics: (wallet: string) =>
+    apiFetch<PortfolioAnalytics>(`/api/monitor/portfolio/${wallet}/analytics`),
 
   // --- Manage module ---
   buildDeposit: (params: {
@@ -240,8 +291,23 @@ export const api = {
   getBalance: (params: { opportunity_id: number; wallet_address: string }) =>
     apiPost<{ balance: number | null }>("/api/manage/balance", params),
 
+  getWalletBalance: (params: { wallet_address: string; mint: string }) =>
+    apiPost<{ balance: number }>("/api/manage/wallet-balance", params),
+
   getWithdrawState: (params: { opportunity_id: number; wallet_address: string }) =>
     apiPost<WithdrawState | null>("/api/manage/withdraw-state", params),
+
+  getPositionStats: (params: { opportunity_id: number; wallet_address: string }) =>
+    apiPost<{
+      balance: number;
+      leverage: number;
+      ltv: number;
+      liquidationLtv: number;
+      totalDepositUsd: number;
+      totalBorrowUsd: number;
+      borrowLimit: number;
+      healthFactor: number;
+    } | null>("/api/manage/tx/position-stats", params),
 
   // --- Health ---
   getHealth: () =>

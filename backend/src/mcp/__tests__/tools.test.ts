@@ -33,6 +33,8 @@ afterAll(async () => {
 
 const DUMMY_WALLET = "11111111111111111111111111111111";
 const BAD_OPPORTUNITY_ID = 99999;
+const FAKE_MINT_1 = "FakeMint11111111111111111111111111111111111";
+const FAKE_MINT_2 = "FakeMint22222222222222222222222222222222222";
 
 /** Call a tool and parse the JSON text content from the response. */
 async function callTool(name: string, args: Record<string, unknown> = {}) {
@@ -226,8 +228,8 @@ describe("Manage tools", () => {
 
   it("get_swap_quote — handles invalid mints gracefully", async () => {
     const { parsed, isError } = await callTool("get_swap_quote", {
-      input_mint: "invalidmint111111111111111111111",
-      output_mint: "invalidmint222222222222222222222",
+      input_mint: "FakeMint11111111111111111111111111111111111",
+      output_mint: "FakeMint22222222222222222222222222222222222",
       amount: "1000000",
       taker: DUMMY_WALLET,
     });
@@ -258,8 +260,8 @@ describe("Manage tools", () => {
   it("build_swap_tx — handles invalid params gracefully", async () => {
     const { parsed, isError } = await callTool("build_swap_tx", {
       wallet_address: DUMMY_WALLET,
-      input_mint: "invalidmint111111111111111111111",
-      output_mint: "invalidmint222222222222222222222",
+      input_mint: "FakeMint11111111111111111111111111111111111",
+      output_mint: "FakeMint22222222222222222222222222222222222",
       amount: "1000000",
     });
     expect(isError).toBe(true);

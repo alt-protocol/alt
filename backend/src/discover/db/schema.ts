@@ -80,6 +80,17 @@ export const yieldOpportunities = discoverSchema.table(
 );
 
 // ---------------------------------------------------------------------------
+// token_warnings — Jupiter Shield warnings per mint (normalized)
+// ---------------------------------------------------------------------------
+export const tokenWarnings = discoverSchema.table("token_warnings", {
+  id: serial("id").primaryKey(),
+  mint: varchar("mint", { length: 64 }).unique().notNull(),
+  warnings: jsonb("warnings").notNull(), // ShieldWarning[]
+  fetched_at: timestamp("fetched_at").notNull(),
+  updated_at: timestamp("updated_at").defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
 // yield_snapshots
 // ---------------------------------------------------------------------------
 export const yieldSnapshots = discoverSchema.table(

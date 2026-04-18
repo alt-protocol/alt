@@ -21,10 +21,13 @@ import type {
   PegStabilityData,
   SearchYieldsParams,
   SearchYieldsResult,
+  ShieldWarning,
+  UnderlyingToken,
 } from "../shared/types.js";
 import { numOrNull } from "../shared/utils.js";
 import { STABLECOIN_SYMBOLS } from "../shared/constants.js";
 import { getPegStatsMap } from "./services/peg-stats-cache.js";
+import { getShieldWarningsMap } from "./services/shield-warnings-cache.js";
 
 export const discoverService: DiscoverService = {
   async getOpportunityById(id: number): Promise<OpportunityDetail | null> {
@@ -123,7 +126,10 @@ export const discoverService: DiscoverService = {
         orderBy = sql`${yieldOpportunities.apy_current} DESC NULLS LAST`;
     }
 
-    const pegMap = await getPegStatsMap();
+    const [pegMap, shieldMap] = await Promise.all([
+      getPegStatsMap(),
+      getShieldWarningsMap(),
+    ]);
 
     const rows = await db
       .select({
@@ -186,6 +192,23 @@ export const discoverService: DiscoverService = {
         protocol_url: (extra?.protocol_url as string) ?? null,
         updated_at: o.updated_at,
         peg_stability: pegStability,
+        token_warnings: (() => {
+          const ut = o.underlying_tokens as UnderlyingToken[] | null;
+          if (!ut) return null;
+          const seen = new Set<string>();
+          const warnings: ShieldWarning[] = [];
+          for (const t of ut) {
+            if (t.mint && shieldMap.has(t.mint)) {
+              for (const w of shieldMap.get(t.mint)!) {
+                if (!seen.has(w.type)) {
+                  seen.add(w.type);
+                  warnings.push(w);
+                }
+              }
+            }
+          }
+          return warnings.length > 0 ? warnings : null;
+        })(),
       };
     });
 

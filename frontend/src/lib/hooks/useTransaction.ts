@@ -105,23 +105,25 @@ export function useTransaction(
         }
 
         /* Phase 2: Main transaction */
-        const { value: latestBlockhash } = await rpc.getLatestBlockhash().send();
-
         setStatus("signing");
+
+        // Fetch blockhash + ALT data in parallel (independent RPC calls → halves latency)
+        const altAddresses = lookupTableAddresses.length > 0
+          ? lookupTableAddresses.map((a) => address(a))
+          : [];
+
+        const [{ value: latestBlockhash }, lookups] = await Promise.all([
+          rpc.getLatestBlockhash().send(),
+          altAddresses.length > 0
+            ? fetchAddressesForLookupTables(altAddresses, rpc)
+            : Promise.resolve({} as Awaited<ReturnType<typeof fetchAddressesForLookupTables>>),
+        ]);
 
         let message = buildTransactionMessage(signer, latestBlockhash, instructions);
 
-        if (lookupTableAddresses.length > 0) {
-          // Fetch ALTs individually — external sources can return stale addresses
-          const altAddresses = lookupTableAddresses.map((a) => address(a));
-          let lookups = await fetchAddressesForLookupTables([], rpc); // empty seed for type
-          for (const alt of altAddresses) {
-            try {
-              const result = await fetchAddressesForLookupTables([alt], rpc);
-              lookups = { ...lookups, ...result };
-            } catch {
-              // Skip missing ALTs
-            }
+        if (altAddresses.length > 0) {
+          if (Object.keys(lookups).length === 0) {
+            throw new Error("Failed to load address lookup tables. Please try again.");
           }
           message = compressTransactionMessageUsingAddressLookupTables(message, lookups) as typeof message;
         }

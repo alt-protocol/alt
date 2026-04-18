@@ -48,7 +48,9 @@ export async function getWithRetry(
       }
 
       if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+        let body = "";
+        try { body = await resp.text(); } catch {}
+        throw new Error(`HTTP ${resp.status}: ${resp.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`);
       }
       return await resp.json();
     } catch (err) {
@@ -76,24 +78,48 @@ export async function getOrNull(
 export async function postJson(
   url: string,
   body: unknown,
-  options?: { timeout?: number },
+  options?: { timeout?: number; headers?: Record<string, string> },
 ): Promise<unknown> {
   const timeout = options?.timeout ?? DEFAULT_TIMEOUT;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
+  const payload = JSON.stringify(body);
+  let rateLimitRetries = 0;
 
-  try {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
-    return await resp.json();
-  } catch (err) {
-    clearTimeout(timer);
-    throw err;
+  for (let attempt = 1; attempt <= MAX_RETRIES + MAX_429_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...options?.headers },
+        body: payload,
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (resp.status === 429 && rateLimitRetries < MAX_429_RETRIES) {
+        rateLimitRetries++;
+        const retryAfter = Number(resp.headers.get("Retry-After") || 2);
+        const delay = Math.min(retryAfter * 1000, 5000);
+        logger.warn({ url: url.split("?")[0], attempt, delay }, "POST rate limited (429), retrying");
+        await wait(delay);
+        continue;
+      }
+
+      if (resp.status >= 500 && attempt < MAX_RETRIES) {
+        const delay = Math.min(1000 * 2 ** (attempt - 1), 10_000);
+        await wait(delay);
+        continue;
+      }
+
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+      return await resp.json();
+    } catch (err) {
+      clearTimeout(timer);
+      if (attempt >= MAX_RETRIES + rateLimitRetries) throw err;
+      const delay = Math.min(1000 * 2 ** (attempt - 1), 10_000);
+      await wait(delay);
+    }
   }
+  throw new Error("unreachable");
 }

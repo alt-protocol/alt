@@ -26,6 +26,7 @@ export interface SerializedBuildResult {
   instructions: SerializableInstruction[];
   lookupTableAddresses?: string[];
   setupInstructionSets?: SerializableInstruction[][];
+  metadata?: Record<string, unknown>;
 }
 
 /** Serialize any BuildTxResult variant to JSON-safe format. */
@@ -46,6 +47,10 @@ export function serializeResult(result: BuildTxResult): SerializedBuildResult {
     base.setupInstructionSets = result.setupInstructionSets.map((set) =>
       set.map(serializeInstruction),
     );
+  }
+
+  if (isBuildTxResultWithLookups(result) && result.metadata) {
+    base.metadata = result.metadata;
   }
 
   return base;

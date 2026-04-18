@@ -25,6 +25,13 @@ export function fmtUsd(n: number | null | undefined): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n!);
 }
 
+export function fmtPnlUsd(n: number | null | undefined): string {
+  if (bad(n)) return "\u2014";
+  if (n! > 0 && n! < 0.01) return "<$0.01";
+  if (n! < 0 && n! > -0.01) return ">-$0.01";
+  return fmtUsd(n);
+}
+
 export function fmtPct(n: number | null | undefined): string {
   if (bad(n)) return "\u2014";
   const sign = n! > 0 ? "+" : "";
@@ -105,13 +112,6 @@ export function fmtVolatility(n: number | null | undefined): string {
   return `${n!.toFixed(4)}%`;
 }
 
-export function fmtDepthUsd(n: number | null | undefined): string {
-  if (bad(n)) return "\u2014";
-  if (n! >= 1_000_000) return `$${(n! / 1_000_000).toFixed(1)}M`;
-  if (n! >= 1_000) return `$${(n! / 1_000).toFixed(0)}K`;
-  return `$${n!.toFixed(0)}`;
-}
-
 export function pegColor(adherence: number | null | undefined): string {
   if (bad(adherence)) return "text-foreground-muted";
   if (adherence! >= 99.5) return "text-neon";
@@ -120,25 +120,29 @@ export function pegColor(adherence: number | null | undefined): string {
   return "text-red-400";
 }
 
-export function pegColorByDeviation(maxDev: number | null | undefined): string {
-  if (bad(maxDev)) return "text-foreground-muted";
-  if (maxDev! < 0.1) return "text-neon";
-  if (maxDev! < 0.5) return "text-foreground";
-  if (maxDev! < 1.0) return "text-yellow-400";
-  return "text-red-400";
-}
-
-/** Color by price range spread width — works for all token types */
-export function rangeSpreadColor(min: number | null | undefined, max: number | null | undefined): string {
-  if (bad(min) || bad(max) || min! <= 0) return "text-foreground-muted";
+export function fmtSpread(min: number | null | undefined, max: number | null | undefined): string {
+  if (bad(min) || bad(max) || min! <= 0) return "\u2014";
   const spread = (max! - min!) / min! * 100;
-  if (spread < 0.05) return "text-neon";
-  if (spread < 0.2) return "text-foreground";
-  if (spread < 1.0) return "text-yellow-400";
-  return "text-red-400";
+  return `${spread.toFixed(2)}%`;
 }
 
 export function fmtPriceRange(min: number | null | undefined, max: number | null | undefined): string {
   if (bad(min) || bad(max)) return "\u2014";
   return `$${min!.toFixed(4)}\u2013$${max!.toFixed(4)}`;
+}
+
+const SHIELD_LABELS: Record<string, string> = {
+  NOT_VERIFIED: "Unverified",
+  LOW_ORGANIC_ACTIVITY: "Low activity",
+  NEW_LISTING: "New listing",
+  HAS_FREEZE_AUTHORITY: "Freezable",
+  HAS_MINT_AUTHORITY: "Mintable",
+  HAS_PERMANENT_DELEGATE: "Permanent delegate",
+  NOT_SELLABLE: "Not sellable",
+  LOW_LIQUIDITY: "Low liquidity",
+  HIGH_SINGLE_OWNERSHIP: "Concentrated",
+};
+
+export function fmtShieldWarning(type: string): string {
+  return SHIELD_LABELS[type] ?? type;
 }

@@ -152,6 +152,7 @@ export default function WalletButton({ variant = "header" }: WalletButtonProps) 
       {open && (
         <WalletModal
           filteredWallets={filteredWallets}
+          allWallets={allWallets}
           onConnected={handleConnected}
           onClose={() => setOpen(false)}
         />

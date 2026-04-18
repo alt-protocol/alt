@@ -125,6 +125,8 @@ const KNOWN_PROGRAMS = new Set([
   "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", // Jupiter V6
   "jupaEfBGhvYvpGo99zScFXCAW4yJpQjTFY9o1hiYLEM", // Jupiter Lend Router
   "jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9", // Jupiter Lend Protocol
+  "jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi", // Jupiter Vaults (Multiply)
+  "jupgfSgfuAXv4B6R2Uxu85Z1qdzgju79s6MfZekN6XS", // Jupiter Lend Flashloan
   // KSwap / DEX routing
   "KSwapzXNkf3JBhUeRjn9xbA3W2Y3LUoNhKSfb1Bvmi", // KSwap
   "9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP", // Orca
@@ -132,6 +134,8 @@ const KNOWN_PROGRAMS = new Set([
   "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK", // Raydium CLAMM
   "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8", // Raydium AMM
   "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo", // Meteora DLMM
+  // Kamino utility
+  "HFn8GnPADiny6XqUoWE8uRPPxb29ikn4yTuPa9MF2fWJ", // Kamino Farms v2
 ]);
 
 /**
