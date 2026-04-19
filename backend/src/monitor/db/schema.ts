@@ -64,6 +64,7 @@ export const userPositions = monitorSchema.table(
     index("idx_up_wallet_snap").on(t.wallet_address, t.snapshot_at),
     index("idx_up_wallet_ext").on(t.wallet_address, t.external_id),
     index("idx_up_wallet_proto").on(t.wallet_address, t.protocol_slug),
+    index("idx_up_snapshot_at").on(t.snapshot_at),
   ],
 );
 

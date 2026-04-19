@@ -13,12 +13,13 @@ interface RecentAction {
   timestamp: number;
 }
 
-/** Compose full system prompt from SOUL + user context. */
+/** Compose full system prompt from SOUL + user context + conversation summary. */
 export function composeSystemPrompt(
   soul: string,
   user: UserInfo,
   context: UserContext,
   recentAction?: RecentAction | null,
+  conversationSummary?: string,
 ): string {
   let prompt = soul + "\n\n";
 
@@ -44,47 +45,24 @@ export function composeSystemPrompt(
     for (const m of capped) {
       prompt += `- ${m.fact}\n`;
     }
-    if (context.memories.length > config.maxPromptMemories) {
-      prompt += `(${context.memories.length - config.maxPromptMemories} older memories available)\n`;
-    }
   }
 
-  // Portfolio summary (not full positions — use get_portfolio tool for details)
-  const portfolio = context.portfolio as Record<string, unknown> | null;
-  const summary = portfolio?.summary as Record<string, unknown> | undefined;
-  const positions = (portfolio?.positions ?? []) as Array<Record<string, unknown>>;
-  if (summary && positions.length > 0) {
-    prompt += "\n## Portfolio Summary (live)\n";
-    prompt += `${summary.position_count ?? 0} positions totaling $${summary.total_value_usd ?? "?"} | PnL: $${summary.total_pnl_usd ?? "?"}\n`;
-    prompt += "Use the get_portfolio tool for full position details.\n";
-  }
-
-  // Wallet balances (top N meaningful)
-  const balancesData = context.balances as Record<string, unknown> | null;
-  const balances = (balancesData?.balances ?? []) as Array<Record<string, unknown>>;
-  if (balances.length > 0) {
-    const meaningful = balances
-      .filter((b) => Number(b.amount ?? 0) > 0)
-      .slice(0, config.maxWalletBalances);
-    if (meaningful.length > 0) {
-      prompt += "\n## Top Wallet Balances (live)\n";
-      for (const b of meaningful) {
-        prompt += `- ${b.symbol ?? b.mint}: ${b.amount}\n`;
-      }
-    }
-  }
-
-  // Dynamic rules (wallet + user_id injection only — all other rules in SOUL.md)
+  // Dynamic context
   prompt += "\n## Context\n";
   if (user.wallet_address) {
     prompt += `- The user's wallet address is ${user.wallet_address}. Use this automatically for portfolio/balance tools.\n`;
   }
   prompt += `- When using tools that require user_id, pass ${user.user_id}.\n`;
 
-  // Recent action outcome (so AI knows what happened after last confirm/cancel)
+  // Recent action outcome
   if (recentAction && Date.now() - recentAction.timestamp < 10 * 60 * 1000) {
     const agoMin = Math.round((Date.now() - recentAction.timestamp) / 60_000);
     prompt += `\n## Recent Action\nLast confirmed action (${agoMin}m ago): ${recentAction.summary}\n`;
+  }
+
+  // Conversation summary (1-liners with timestamps)
+  if (conversationSummary) {
+    prompt += "\n" + conversationSummary;
   }
 
   return prompt;

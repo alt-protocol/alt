@@ -9,6 +9,8 @@ interface InvalidateParams {
   walletAddress: string;
   opportunityId?: number;
   vaultAddress?: string;
+  /** Deposit token mint — used for cache-busted refetch after tx. */
+  mint?: string;
   /** Protocol metadata to store with the position (e.g. Jupiter nft_id). */
   metadata?: Record<string, unknown>;
 }
@@ -17,7 +19,7 @@ export function useInvalidateAfterTransaction() {
   const queryClient = useQueryClient();
 
   const invalidateAfterTx = useCallback(
-    async ({ walletAddress, opportunityId, vaultAddress, metadata }: InvalidateParams) => {
+    async ({ walletAddress, opportunityId, vaultAddress, mint, metadata }: InvalidateParams) => {
       // Critical refetches — await so UI has fresh blockchain data before re-enabling
       const critical: Promise<void>[] = [];
       // Invalidate all token balance queries for this wallet
@@ -44,15 +46,30 @@ export function useInvalidateAfterTransaction() {
       }
       await Promise.allSettled(critical);
 
+      // Cache-busted refetch — bypass backend 15s cache to get real on-chain balance
+      if (mint) {
+        setTimeout(async () => {
+          try {
+            const { balance } = await api.getWalletBalance({
+              wallet_address: walletAddress,
+              mint,
+              fresh: true,
+            });
+            queryClient.setQueryData(["tokenBalance", walletAddress, mint], balance);
+          } catch { /* optimistic holds, normal polling catches up */ }
+        }, 3000);
+      }
+
       // Sync the specific position to Monitor DB (fast: 1 RPC call + DB write)
-      // Then invalidate portfolio queries so the position appears immediately
+      // Awaited so DB is fresh before settling ends — optimistic update covers instant UX
       if (opportunityId) {
-        api.syncPosition(walletAddress, opportunityId, metadata).then(() => {
-          queryClient.invalidateQueries({ queryKey: queryKeys.positions.list(walletAddress) });
-          queryClient.invalidateQueries({ queryKey: queryKeys.positions.events(walletAddress) });
-          queryClient.invalidateQueries({ queryKey: ["positionHistory", walletAddress] });
-          queryClient.invalidateQueries({ queryKey: queryKeys.wallet.status(walletAddress) });
-        }).catch(() => {});
+        try {
+          await api.syncPosition(walletAddress, opportunityId, metadata);
+        } catch { /* optimistic holds, trackWallet will catch up */ }
+        queryClient.invalidateQueries({ queryKey: queryKeys.positions.list(walletAddress) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.positions.events(walletAddress) });
+        queryClient.invalidateQueries({ queryKey: ["positionHistory", walletAddress] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.wallet.status(walletAddress) });
       }
 
       // Full background re-fetch for all positions (fire-and-forget, slower)

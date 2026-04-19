@@ -15,7 +15,7 @@ let serverTransport: InstanceType<typeof InMemoryTransport>;
 beforeAll(async () => {
   [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
-  const server = createMcpServer();
+  const server = createMcpServer({ bearerToken: null, agentId: "test" });
   await server.connect(serverTransport);
 
   client = new Client({ name: "test-client", version: "1.0.0" });

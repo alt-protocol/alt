@@ -76,7 +76,7 @@ const getProtocols = tool({
 
 const getPortfolio = tool({
   description:
-    "Get DeFi portfolio positions for a wallet. Shows deposits, PnL, realized APY across Kamino, Drift, and Jupiter.",
+    "Get full portfolio: summary (ROI, APY, projected yield), all positions with PnL, idle wallet balances, and diversification. Use for any portfolio-related question.",
   parameters: z.object({
     wallet_address: z.string().describe("Solana wallet address (base58)"),
   }),
@@ -91,7 +91,16 @@ const getPortfolio = tool({
       await new Promise((r) => setTimeout(r, 500));
     }
 
-    return apiGet(`/api/monitor/portfolio/${wallet_address}/positions`);
+    // Fetch analytics + positions in parallel, merge for AI
+    const [analytics, positionsData] = await Promise.all([
+      apiGet(`/api/monitor/portfolio/${wallet_address}/analytics`),
+      apiGet(`/api/monitor/portfolio/${wallet_address}/positions`),
+    ]);
+
+    return {
+      ...(analytics as Record<string, unknown>),
+      positions: (positionsData as Record<string, unknown>)?.positions ?? [],
+    };
   },
 });
 
@@ -719,27 +728,21 @@ export async function executeMutatingTool(
 
 /** Tools the AI can call freely (read-only + mutation requests). */
 export const aiTools = {
-  // Discover (read-only)
+  // Discover
   search_yields: searchYields,
-  get_yield_details: getYieldDetails,
-  get_protocols: getProtocols,
-  // Monitor (read-only)
+  // Monitor
   get_portfolio: getPortfolio,
-  get_wallet_balances: getWalletBalances,
   get_position_history: getPositionHistory,
-  get_position_events: getPositionEvents,
   // Manage (read-only queries)
   get_swap_quote: getSwapQuote,
   get_balance: getBalance,
-  get_withdraw_state: getWithdrawState,
-  // Settings (read-only)
+  // Settings
   get_settings: getSettings,
-  // Bot
   get_usage: getUsage,
-  // Transaction tools (explicit schemas — AI sees every field)
+  // Transaction requests
   request_deposit: requestDeposit,
   request_withdraw: requestWithdraw,
   request_swap: requestSwap,
-  // Settings/wallet mutation gateway
+  // Settings mutation gateway
   request_action: requestAction,
 };

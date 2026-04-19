@@ -291,7 +291,7 @@ export const api = {
   getBalance: (params: { opportunity_id: number; wallet_address: string }) =>
     apiPost<{ balance: number | null }>("/api/manage/balance", params),
 
-  getWalletBalance: (params: { wallet_address: string; mint: string }) =>
+  getWalletBalance: (params: { wallet_address: string; mint: string; fresh?: boolean }) =>
     apiPost<{ balance: number }>("/api/manage/wallet-balance", params),
 
   getWithdrawState: (params: { opportunity_id: number; wallet_address: string }) =>

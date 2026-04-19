@@ -2,7 +2,7 @@ import { InlineKeyboard } from "grammy";
 import type { CommandContext, Context } from "grammy";
 import { eq, and, sql, sum } from "drizzle-orm";
 import { db } from "../db/connection.js";
-import { users, userPreferences, usage } from "../db/schema.js";
+import { users, userPreferences, usage, userMemories, conversations, pendingAlerts, alertCooldowns } from "../db/schema.js";
 import { encrypt } from "../crypto.js";
 import { config } from "../config.js";
 import { awaitingWallet } from "./state.js";
@@ -353,4 +353,34 @@ export async function handleUsage(ctx: CommandContext<Context>): Promise<void> {
       `Plan: <code>${plan}</code>`,
     { parse_mode: "HTML" },
   );
+}
+
+// ---------------------------------------------------------------------------
+// /reset — Clear all user data (for testing)
+// ---------------------------------------------------------------------------
+export async function handleReset(ctx: CommandContext<Context>): Promise<void> {
+  const telegramId = BigInt(ctx.from!.id);
+
+  const [user] = await db
+    .select()
+    .from(users)
+    .where(eq(users.telegram_id, telegramId))
+    .limit(1);
+
+  if (!user) {
+    await ctx.reply("Not registered. Run /start first.");
+    return;
+  }
+
+  await Promise.all([
+    db.delete(conversations).where(eq(conversations.user_id, user.id)),
+    db.delete(userMemories).where(eq(userMemories.user_id, user.id)),
+    db.delete(userPreferences).where(eq(userPreferences.user_id, user.id)),
+    db.delete(pendingAlerts).where(eq(pendingAlerts.user_id, user.id)),
+    db.delete(alertCooldowns).where(eq(alertCooldowns.user_id, user.id)),
+    db.delete(usage).where(eq(usage.user_id, user.id)),
+    db.update(users).set({ soul_notes: null }).where(eq(users.id, user.id)),
+  ]);
+
+  await ctx.reply("All data cleared. I'm treating you as a new user now. Wallet and API key are preserved.");
 }

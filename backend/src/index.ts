@@ -8,6 +8,15 @@ function validateEnv() {
   if (missing.length > 0) {
     throw new Error(`Missing required env vars: ${missing.join(", ")}`);
   }
+
+  const port = Number(process.env.PORT ?? 8001);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid PORT: ${process.env.PORT}`);
+  }
+
+  if (process.env.MANAGE_AUTH_DISABLED === "true" && process.env.NODE_ENV === "production") {
+    throw new Error("MANAGE_AUTH_DISABLED cannot be true in production");
+  }
 }
 
 async function main() {

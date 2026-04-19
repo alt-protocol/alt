@@ -1,13 +1,14 @@
 import { InlineKeyboard } from "grammy";
 import type { Context, Filter } from "grammy";
 import { eq, and, sql } from "drizzle-orm";
-import type { CoreMessage } from "ai";
+
 import { db } from "../db/connection.js";
 import { users, usage } from "../db/schema.js";
 import { encrypt } from "../crypto.js";
 import { chat } from "../ai.js";
 import { loadUserContext } from "../memory/memory-manager.js";
 import { composeSystemPrompt } from "../memory/prompt-composer.js";
+import { saveToolCalls } from "../memory/conversation-store.js";
 import { extractMemories, saveMemories } from "../memory/memory-extractor.js";
 import { saveConversationTurn } from "../memory/conversation-store.js";
 import { config } from "../config.js";
@@ -117,10 +118,27 @@ export async function handleMessage(
     }
   }
 
-  // 3. Load 3-layer context (memories + history + live portfolio)
-  const context = await loadUserContext(user.id, user.wallet_address);
+  // 3. Load context (memories + conversation summaries)
+  const context = await loadUserContext(user.id);
 
-  // 4. Compose system prompt from SOUL + context
+  // 4. Build conversation summary (1-liners with timestamps for system prompt)
+  const now = new Date();
+  let conversationSummary = "";
+  if (context.messages.length > 0) {
+    conversationSummary = "## Recent Conversation\n";
+    for (const m of context.messages) {
+      const agoMs = now.getTime() - m.created_at.getTime();
+      const agoMin = Math.round(agoMs / 60_000);
+      const timeLabel = agoMin < 60 ? `${agoMin}m ago` : agoMin < 1440 ? `${Math.round(agoMin / 60)}h ago` : `${Math.round(agoMin / 1440)}d ago`;
+      if (m.role === "tool_use") {
+        conversationSummary += `- [${timeLabel}] Called ${m.tool_name}\n`;
+      } else {
+        conversationSummary += `- [${timeLabel}] ${m.role}: ${m.content}\n`;
+      }
+    }
+  }
+
+  // 5. Compose system prompt from SOUL + context + conversation summary
   const systemPrompt = composeSystemPrompt(
     SOUL,
     {
@@ -131,24 +149,17 @@ export async function handleMessage(
     },
     context,
     lastActionResult.get(ctx.from!.id) ?? null,
+    conversationSummary,
   );
-
-  // 5. Build message history for AI
-  const history: CoreMessage[] = context.messages
-    .filter((m) => m.role === "user" || m.role === "assistant")
-    .map((m) => ({
-      role: m.role as "user" | "assistant",
-      content: m.content,
-    }));
 
   // 6. Send "typing" indicator
   await ctx.replyWithChatAction("typing");
 
-  // 7. Call AI
+  // 7. Call AI (only current message — history is summarized in system prompt)
   try {
     const result = await chat(
       systemPrompt,
-      [...history, { role: "user", content: userMessage }],
+      [{ role: "user", content: userMessage }],
       {
         api_provider: user.api_provider,
         api_key: user.api_key,
@@ -159,6 +170,13 @@ export async function handleMessage(
 
     // 8. Save conversation turn (with sliding window enforcement)
     await saveConversationTurn(user.id, userMessage, result.text);
+
+    // 8b. Save tool calls to conversation history (non-blocking)
+    if (result.toolCalls.length > 0) {
+      saveToolCalls(user.id, result.toolCalls).catch((err) =>
+        console.error("Failed to save tool calls:", err),
+      );
+    }
 
     // 9. Track usage (non-blocking, Drizzle upsert)
     const today = new Date().toISOString().slice(0, 10);

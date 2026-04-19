@@ -4,7 +4,7 @@ import { fileURLToPath } from "url";
 import { Bot } from "grammy";
 
 // Handler modules
-import { handleStart, handleConnect, handleSettings, handleSoul, handleUsage } from "./handlers/commands.js";
+import { handleStart, handleConnect, handleSettings, handleSoul, handleUsage, handleReset } from "./handlers/commands.js";
 import {
   handleSettingsProvider,
   handleSetProvider,
@@ -55,6 +55,7 @@ bot.command("connect", handleConnect);
 bot.command("settings", handleSettings);
 bot.command("soul", handleSoul);
 bot.command("usage", handleUsage);
+bot.command("reset", handleReset);
 
 // ---------------------------------------------------------------------------
 // Callback query handlers (inline keyboard buttons)

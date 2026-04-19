@@ -36,9 +36,10 @@ Output a JSON array: [{"fact": "...", "category": "preference|decision|strategy|
 
 Rules:
 - Only extract genuinely NEW information not already known
+- Check if any existing fact already captures this information, even if worded differently — skip semantic duplicates
 - Be concise — each fact should be one clear sentence
 - If nothing new worth remembering, output []
-- Do not extract transient data (current APY numbers, balances) — those change constantly
+- Do not extract transient data (current APY numbers, balances, position details) — those change constantly
 - Focus on user INTENT and PREFERENCES, not data they can look up
 
 Already known facts:
@@ -97,6 +98,9 @@ export async function saveMemories(
       fact,
       category,
       source: "auto" as const,
+      expires_at: category === "portfolio_note"
+        ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+        : null,
     })),
   );
 

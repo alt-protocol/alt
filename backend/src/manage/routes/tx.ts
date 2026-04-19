@@ -9,7 +9,7 @@ import { authHook } from "../../shared/auth.js";
 import { logger } from "../../shared/logger.js";
 import { BuildTxBody, SubmitTxBody, BalanceBody, WalletBalanceBody, WithdrawStateBody } from "./schemas.js";
 import { fetchWalletBalance } from "../services/wallet-balance.js";
-import { cachedAsync } from "../../shared/utils.js";
+import { cachedAsync, bustCacheKey } from "../../shared/utils.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -114,8 +114,10 @@ export async function txRoutes(app: FastifyInstance) {
     { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const body = WalletBalanceBody.parse(request.body);
+      const cacheKey = `wallet_bal_${body.wallet_address}_${body.mint}`;
+      if (body.fresh) bustCacheKey(cacheKey);
       const balance = await cachedAsync(
-        `wallet_bal_${body.wallet_address}_${body.mint}`,
+        cacheKey,
         15_000,
         () => fetchWalletBalance(body.wallet_address, body.mint),
       );

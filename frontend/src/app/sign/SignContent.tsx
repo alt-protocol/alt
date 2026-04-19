@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { useSelectedWalletAccount } from "@solana/react";
 import { getWalletAccountFeature } from "@wallet-standard/react-core";
+import { api } from "@/lib/api";
 import WalletButton from "@/components/WalletButton";
 
 interface ActionMetadata {
@@ -94,6 +95,15 @@ export default function SignContent() {
       const sigStr = getBase58Decoder().decode(result.signature);
       setSignature(sigStr);
       setStatus("submitted");
+
+      // Sync position to portfolio so it reflects immediately
+      try {
+        const url = new URL(actionUrl, window.location.origin);
+        const oppId = url.searchParams.get("opportunity_id");
+        if (oppId && selectedAccount) {
+          api.syncPosition(selectedAccount.address, parseInt(oppId, 10)).catch(() => {});
+        }
+      } catch { /* non-critical */ }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Signing failed";
       setError(msg.includes("User rejected") ? "Transaction rejected by user" : msg);

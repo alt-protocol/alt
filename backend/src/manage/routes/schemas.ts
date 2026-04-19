@@ -84,6 +84,7 @@ export const WalletBalanceBody = z.object({
   mint: z
     .string()
     .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "Invalid Solana mint address"),
+  fresh: z.boolean().optional(),
 });
 
 export const WithdrawStateBody = z.object({

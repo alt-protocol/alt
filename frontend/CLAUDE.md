@@ -16,7 +16,7 @@ npm run build  # PostToolUse hook validates after edits
 - `lib/format.ts` — all formatters (`fmtNum`, `fmtApy`, `fmtTvl`, `fmtUsd`, `fmtPct`, `fmtDays`, `fmtDate`, etc.). Return em-dash for null.
 - `lib/api.ts` — all API calls + response types (`YieldOpportunity`, `UserPositionOut`, etc.). Add endpoints here, never inline fetch.
 - `lib/categories/` — category registry + definitions. Never add category conditionals in components.
-- `lib/hooks/` — reusable hooks (`useTransaction`, `useYieldFilters`, `useTokenBalance`, `usePortfolioData`, etc.). Check before writing new state logic.
+- `lib/hooks/` — reusable hooks (`useTransaction`, `useOptimisticBalanceUpdate`, `useInvalidateAfterTransaction`, `useYieldFilters`, `useTokenBalance`, `usePortfolioData`, etc.). Check before writing new state logic.
 - `lib/rpc.ts` — shared Solana RPC singleton (`getRpc()`, `getRpcSubscriptions()`). Never create new RPC instances.
 - `lib/transaction-utils.ts` — `buildTransactionMessage`, `mapTxError`
 - `lib/instruction-converter.ts` — `convertLegacyInstruction`, `convertJupiterApiInstruction`

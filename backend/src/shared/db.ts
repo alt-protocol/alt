@@ -4,7 +4,7 @@ import { logger } from "./logger.js";
 
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
-  max: 20,
+  max: Number(process.env.DB_POOL_MAX ?? 5),
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
 });

@@ -16,6 +16,8 @@ import { usePositionBalance } from "@/lib/hooks/usePositionBalance";
 import { useTransaction } from "@/lib/hooks/useTransaction";
 import { usePositionForOpportunity } from "@/lib/hooks/usePositionForOpportunity";
 import { useInvalidateAfterTransaction } from "@/lib/hooks/useInvalidateAfterTransaction";
+import { useOptimisticBalanceUpdate } from "@/lib/hooks/useOptimisticBalanceUpdate";
+import type { TxOperation } from "@/lib/hooks/useOptimisticBalanceUpdate";
 import { useSlippage } from "@/lib/hooks/useSlippage";
 import DriftMaintenanceBanner from "./DriftMaintenanceBanner";
 import type { LeverageEntry } from "@/lib/multiply-utils";
@@ -98,6 +100,7 @@ function ConnectedMultiplyPanel({
   const signer = useWalletAccountTransactionSendingSigner(selectedAccount, "solana:mainnet");
 
   const invalidateAfterTx = useInvalidateAfterTransaction();
+  const applyOptimistic = useOptimisticBalanceUpdate();
   const { slippageBps, setSlippage } = useSlippage();
   const collSymbol = (extra?.collateral_symbol as string) ?? yield_.tokens[0] ?? "SOL";
   const debtSymbol = (extra?.debt_symbol as string) ?? "USDC";
@@ -232,11 +235,23 @@ function ConnectedMultiplyPanel({
 
     if (!success) return;
 
+    const operation: TxOperation = tab === "close" ? "close"
+      : isWithdrawAction() ? "withdraw"
+      : "deposit";
+    applyOptimistic({
+      walletAddress: selectedAccount.address,
+      mint: collMint,
+      opportunityId: yield_.id,
+      operation,
+      amount: parseFloat(amount || "0"),
+    });
+
     setAmount("");
     await invalidateAfterTx({
       walletAddress: selectedAccount.address,
       opportunityId: yield_.id,
       vaultAddress: yield_.deposit_address ?? undefined,
+      mint: collMint,
       metadata: txMetadata, // nft_id from open tx, stored in position extra_data
     });
   }

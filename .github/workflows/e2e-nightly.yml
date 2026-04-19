@@ -1,0 +1,53 @@
+name: E2E Nightly
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 3am UTC daily
+  workflow_dispatch: # manual trigger
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: alt_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/alt_test
+      HELIUS_API_KEY: ${{ secrets.HELIUS_API_KEY }}
+      HELIUS_RPC_URL: ${{ secrets.HELIUS_RPC_URL }}
+      TEST_WALLET_PRIVATE_KEY: ${{ secrets.TEST_WALLET_PRIVATE_KEY }}
+      PORT: 8001
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci --legacy-peer-deps
+      - name: Push DB schema
+        run: npx drizzle-kit push --force
+      - name: Start backend
+        run: npm run dev &
+      - name: Wait for backend
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8001/api/health && break
+            sleep 2
+          done
+      - name: E2E tests
+        run: npm run test:e2e

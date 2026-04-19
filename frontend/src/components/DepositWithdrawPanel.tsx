@@ -16,6 +16,7 @@ import { useWithdrawState } from "@/lib/hooks/useWithdrawState";
 import { useTransaction } from "@/lib/hooks/useTransaction";
 import { usePositionForOpportunity } from "@/lib/hooks/usePositionForOpportunity";
 import { useInvalidateAfterTransaction } from "@/lib/hooks/useInvalidateAfterTransaction";
+import { useOptimisticBalanceUpdate } from "@/lib/hooks/useOptimisticBalanceUpdate";
 import WalletButton from "./WalletButton";
 import DriftMaintenanceBanner from "./DriftMaintenanceBanner";
 
@@ -50,6 +51,7 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
   const signer = useWalletAccountTransactionSendingSigner(selectedAccount, "solana:mainnet");
 
   const invalidateAfterTx = useInvalidateAfterTransaction();
+  const applyOptimistic = useOptimisticBalanceUpdate();
   const primaryToken = yield_.tokens[0] ?? "USDC";
   const depositMint = yield_.underlying_tokens?.[0]?.mint ?? undefined;
   const { data: balance } = useTokenBalance(selectedAccount.address, depositMint);
@@ -123,12 +125,21 @@ function ConnectedDepositWithdrawPanel({ selectedAccount, tab, amount, setAmount
 
     if (!success) return;
 
+    applyOptimistic({
+      walletAddress: selectedAccount.address,
+      mint: depositMint,
+      opportunityId: yield_.id,
+      operation: tab,
+      amount: parseFloat(effectiveAmount),
+    });
+
     setIsSettling(true);
     setAmount("");
     await invalidateAfterTx({
       walletAddress: selectedAccount.address,
       opportunityId: yield_.id,
       vaultAddress: yield_.deposit_address ?? undefined,
+      mint: depositMint,
     });
     setIsSettling(false);
     api.trackWallet(selectedAccount.address);

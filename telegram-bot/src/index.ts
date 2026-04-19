@@ -29,6 +29,7 @@ await bot.api.setMyCommands([
   { command: "settings", description: "View/update settings" },
   { command: "usage", description: "View token usage and costs" },
   { command: "soul", description: "Customize bot personality" },
+  { command: "reset", description: "Clear all data and start fresh" },
 ]);
 
 const WEBHOOK_URL = process.env.WEBHOOK_URL;

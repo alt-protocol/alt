@@ -20,17 +20,20 @@ export const config = {
   // Rate limits
   platformDailyMessageLimit: 50,
 
+  // Conversation time window — only load messages from this period
+  conversationWindowMs: 24 * 60 * 60 * 1000, // 24 hours
+
   // Memory
   maxMemories: 30,
-  maxPromptMemories: 30,
-  maxConversationMessages: 20,
+  maxPromptMemories: 10,
+  maxConversationMessages: 10,
 
   // Prompt
   maxWalletBalances: 5,
 
   // AI
-  aiMaxSteps: 10,
-  aiMaxTokens: 4096,
+  aiMaxSteps: 4,
+  aiMaxTokens: 1536,
 
   // Pricing estimates ($ per million tokens)
   pricing: {

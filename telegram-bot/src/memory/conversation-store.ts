@@ -3,18 +3,38 @@ import { db } from "../db/connection.js";
 import { conversations } from "../db/schema.js";
 import { config } from "../config.js";
 
-/** Save user + assistant messages and enforce sliding window. */
+/** Save user + assistant message summaries and enforce sliding window. */
 export async function saveConversationTurn(
   userId: number,
   userMessage: string,
   assistantResponse: string,
 ): Promise<void> {
+  // Store 1-line summaries (truncated to ~100 chars) to save tokens
+  const userSummary = userMessage.length > 100 ? userMessage.slice(0, 97) + "..." : userMessage;
+  const assistantSummary = assistantResponse.length > 100 ? assistantResponse.slice(0, 97) + "..." : assistantResponse;
+
   await db.insert(conversations).values([
-    { user_id: userId, role: "user", content: userMessage },
-    { user_id: userId, role: "assistant", content: assistantResponse },
+    { user_id: userId, role: "user", content: userSummary },
+    { user_id: userId, role: "assistant", content: assistantSummary },
   ]);
 
   await enforceWindowLimit(userId);
+}
+
+/** Save tool call summaries to conversation history. */
+export async function saveToolCalls(
+  userId: number,
+  toolCalls: Array<{ toolName: string; resultPreview: string }>,
+): Promise<void> {
+  if (toolCalls.length === 0) return;
+  await db.insert(conversations).values(
+    toolCalls.map((tc) => ({
+      user_id: userId,
+      role: "tool_use" as const,
+      content: tc.resultPreview,
+      tool_name: tc.toolName,
+    })),
+  );
 }
 
 /** Delete oldest messages to keep within limit. */

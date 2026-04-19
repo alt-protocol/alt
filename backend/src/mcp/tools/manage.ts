@@ -8,8 +8,12 @@ import { getSwapQuote, buildSwapInstructions } from "../../manage/services/jupit
 import { getAdapter } from "../../manage/protocols/index.js";
 import { discoverService } from "../../discover/service.js";
 import { APP_URL, FRONTEND_URL } from "../../shared/constants.js";
+import { monitorService } from "../../monitor/service.js";
+import { validateApiKey } from "../../shared/auth.js";
+import { logger } from "../../shared/logger.js";
 import { withToolHandler, toolResult, mcpError } from "./utils.js";
 import QRCode from "qrcode";
+import type { McpRequestContext } from "../server.js";
 
 const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const TX_SUBMIT_TIMEOUT_MS = 30_000;
@@ -74,7 +78,16 @@ async function buildAndAssemble(
   };
 }
 
-export function registerManageTools(server: McpServer) {
+/** Validate API key for MCP write operations. Returns error result if auth fails. */
+async function guardMcpAuth(ctx?: McpRequestContext) {
+  if (process.env.MANAGE_AUTH_DISABLED === "true" && process.env.NODE_ENV !== "production") return null;
+  if (!ctx?.bearerToken) return mcpError("API key required for transaction operations. Pass Authorization: Bearer <key> header.");
+  const result = await validateApiKey(ctx.bearerToken);
+  if (!result) return mcpError("Invalid or rate-limited API key");
+  return null;
+}
+
+export function registerManageTools(server: McpServer, ctx?: McpRequestContext) {
   server.tool(
     "build_deposit_tx",
     "Build an unsigned deposit transaction for a yield opportunity. Returns a base64-encoded transaction ready for signing. The transaction expires in ~60 seconds. For multiply positions, include leverage (required) and optionally action, position_id.",
@@ -89,6 +102,11 @@ export function registerManageTools(server: McpServer) {
       deposit_token: z.enum(["debt", "collateral"]).optional().describe("Which token to deposit for multiply positions. Leave empty for lending/vault/earn."),
     },
     withToolHandler("build_deposit_tx", async (args) => {
+      const authErr = await guardMcpAuth(ctx);
+      if (authErr) return authErr;
+
+      logger.info({ agentId: ctx?.agentId, tool: "build_deposit_tx", wallet: args.wallet_address, opportunityId: args.opportunity_id, amount: args.amount }, "MCP: build deposit tx");
+
       const extraData: Record<string, unknown> = {};
       if (args.leverage != null) extraData.leverage = args.leverage;
       if (args.slippage_bps != null) extraData.slippageBps = args.slippage_bps;
@@ -116,6 +134,11 @@ export function registerManageTools(server: McpServer) {
       position_id: z.string().optional().describe("Existing position ID — only needed for multiply close/adjust."),
     },
     withToolHandler("build_withdraw_tx", async (args) => {
+      const authErr = await guardMcpAuth(ctx);
+      if (authErr) return authErr;
+
+      logger.info({ agentId: ctx?.agentId, tool: "build_withdraw_tx", wallet: args.wallet_address, opportunityId: args.opportunity_id, amount: args.amount }, "MCP: build withdraw tx");
+
       const extraData: Record<string, unknown> = {};
       if (args.slippage_bps != null) extraData.slippageBps = args.slippage_bps;
       if (args.action && args.action !== "close") extraData.action = args.action;
@@ -131,11 +154,18 @@ export function registerManageTools(server: McpServer) {
 
   server.tool(
     "submit_transaction",
-    "Submit a signed Solana transaction to the network. The transaction must already be signed.",
+    "Submit a signed Solana transaction to the network. The transaction must already be signed. If opportunity_id and wallet_address are provided, automatically syncs the position to the portfolio.",
     {
       signed_transaction: z.string().min(1).describe("Base64-encoded signed transaction"),
+      opportunity_id: z.number().int().positive().optional().describe("Yield opportunity ID — if provided with wallet_address, auto-syncs position after submit"),
+      wallet_address: z.string().optional().describe("Wallet address — required with opportunity_id for auto-sync"),
     },
     withToolHandler("submit_transaction", async (args) => {
+      const authErr = await guardMcpAuth(ctx);
+      if (authErr) return authErr;
+
+      logger.info({ agentId: ctx?.agentId, tool: "submit_transaction", wallet: args.wallet_address }, "MCP: submit transaction");
+
       const web3 = await import("@solana/web3.js");
       const connection = new web3.Connection(process.env.HELIUS_RPC_URL!);
       const txBytes = Buffer.from(args.signed_transaction, "base64");
@@ -148,6 +178,13 @@ export function registerManageTools(server: McpServer) {
         setTimeout(() => reject(new Error("Transaction submission timed out (30s)")), TX_SUBMIT_TIMEOUT_MS),
       );
       const signature = await Promise.race([sendPromise, timeoutPromise]);
+
+      // Auto-sync position if opportunity context provided
+      if (args.opportunity_id && args.wallet_address) {
+        try {
+          await monitorService.syncPosition(args.wallet_address, args.opportunity_id);
+        } catch { /* non-critical — position will sync on next background fetch */ }
+      }
 
       return toolResult({ signature, status: "submitted" });
     }),
@@ -238,6 +275,11 @@ export function registerManageTools(server: McpServer) {
       slippage_bps: z.number().int().min(1).max(500).optional().default(50).describe("Slippage tolerance in basis points"),
     },
     withToolHandler("build_swap_tx", async (args) => {
+      const authErr = await guardMcpAuth(ctx);
+      if (authErr) return authErr;
+
+      logger.info({ agentId: ctx?.agentId, tool: "build_swap_tx", wallet: args.wallet_address }, "MCP: build swap tx");
+
       guardWalletValid(args.wallet_address);
 
       const result = await buildSwapInstructions({

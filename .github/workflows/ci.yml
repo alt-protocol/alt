@@ -9,9 +9,27 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: alt_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: backend
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/alt_test
+      HELIUS_API_KEY: test_dummy
+      HELIUS_RPC_URL: http://localhost:9999
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,7 +38,14 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci --legacy-peer-deps
-      - run: npx tsc --noEmit
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Push DB schema
+        run: npx drizzle-kit push --force
+      - name: Unit tests
+        run: npm run test:unit
+      - name: Integration tests
+        run: npm run test:int
 
   frontend:
     runs-on: ubuntu-latest

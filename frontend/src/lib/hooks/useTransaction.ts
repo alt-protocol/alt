@@ -135,7 +135,11 @@ export function useTransaction(
         const sig: string = getBase58Decoder().decode(signatureBytes);
         setTxSignature(sig);
 
-        await rpc.getSignatureStatuses([signature(sig)]).send();
+        const statuses = await rpc.getSignatureStatuses([signature(sig)]).send();
+        const txErr = statuses.value[0]?.err;
+        if (txErr) {
+          throw new Error(`Transaction failed on-chain: ${JSON.stringify(txErr)}`);
+        }
 
         setStatus("success");
         return true;
