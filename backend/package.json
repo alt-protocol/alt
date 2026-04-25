@@ -17,8 +17,10 @@
     "test:perf": "tsx scripts/load-test.ts"
   },
   "dependencies": {
+    "@coral-xyz/anchor": "^0.31.0",
     "@drift-labs/sdk": "^2.156.0-beta.0",
     "@drift-labs/vaults-sdk": "^0.9.266",
+    "@exponent-labs/exponent-sdk": "^0.9.7",
     "@fastify/cors": "^10.0.2",
     "@fastify/helmet": "^13.0.2",
     "@fastify/rate-limit": "^10.2.1",

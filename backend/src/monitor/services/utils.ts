@@ -121,7 +121,9 @@ export function buildPositionDict(p: PositionParams): PositionDict {
     opened_at: p.opened_at ?? null,
     held_days: heldDays,
     apy: r4(p.apy),
-    apy_realized: computeRealizedApy(pnlUsd, initialDeposit, heldDays),
+    apy_realized: p.pnl_pct != null && heldDays && heldDays >= 1
+      ? r4(p.pnl_pct * (365 / heldDays))
+      : computeRealizedApy(pnlUsd, initialDeposit, heldDays),
     is_closed: p.is_closed ?? false,
     closed_at: p.closed_at ?? null,
     close_value_usd: r2(p.close_value_usd),

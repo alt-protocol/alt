@@ -39,7 +39,7 @@ const searchYields = tool({
     const qs = new URLSearchParams();
     if (params.category) qs.set("category", params.category);
     if (params.tokens) qs.set("tokens", params.tokens);
-    qs.set("stablecoins_only", "true");
+    qs.set("asset_class", "stablecoin");
     if (params.sort) qs.set("sort", params.sort);
     if (params.limit) qs.set("limit", String(params.limit));
     const result = await apiGet(`/api/discover/yields?${qs}`);
@@ -282,6 +282,18 @@ const requestDeposit = tool({
     deposit_token: z.enum(["debt", "collateral"]).optional().describe("Which token to deposit for multiply"),
   }),
   execute: async ({ opportunity_id, amount, summary, ...extra }) => {
+    // Validate opportunity exists before packaging pending action
+    const opp = await apiGet(`/api/discover/yields/${opportunity_id}`) as Record<string, unknown> | null;
+    if (opp && "error" in opp) {
+      return { error: `Opportunity ${opportunity_id} not found. Call search_yields to find the correct ID.` };
+    }
+    // Validate leverage against max_leverage for multiply
+    if (extra.leverage != null && opp && "max_leverage" in opp && opp.max_leverage != null) {
+      const maxLev = opp.max_leverage as number;
+      if (extra.leverage > maxLev) {
+        return { error: `Leverage ${extra.leverage} exceeds max ${maxLev} for this opportunity. Use a value between 1.1 and ${maxLev}.` };
+      }
+    }
     return {
       pending: true,
       action: "build_deposit_tx",
@@ -306,6 +318,11 @@ const requestWithdraw = tool({
     is_closing_position: z.boolean().optional().describe("Set true to fully close a multiply position"),
   }),
   execute: async ({ opportunity_id, amount, summary, ...extra }) => {
+    // Validate opportunity exists before packaging pending action
+    const opp = await apiGet(`/api/discover/yields/${opportunity_id}`);
+    if (opp && typeof opp === "object" && "error" in opp) {
+      return { error: `Opportunity ${opportunity_id} not found. Call search_yields to find the correct ID.` };
+    }
     return {
       pending: true,
       action: "build_withdraw_tx",

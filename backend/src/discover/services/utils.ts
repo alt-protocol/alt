@@ -23,7 +23,7 @@ import type { UnderlyingToken } from "../../shared/types.js";
 // Re-export for convenience
 export { safeFloat, REGULAR_STABLES, YIELD_BEARING_STABLES, LST_SYMBOLS, classifyToken };
 
-function tokenType(symbol: string): UnderlyingToken["type"] {
+export function tokenType(symbol: string): UnderlyingToken["type"] {
   const ct = classifyToken(symbol);
   return ct === "stable" ? "stablecoin" : (ct as UnderlyingToken["type"]);
 }
@@ -78,6 +78,36 @@ export function classifyMultiplyPair(
 }
 
 // ---------------------------------------------------------------------------
+// Asset classification — computed at upsert time, stored in indexed column
+// ---------------------------------------------------------------------------
+
+export function deriveAssetClass(
+  category: string,
+  tokens: string[],
+  extra: Record<string, unknown>,
+): string {
+  // Multiply: use vault_tag for strategy classification
+  if (category === "multiply") {
+    const tag = extra.vault_tag as string | undefined;
+    if (tag === "stable_loop" || tag === "rwa_loop") return "stablecoin";
+    if (tag === "sol_loop") return "sol";
+    return "other";
+  }
+  // Non-multiply: classify from primary token
+  const primary = tokens[0];
+  if (!primary) return "other";
+  const upper = primary.toUpperCase();
+  const cls = classifyToken(primary);
+  if (cls === "stable" || cls === "yield_bearing_stable") return "stablecoin";
+  if (cls === "lst" || upper === "SOL") return "sol";
+  if (upper === "ETH" || upper === "WETH") return "eth";
+  if (upper.includes("BTC")) return "btc";
+  // Wildcard: tokens ending in "SOL" are likely LSTs (catches future unlisted LSTs)
+  if (upper.endsWith("SOL") && upper !== "SOL" && primary.length > 3) return "sol";
+  return "other";
+}
+
+// ---------------------------------------------------------------------------
 // Upsert opportunity + snapshot
 // ---------------------------------------------------------------------------
 
@@ -103,6 +133,12 @@ export interface UpsertParams {
   liquidityAvailableUsd?: number | null;
   isAutomated?: boolean | null;
   depeg?: number | null;
+  /** Protocol-provided asset class override. If not set, auto-derived from tokens. */
+  assetClass?: string;
+  /** Chain identifier. Defaults to "solana". */
+  chain?: string;
+  /** Explicit underlying token exposure. If provided, skips buildUnderlyingTokens inference. */
+  underlyingTokens?: UnderlyingToken[];
 }
 
 export async function upsertOpportunity(
@@ -118,6 +154,13 @@ export async function upsertOpportunity(
 
   let oppId: number;
 
+  const ac = p.assetClass ?? deriveAssetClass(p.category, p.tokens, p.extra);
+  const chain = p.chain ?? "solana";
+
+  if (ac === "other" && p.category !== "multiply") {
+    logger.debug({ externalId: p.externalId, token: p.tokens[0] }, "asset_class=other (non-multiply)");
+  }
+
   if (existing.length > 0) {
     oppId = existing[0].id;
     const updates: Record<string, unknown> = {
@@ -131,7 +174,9 @@ export async function upsertOpportunity(
       protocol_name: p.protocolName,
       is_active: true,
       extra_data: p.extra,
-      underlying_tokens: buildUnderlyingTokens(p.category, p.tokens, p.extra),
+      underlying_tokens: p.underlyingTokens ?? buildUnderlyingTokens(p.category, p.tokens, p.extra),
+      asset_class: ac,
+      chain,
       updated_at: p.now,
     };
     if (p.maxLeverage !== undefined)
@@ -166,7 +211,7 @@ export async function upsertOpportunity(
         risk_tier: p.riskTier,
         is_active: true,
         extra_data: p.extra,
-        underlying_tokens: buildUnderlyingTokens(p.category, p.tokens, p.extra),
+        underlying_tokens: p.underlyingTokens ?? buildUnderlyingTokens(p.category, p.tokens, p.extra),
         min_deposit: p.minDeposit?.toString() ?? null,
         max_leverage: p.maxLeverage?.toString() ?? null,
         lock_period_days: p.lockPeriodDays ?? 0,
@@ -174,6 +219,8 @@ export async function upsertOpportunity(
           p.liquidityAvailableUsd?.toString() ?? null,
         is_automated: p.isAutomated ?? null,
         depeg: p.depeg?.toString() ?? null,
+        asset_class: ac,
+        chain,
       })
       .returning({ id: yieldOpportunities.id });
     oppId = inserted[0].id;

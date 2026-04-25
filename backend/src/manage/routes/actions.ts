@@ -1,5 +1,5 @@
 /**
- * Solana Actions (Blinks) endpoints.
+ * Solana Actions (Blinks) endpoints — spec v2.
  *
  * These follow the Solana Actions spec so wallets (Phantom, Solflare) can
  * display a signing UI when users tap a `solana-action:` link.
@@ -15,9 +15,14 @@ import type { FastifyInstance } from "fastify";
 import { buildTransaction } from "../services/tx-builder.js";
 import { assembleTransaction } from "../services/tx-assembler.js";
 import { discoverService } from "../../discover/service.js";
+import { APP_URL } from "../../shared/constants.js";
 import { logger } from "../../shared/logger.js";
 
 const ICON_URL = process.env.ACTIONS_ICON_URL || "https://akashi.app/icon.png";
+
+/** Solana mainnet chain ID per CAIP-2. */
+const SOLANA_MAINNET_ID = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+const ACTION_VERSION = "2.6.1";
 
 interface ActionGetQuery {
   opportunity_id: string;
@@ -93,16 +98,27 @@ async function buildAndAssembleForAction(
 }
 
 export async function actionsRoutes(app: FastifyInstance) {
-  // Solana Actions CORS — must allow all origins
-  app.addHook("onRequest", (_request, reply, done) => {
+  /** Set Solana Actions spec headers on all responses. */
+  function setActionHeaders(reply: import("fastify").FastifyReply) {
     void reply.header("Access-Control-Allow-Origin", "*");
     void reply.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-    void reply.header("Access-Control-Allow-Headers", "Content-Type");
-    done();
+    void reply.header("Access-Control-Allow-Headers", "Content-Type,Authorization,Accept-Encoding");
+    void reply.header("Access-Control-Expose-Headers", "X-Action-Version,X-Blockchain-Ids");
+    void reply.header("X-Action-Version", ACTION_VERSION);
+    void reply.header("X-Blockchain-Ids", SOLANA_MAINNET_ID);
+  }
+
+  app.addHook("onRequest", async (_request, reply) => {
+    setActionHeaders(reply);
   });
 
-  // OPTIONS preflight
-  app.options("/actions/*", async (_request, reply) => {
+  // OPTIONS preflight — explicit handlers override @fastify/cors
+  app.options("/actions/deposit", async (_request, reply) => {
+    setActionHeaders(reply);
+    return reply.status(204).send();
+  });
+  app.options("/actions/withdraw", async (_request, reply) => {
+    setActionHeaders(reply);
     return reply.status(204).send();
   });
 
@@ -111,18 +127,19 @@ export async function actionsRoutes(app: FastifyInstance) {
   // -----------------------------------------------------------------------
   app.get<{ Querystring: ActionGetQuery }>(
     "/actions/deposit",
-    async (request) => {
+    async (request, reply) => {
       const opportunityId = Number(request.query.opportunity_id);
-      if (!opportunityId) return { error: "opportunity_id required" };
+      if (!opportunityId) return reply.status(400).send({ message: "opportunity_id required" });
 
       const opp = await discoverService.getOpportunityById(opportunityId);
-      if (!opp) return { error: "Opportunity not found" };
+      if (!opp) return reply.status(404).send({ message: "Opportunity not found" });
 
       const apyStr = opp.apy_current
         ? ` Current APY: ${opp.apy_current.toFixed(1)}%`
         : "";
 
       return {
+        type: "action",
         icon: ICON_URL,
         title: `Deposit into ${opp.name}`,
         description: `Deposit into ${opp.name} on ${opp.protocol?.name ?? "Solana"}.${apyStr}`,
@@ -130,10 +147,11 @@ export async function actionsRoutes(app: FastifyInstance) {
         links: {
           actions: [
             {
+              type: "transaction",
               label: "Deposit",
-              href: `/api/manage/actions/deposit?opportunity_id=${opportunityId}&amount={amount}`,
+              href: `${APP_URL}/api/manage/actions/deposit?opportunity_id=${opportunityId}&amount={amount}`,
               parameters: [
-                { name: "amount", label: "Amount" },
+                { name: "amount", label: "Amount", type: "number", required: true },
               ],
             },
           ],
@@ -150,19 +168,19 @@ export async function actionsRoutes(app: FastifyInstance) {
     {
       config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
     },
-    async (request) => {
+    async (request, reply) => {
       const opportunityId = Number(request.query.opportunity_id);
       const amount = request.query.amount;
       const walletAddress =
         (request.body as ActionPostBody)?.account ?? request.query.wallet;
 
       if (!opportunityId || !amount || !walletAddress) {
-        return { error: "opportunity_id, amount, and account are required" };
+        return reply.status(400).send({ message: "opportunity_id, amount, and account are required" });
       }
 
       try {
         const extraData = parseExtraData(request.query);
-        const { assembled } = await buildAndAssembleForAction(
+        const { assembled, setupTransactions } = await buildAndAssembleForAction(
           opportunityId,
           walletAddress,
           amount,
@@ -172,13 +190,18 @@ export async function actionsRoutes(app: FastifyInstance) {
 
         const opp = await discoverService.getOpportunityById(opportunityId);
         return {
+          type: "transaction",
           transaction: assembled.transaction,
           message: `Deposit ${amount} into ${opp?.name ?? `opportunity #${opportunityId}`}`,
+          ...(setupTransactions?.length ? { setup_transactions: setupTransactions } : {}),
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Failed to build transaction";
-        logger.error({ err, opportunityId, amount }, "Actions deposit failed");
-        return { error: msg };
+        const errInfo = err instanceof Error
+          ? { message: err.message, name: err.name, stack: err.stack }
+          : { message: String(err) };
+        logger.error({ err: errInfo, opportunityId, amount }, "Actions deposit failed");
+        return reply.status(422).send({ message: msg });
       }
     },
   );
@@ -188,14 +211,15 @@ export async function actionsRoutes(app: FastifyInstance) {
   // -----------------------------------------------------------------------
   app.get<{ Querystring: ActionGetQuery }>(
     "/actions/withdraw",
-    async (request) => {
+    async (request, reply) => {
       const opportunityId = Number(request.query.opportunity_id);
-      if (!opportunityId) return { error: "opportunity_id required" };
+      if (!opportunityId) return reply.status(400).send({ message: "opportunity_id required" });
 
       const opp = await discoverService.getOpportunityById(opportunityId);
-      if (!opp) return { error: "Opportunity not found" };
+      if (!opp) return reply.status(404).send({ message: "Opportunity not found" });
 
       return {
+        type: "action",
         icon: ICON_URL,
         title: `Withdraw from ${opp.name}`,
         description: `Withdraw from ${opp.name} on ${opp.protocol?.name ?? "Solana"}.`,
@@ -203,10 +227,11 @@ export async function actionsRoutes(app: FastifyInstance) {
         links: {
           actions: [
             {
+              type: "transaction",
               label: "Withdraw",
-              href: `/api/manage/actions/withdraw?opportunity_id=${opportunityId}&amount={amount}`,
+              href: `${APP_URL}/api/manage/actions/withdraw?opportunity_id=${opportunityId}&amount={amount}`,
               parameters: [
-                { name: "amount", label: "Amount" },
+                { name: "amount", label: "Amount", type: "number", required: true },
               ],
             },
           ],
@@ -223,19 +248,19 @@ export async function actionsRoutes(app: FastifyInstance) {
     {
       config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
     },
-    async (request) => {
+    async (request, reply) => {
       const opportunityId = Number(request.query.opportunity_id);
       const amount = request.query.amount;
       const walletAddress =
         (request.body as ActionPostBody)?.account ?? request.query.wallet;
 
       if (!opportunityId || !amount || !walletAddress) {
-        return { error: "opportunity_id, amount, and account are required" };
+        return reply.status(400).send({ message: "opportunity_id, amount, and account are required" });
       }
 
       try {
         const extraData = parseExtraData(request.query);
-        const { assembled } = await buildAndAssembleForAction(
+        const { assembled, setupTransactions } = await buildAndAssembleForAction(
           opportunityId,
           walletAddress,
           amount,
@@ -245,13 +270,18 @@ export async function actionsRoutes(app: FastifyInstance) {
 
         const opp = await discoverService.getOpportunityById(opportunityId);
         return {
+          type: "transaction",
           transaction: assembled.transaction,
           message: `Withdraw ${amount} from ${opp?.name ?? `opportunity #${opportunityId}`}`,
+          ...(setupTransactions?.length ? { setup_transactions: setupTransactions } : {}),
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Failed to build transaction";
-        logger.error({ err, opportunityId, amount }, "Actions withdraw failed");
-        return { error: msg };
+        const errInfo = err instanceof Error
+          ? { message: err.message, name: err.name, stack: err.stack }
+          : { message: String(err) };
+        logger.error({ err: errInfo, opportunityId, amount }, "Actions withdraw failed");
+        return reply.status(422).send({ message: msg });
       }
     },
   );

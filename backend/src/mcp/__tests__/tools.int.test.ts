@@ -51,9 +51,9 @@ async function callTool(name: string, args: Record<string, unknown> = {}) {
 // ---------------------------------------------------------------------------
 
 describe("MCP Server — tool registration", () => {
-  it("lists all 17 tools", async () => {
+  it("lists all 14 tools", async () => {
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(17);
+    expect(tools.length).toBe(14);
   });
 
   it("every tool has a description", async () => {
@@ -68,21 +68,19 @@ describe("MCP Server — tool registration", () => {
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
       "build_deposit_tx",
-      "build_swap_tx",
       "build_withdraw_tx",
       "get_balance",
       "get_portfolio",
       "get_position_events",
       "get_position_history",
       "get_protocols",
-      "get_swap_quote",
       "get_wallet_balances",
-      "get_wallet_status",
       "get_withdraw_state",
       "get_yield_details",
       "get_yield_history",
       "search_yields",
       "submit_transaction",
+      "swap",
       "track_wallet",
     ]);
   });
@@ -148,24 +146,6 @@ describe("Monitor tools", () => {
     expect(parsed).toHaveProperty("wallet_address");
   });
 
-  it("get_wallet_status — returns status for tracked wallet", async () => {
-    // track first
-    await callTool("track_wallet", { wallet_address: DUMMY_WALLET });
-    const { parsed, isError } = await callTool("get_wallet_status", {
-      wallet_address: DUMMY_WALLET,
-    });
-    expect(isError).toBe(false);
-    expect(parsed).toHaveProperty("fetch_status");
-  });
-
-  it("get_wallet_status — returns error for untracked wallet", async () => {
-    const { parsed, isError } = await callTool("get_wallet_status", {
-      wallet_address: "22222222222222222222222222222222",
-    });
-    expect(isError).toBe(true);
-    expect(parsed).toHaveProperty("error");
-  });
-
   it("get_portfolio — returns response structure", async () => {
     const { parsed, isError } = await callTool("get_portfolio", {
       wallet_address: DUMMY_WALLET,
@@ -226,12 +206,13 @@ describe("Manage tools", () => {
     expect(parsed).toHaveProperty("error");
   });
 
-  it("get_swap_quote — handles invalid mints gracefully", async () => {
-    const { parsed, isError } = await callTool("get_swap_quote", {
+  it("swap — handles invalid mints gracefully (quote_only)", async () => {
+    const { parsed, isError } = await callTool("swap", {
+      wallet_address: DUMMY_WALLET,
       input_mint: "FakeMint11111111111111111111111111111111111",
       output_mint: "FakeMint22222222222222222222222222222222222",
       amount: "1000000",
-      taker: DUMMY_WALLET,
+      quote_only: true,
     });
     expect(isError).toBe(true);
     expect(parsed).toHaveProperty("error");
@@ -257,8 +238,8 @@ describe("Manage tools", () => {
     expect(parsed).toHaveProperty("error");
   });
 
-  it("build_swap_tx — handles invalid params gracefully", async () => {
-    const { parsed, isError } = await callTool("build_swap_tx", {
+  it("swap — handles invalid params gracefully (build)", async () => {
+    const { parsed, isError } = await callTool("swap", {
       wallet_address: DUMMY_WALLET,
       input_mint: "FakeMint11111111111111111111111111111111111",
       output_mint: "FakeMint22222222222222222222222222222222222",

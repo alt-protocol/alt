@@ -31,6 +31,7 @@ export interface OpportunityDetail {
   apy_current: number | null;
   tvl_usd: number | null;
   deposit_address: string | null;
+  max_leverage: number | null;
   extra_data: Record<string, unknown> | null;
   protocol: {
     id: number;
@@ -56,10 +57,18 @@ export interface SearchYieldsParams {
   category?: string;
   tokens?: string;
   vault_tag?: string;
-  stablecoins_only?: boolean;
+  asset_class?: string;
   sort?: "apy_desc" | "apy_asc" | "tvl_desc" | "tvl_asc";
   limit?: number;
   offset?: number;
+  protocol?: string;
+  token_type?: string;
+  apy_min?: number;
+  apy_max?: number;
+  tvl_min?: number;
+  tvl_max?: number;
+  liquidity_min?: number;
+  liquidity_max?: number;
 }
 
 export interface YieldListItem {

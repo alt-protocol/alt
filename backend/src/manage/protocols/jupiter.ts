@@ -10,9 +10,11 @@ import {
   convertJupiterApiInstruction,
 } from "../services/instruction-converter.js";
 import { getLegacyConnection } from "../../shared/rpc.js";
-import { jupiterHeaders } from "../../shared/http.js";
+import { getWithRetry, jupiterHeaders } from "../../shared/http.js";
 import { cachedAsync } from "../../shared/utils.js";
 import { logger } from "../../shared/logger.js";
+import { guardPriceImpact } from "../services/guards.js";
+import { getJupiterLiteQuote } from "../../shared/jupiter-quote.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -145,27 +147,29 @@ function extractOperateAlts(alts: any[]): string[] {
 // Swap helpers (Jupiter V2 API)
 // ---------------------------------------------------------------------------
 
-/** Compact swap via V2 /build — returns instructions with optimal ALT coverage. */
+/** Compact swap via V2 /build — returns instructions with optimal ALT coverage.
+ *  Uses getWithRetry (3x retry on 5xx, 2x on 429) + cachedAsync (5s TTL + dedup). */
 async function getMultiplySwap(
   inputMint: string,
   outputMint: string,
   amount: string,
   slippageBps: number,
   taker: string,
-): Promise<{ outAmount: string; swapIxs: Instruction[]; altAddresses: string[] }> {
-  const resp = await fetch(
-    `${JUPITER_SWAP_V2}/build?${new URLSearchParams({
-      inputMint, outputMint, amount, taker,
-      slippageBps: String(slippageBps),
-      maxAccounts: "30",
-    })}`,
-    { headers: jupiterHeaders(), signal: AbortSignal.timeout(SWAP_TIMEOUT_MS) },
-  );
-  const data = await resp.json() as any;
+): Promise<{ outAmount: string; swapIxs: Instruction[]; altAddresses: string[]; priceImpactPct: number }> {
+  const url = `${JUPITER_SWAP_V2}/build?${new URLSearchParams({
+    inputMint, outputMint, amount, taker,
+    slippageBps: String(slippageBps),
+    maxAccounts: "30",
+  })}`;
+
+  const cacheKey = `jup:build:${inputMint}:${outputMint}:${amount}:${slippageBps}`;
+  const data = await cachedAsync(cacheKey, 5_000, () =>
+    getWithRetry(url, { timeout: SWAP_TIMEOUT_MS, headers: jupiterHeaders() }),
+  ) as any;
 
   if (data.error || !data.swapInstruction) {
     throw Object.assign(
-      new Error(data.error ?? `Swap build failed (HTTP ${resp.status})`),
+      new Error(data.error ?? "Swap build failed"),
       { statusCode: 400 },
     );
   }
@@ -177,28 +181,18 @@ async function getMultiplySwap(
     outAmount: String(data.outAmount),
     swapIxs,
     altAddresses: Object.keys(data.addressesByLookupTableAddress ?? {}),
+    priceImpactPct: Number(data.priceImpactPct ?? 0),
   };
 }
 
-/** Lightweight price quote via V1 lite API (no balance check, no instructions). */
+/** Lightweight price quote via shared Jupiter lite-api helper. */
 async function getSwapQuote(
   inputMint: string,
   outputMint: string,
   amount: string,
   slippageBps: number,
 ): Promise<{ outAmount: string }> {
-  const resp = await fetch(
-    `https://lite-api.jup.ag/swap/v1/quote?${new URLSearchParams({
-      inputMint, outputMint, amount, slippageBps: String(slippageBps),
-    })}`,
-    { headers: jupiterHeaders(), signal: AbortSignal.timeout(SWAP_TIMEOUT_MS) },
-  );
-  const data = await resp.json() as any;
-
-  if (data.error || !data.outAmount) {
-    throw Object.assign(new Error(data.error ?? "No swap quote available"), { statusCode: 400 });
-  }
-  return { outAmount: String(data.outAmount) };
+  return getJupiterLiteQuote(inputMint, outputMint, amount, slippageBps);
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +304,9 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
     sdk.getFlashPaybackIx({ connection, signer, asset: debtMintPk, amount: borrowAmount }),
   ]);
 
+  // Price impact guard
+  const impact = guardPriceImpact(swapResult.priceImpactPct);
+
   const supplyAmount = new sdk.BN(userDepositLamports).add(new sdk.BN(swapResult.outAmount));
   const { ixs: operateIxs, addressLookupTableAccounts, nftId } = await sdk.getOperateIx({
     vaultId: mp.vaultId, positionId: 0, colAmount: supplyAmount, debtAmount: borrowAmount, connection, signer,
@@ -325,7 +322,11 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
       convertLegacyInstruction(flashPaybackIx),
     ],
     lookupTableAddresses: [...new Set([...extractOperateAlts(addressLookupTableAccounts), ...swapResult.altAddresses])],
-    metadata: nftId != null ? { nft_id: nftId, vault_id: mp.vaultId } : undefined,
+    metadata: {
+      ...(nftId != null ? { nft_id: nftId, vault_id: mp.vaultId } : {}),
+      priceImpactPct: swapResult.priceImpactPct,
+      ...(impact.warning ? { priceImpactWarning: true } : {}),
+    },
   };
 }
 
@@ -404,6 +405,9 @@ async function buildMultiplyAdjust(params: BuildTxParams): Promise<BuildTxResult
       sdk.getFlashPaybackIx({ connection, signer, asset: debtMintPk, amount: additionalBorrow }),
     ]);
 
+    // Price impact guard
+    const impact = guardPriceImpact(swapResult.priceImpactPct);
+
     const { ixs: operateIxs, addressLookupTableAccounts } = await sdk.getOperateIx({
       vaultId: mp.vaultId, positionId: mp.positionId,
       colAmount: new sdk.BN(swapResult.outAmount), debtAmount: additionalBorrow,
@@ -417,6 +421,10 @@ async function buildMultiplyAdjust(params: BuildTxParams): Promise<BuildTxResult
         ...operateIxs.map(convertLegacyInstruction), convertLegacyInstruction(flashPaybackIx),
       ],
       lookupTableAddresses: [...new Set([...extractOperateAlts(addressLookupTableAccounts), ...swapResult.altAddresses])],
+      metadata: {
+        priceImpactPct: swapResult.priceImpactPct,
+        ...(impact.warning ? { priceImpactWarning: true } : {}),
+      },
     };
   } else {
     // Leverage DOWN: simple operate (withdraw + repay, no flash loan, no API dependency)
@@ -571,6 +579,83 @@ export async function getJupiterMultiplyStats(
 // Adapter export
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Price impact estimation (pre-flight, no tx building)
+// ---------------------------------------------------------------------------
+
+async function getJupiterPriceImpact(
+  params: import("./types.js").PriceImpactParams,
+): Promise<import("./types.js").PriceImpactEstimate | null> {
+  try {
+    const extra = params.extraData ?? {};
+    const supplyMint = (extra.supply_token_mint ?? extra.collateral_mint) as string;
+    const borrowMint = (extra.borrow_token_mint ?? extra.debt_mint) as string;
+    if (!supplyMint || !borrowMint) return null;
+
+    const leverage = (extra.leverage as number) ?? 2;
+    const amount = parseFloat(params.amount);
+    if (!amount || amount <= 0) return null;
+
+    const slippageBps = (extra.slippageBps as number) ?? 50;
+    let inputMint: string;
+    let outputMint: string;
+    let swapAmountLamports: number;
+
+    const [supplyDecimals, borrowDecimals] = await Promise.all([
+      getDecimals(supplyMint),
+      getDecimals(borrowMint),
+    ]);
+
+    if (params.direction === "deposit") {
+      // Open: swap borrow → supply, estimated amount ≈ deposit * (leverage - 1)
+      inputMint = borrowMint;
+      outputMint = supplyMint;
+      const decimalAdjust = 10 ** (supplyDecimals - borrowDecimals);
+      swapAmountLamports = Math.round(amount * 10 ** supplyDecimals * (leverage - 1) / decimalAdjust);
+    } else {
+      // Close: deleverage by swapping supply → borrow
+      // At leverage L, withdrawing W equity requires swapping ~W*(L-1) supply to repay borrow
+      inputMint = supplyMint;
+      outputMint = borrowMint;
+      swapAmountLamports = Math.round(amount * (leverage - 1) * 10 ** supplyDecimals);
+    }
+
+    if (swapAmountLamports <= 0) {
+      logger.debug({ amount, leverage, direction: params.direction }, "Swap amount too small for impact estimate");
+      return null;
+    }
+
+    const quote = await getJupiterLiteQuote(inputMint, outputMint, String(swapAmountLamports), slippageBps);
+
+    const inDecimals = params.direction === "deposit" ? borrowDecimals : supplyDecimals;
+    const outDecimals = params.direction === "deposit" ? supplyDecimals : borrowDecimals;
+    const inputAmountTokens = swapAmountLamports / 10 ** inDecimals;
+    if (inputAmountTokens === 0) return null;
+    const outputActualTokens = Number(quote.outAmount) / 10 ** outDecimals;
+
+    const { priceImpactPct } = quote;
+    // Expected output = actual / (1 - impact/100)
+    const outputExpectedTokens = priceImpactPct > 0
+      ? outputActualTokens / (1 - priceImpactPct / 100)
+      : outputActualTokens;
+
+    const supplySymbol = (extra.supply_symbol ?? extra.collateral_symbol ?? "SUPPLY") as string;
+    const borrowSymbol = (extra.borrow_symbol ?? extra.debt_symbol ?? "BORROW") as string;
+
+    return {
+      priceImpactPct,
+      inputAmount: inputAmountTokens,
+      inputSymbol: params.direction === "deposit" ? borrowSymbol : supplySymbol,
+      outputExpected: outputExpectedTokens,
+      outputActual: outputActualTokens,
+      outputSymbol: params.direction === "deposit" ? supplySymbol : borrowSymbol,
+    };
+  } catch (err) {
+    logger.warn({ err }, "Jupiter price impact estimation failed");
+    return null;
+  }
+}
+
 export const jupiterAdapter: ProtocolAdapter = {
   async buildDepositTx(params) {
     if (params.category === "multiply") {
@@ -601,5 +686,10 @@ export const jupiterAdapter: ProtocolAdapter = {
     if (isEarnCategory(params.category)) return getEarnBalance(params);
     if (params.category === "multiply") return getMultiplyBalance(params);
     return null;
+  },
+
+  async getPriceImpact(params) {
+    if (params.category !== "multiply") return null;
+    return getJupiterPriceImpact(params);
   },
 };

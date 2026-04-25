@@ -4,6 +4,7 @@ import { eq, and, sql } from "drizzle-orm";
 
 import { db } from "../db/connection.js";
 import { users, usage } from "../db/schema.js";
+import type { CoreMessage } from "ai";
 import { encrypt } from "../crypto.js";
 import { chat } from "../ai.js";
 import { loadUserContext } from "../memory/memory-manager.js";
@@ -121,24 +122,39 @@ export async function handleMessage(
   // 3. Load context (memories + conversation summaries)
   const context = await loadUserContext(user.id);
 
-  // 4. Build conversation summary (1-liners with timestamps for system prompt)
+  // 4. Split messages: recent (<30min) as CoreMessage[], older as system prompt summary
   const now = new Date();
+  const SESSION_GAP_MS = 30 * 60 * 1000;
+  const recentCutoff = new Date(now.getTime() - SESSION_GAP_MS);
+  const recentMessages = context.messages.filter((m) => m.created_at >= recentCutoff);
+  const olderMessages = context.messages.filter((m) => m.created_at < recentCutoff);
+
+  // Build system prompt summary from OLDER messages only
   let conversationSummary = "";
-  if (context.messages.length > 0) {
-    conversationSummary = "## Recent Conversation\n";
-    for (const m of context.messages) {
+  if (olderMessages.length > 0) {
+    conversationSummary = "## Previous Conversations\n";
+    for (const m of olderMessages) {
+      const preview = m.content.length > 100 ? m.content.slice(0, 97) + "..." : m.content;
       const agoMs = now.getTime() - m.created_at.getTime();
       const agoMin = Math.round(agoMs / 60_000);
       const timeLabel = agoMin < 60 ? `${agoMin}m ago` : agoMin < 1440 ? `${Math.round(agoMin / 60)}h ago` : `${Math.round(agoMin / 1440)}d ago`;
       if (m.role === "tool_use") {
         conversationSummary += `- [${timeLabel}] Called ${m.tool_name}\n`;
       } else {
-        conversationSummary += `- [${timeLabel}] ${m.role}: ${m.content}\n`;
+        conversationSummary += `- [${timeLabel}] ${m.role}: ${preview}\n`;
       }
     }
   }
 
-  // 5. Compose system prompt from SOUL + context + conversation summary
+  // Build CoreMessage[] from RECENT messages (full text for current session)
+  const history: CoreMessage[] = recentMessages
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m) => ({
+      role: m.role as "user" | "assistant",
+      content: m.content,
+    }));
+
+  // 5. Compose system prompt from SOUL + context + older conversation summary
   const systemPrompt = composeSystemPrompt(
     SOUL,
     {
@@ -155,11 +171,11 @@ export async function handleMessage(
   // 6. Send "typing" indicator
   await ctx.replyWithChatAction("typing");
 
-  // 7. Call AI (only current message — history is summarized in system prompt)
+  // 7. Call AI (recent history as messages + current message)
   try {
     const result = await chat(
       systemPrompt,
-      [{ role: "user", content: userMessage }],
+      [...history, { role: "user", content: userMessage }],
       {
         api_provider: user.api_provider,
         api_key: user.api_key,

@@ -20,7 +20,9 @@ import {
   snapshotAvg,
   deactivateStale,
   getProtocol,
+  tokenType,
 } from "./utils.js";
+import { getMintForSymbol } from "../../shared/constants.js";
 
 const DRIFT_API = "https://data.api.drift.trade";
 const DRIFT_APP_API = "https://app.drift.trade";
@@ -286,6 +288,12 @@ async function fetchInsuranceFund(
         lockPeriodDays: IF_UNSTAKING_PERIOD_DAYS,
         isAutomated: true,
         liquidityAvailableUsd: null,
+        underlyingTokens: symbol ? [{
+          symbol,
+          mint: getMintForSymbol(symbol),
+          role: "underlying",
+          type: tokenType(symbol),
+        }] : [],
       });
 
       // Compute 7d/30d averages from stored snapshots
@@ -419,6 +427,12 @@ async function fetchVaults(
             ? Math.round(vaultLiqUsd * 100) / 100
             : null,
         isAutomated: true,
+        underlyingTokens: [{
+          symbol: "USDC",
+          mint: getMintForSymbol("USDC"),
+          role: "underlying",
+          type: "stablecoin",
+        }],
       });
 
       // Fall back to snapshot averages if API didn't provide

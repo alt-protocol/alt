@@ -10,7 +10,6 @@ import { db } from "../db/connection.js";
 import { yieldOpportunities, yieldSnapshots, protocols } from "../db/schema.js";
 import { NotFoundError } from "../../shared/error-handler.js";
 import { numOrNull } from "../../shared/utils.js";
-import { STABLECOIN_SYMBOLS } from "../../shared/constants.js";
 import type { PegStabilityData } from "../../shared/types.js";
 import { YieldsQuery, YieldHistoryQuery } from "./schemas.js";
 import { discoverService } from "../service.js";
@@ -76,7 +75,7 @@ export async function yieldsRoutes(app: FastifyInstance) {
       }
       if (!pegStability && opp.tokens) {
         for (const t of opp.tokens) {
-          if (STABLECOIN_SYMBOLS.has(t) && pegMap.has(t)) {
+          if (pegMap.has(t)) {
             pegStability = pegMap.get(t)!;
             break;
           }

@@ -7,18 +7,24 @@ import type {
   BuildTxResultWithLookups,
   BuildTxResultWithSetup,
   GetBalanceParams,
+  PriceImpactParams,
+  PriceImpactEstimate,
 } from "./types.js";
 import { getRpc } from "../../shared/rpc.js";
 import { logger } from "../../shared/logger.js";
 import { cachedAsync } from "../../shared/utils.js";
+import { resolveDecimals } from "../services/decimals.js";
+import { getJupiterLiteQuote } from "../../shared/jupiter-quote.js";
 import {
   createJupiterMultiplyQuoter,
   createJupiterMultiplySwapper,
+  createImpactCapture,
 } from "../services/jupiter-multiply-swap.js";
 import {
   selectBestRoute,
   assembleMultiplyLuts,
 } from "../services/multiply-luts.js";
+import { guardPriceImpact } from "../services/guards.js";
 
 // klend-sdk bundles its own @solana/kit@2.x while we use 6.x.
 // The types are structurally identical at runtime (same JSON-RPC), so we
@@ -233,10 +239,7 @@ async function prepareLending(params: BuildTxParams) {
       statusCode: 400,
     });
 
-  const decimals =
-    params.extraData?.decimals != null
-      ? Number(params.extraData.decimals)
-      : 6;
+  const decimals = await resolveDecimals(params.extraData);
   const amountBase = new BN(
     Math.floor(parseFloat(params.amount) * 10 ** decimals),
   );
@@ -400,17 +403,20 @@ async function prepareMultiply(params: BuildTxParams, slippageBps: number) {
   if (!collReserve || !debtReserve) throw new Error("Failed to load reserves");
 
   // Jupiter quoter/swapper for klend-sdk flash loan swap routing
+  const impactCapture = createImpactCapture();
   const quoter = createJupiterMultiplyQuoter(
     params.walletAddress,
     slippageBps,
     debtReserve,
     collReserve,
+    impactCapture,
   );
   const swapper = createJupiterMultiplySwapper(
     params.walletAddress,
     slippageBps,
     debtReserve,
     collReserve,
+    impactCapture,
   );
 
   const currentSlot = await rpc.getSlot().send();
@@ -435,6 +441,7 @@ async function prepareMultiply(params: BuildTxParams, slippageBps: number) {
     currentSlot,
     computeIxs,
     Decimal,
+    impactCapture,
   };
 }
 
@@ -448,6 +455,7 @@ async function finalizeMultiplyResult(
     marketLut?: string;
     isMultiply: boolean;
     setupInstructionSets?: Instruction[][];
+    metadata?: Record<string, unknown>;
   },
 ): Promise<BuildTxResultWithLookups | BuildTxResultWithSetup> {
   const bestRoute = selectBestRoute(routes);
@@ -472,6 +480,7 @@ async function finalizeMultiplyResult(
   const result: BuildTxResultWithLookups = {
     instructions: bestRoute.ixs as unknown as Instruction[],
     lookupTableAddresses,
+    metadata: opts.metadata,
   };
 
   // Include setup instructions if LUT creation is needed
@@ -629,6 +638,29 @@ async function buildMultiplyOpen(
       useV2Ixs: true,
     });
 
+    // Price impact guard: compare swap execution price to oracle price
+    let priceImpactMeta: Record<string, unknown> | undefined;
+    if (ctx.impactCapture.executionPrice !== null) {
+      const oraclePrice = priceDebtToColl.toNumber();
+      const deviationPct =
+        (Math.abs(ctx.impactCapture.executionPrice - oraclePrice) /
+          oraclePrice) *
+        100;
+      logger.info(
+        {
+          executionPrice: ctx.impactCapture.executionPrice,
+          oraclePrice,
+          deviationPct: deviationPct.toFixed(4),
+        },
+        "Multiply open: swap vs oracle price comparison",
+      );
+      const impact = guardPriceImpact(deviationPct);
+      priceImpactMeta = {
+        priceImpactPct: deviationPct,
+        ...(impact.warning ? { priceImpactWarning: true } : {}),
+      };
+    }
+
     // Filter to non-empty setup instruction sets
     const nonEmptySetups = (setupTxsIxs as any[][])
       .filter((ixs: any[]) => ixs.length > 0)
@@ -642,6 +674,7 @@ async function buildMultiplyOpen(
       isMultiply: true,
       setupInstructionSets:
         nonEmptySetups.length > 0 ? nonEmptySetups : undefined,
+      metadata: priceImpactMeta,
     });
   } catch (err: unknown) {
     if (err instanceof Error && "statusCode" in err) throw err;
@@ -770,6 +803,30 @@ async function buildMultiplyWithdraw(
       userSolBalanceLamports: 0,
     });
 
+    // Price impact guard: compare swap execution price to oracle price
+    // For withdraw, the swap direction is collateral → debt, so compare to priceCollToDebt
+    let priceImpactMeta: Record<string, unknown> | undefined;
+    if (ctx.impactCapture.executionPrice !== null) {
+      const oraclePrice = priceCollToDebt.toNumber();
+      const deviationPct =
+        (Math.abs(ctx.impactCapture.executionPrice - oraclePrice) /
+          oraclePrice) *
+        100;
+      logger.info(
+        {
+          executionPrice: ctx.impactCapture.executionPrice,
+          oraclePrice,
+          deviationPct: deviationPct.toFixed(4),
+        },
+        "Multiply withdraw: swap vs oracle price comparison",
+      );
+      const impact = guardPriceImpact(deviationPct);
+      priceImpactMeta = {
+        priceImpactPct: deviationPct,
+        ...(impact.warning ? { priceImpactWarning: true } : {}),
+      };
+    }
+
     const nonEmptySetups = (setupTxsIxs as any[][])
       .filter((ixs: any[]) => ixs.length > 0)
       .map((ixs: any[]) => ixs as unknown as Instruction[]);
@@ -782,6 +839,7 @@ async function buildMultiplyWithdraw(
       isMultiply: false,
       setupInstructionSets:
         nonEmptySetups.length > 0 ? nonEmptySetups : undefined,
+      metadata: priceImpactMeta,
     });
   } catch (err: unknown) {
     if (err instanceof Error && "statusCode" in err) throw err;
@@ -909,6 +967,30 @@ async function buildMultiplyAdjust(
       userSolBalanceLamports: 0,
     });
 
+    // Price impact guard: compare swap execution price to oracle price
+    let priceImpactMeta: Record<string, unknown> | undefined;
+    if (ctx.impactCapture.executionPrice !== null) {
+      // Adjust direction depends on leverage change — quoter uses debt→coll direction
+      const oraclePrice = priceDebtToColl.toNumber();
+      const deviationPct =
+        (Math.abs(ctx.impactCapture.executionPrice - oraclePrice) /
+          oraclePrice) *
+        100;
+      logger.info(
+        {
+          executionPrice: ctx.impactCapture.executionPrice,
+          oraclePrice,
+          deviationPct: deviationPct.toFixed(4),
+        },
+        "Multiply adjust: swap vs oracle price comparison",
+      );
+      const impact = guardPriceImpact(deviationPct);
+      priceImpactMeta = {
+        priceImpactPct: deviationPct,
+        ...(impact.warning ? { priceImpactWarning: true } : {}),
+      };
+    }
+
     const nonEmptySetups = (setupTxsIxs as any[][])
       .filter((ixs: any[]) => ixs.length > 0)
       .map((ixs: any[]) => ixs as unknown as Instruction[]);
@@ -921,6 +1003,7 @@ async function buildMultiplyAdjust(
       isMultiply: true,
       setupInstructionSets:
         nonEmptySetups.length > 0 ? nonEmptySetups : undefined,
+      metadata: priceImpactMeta,
     });
   } catch (err: unknown) {
     if (err instanceof Error && "statusCode" in err) throw err;
@@ -1134,10 +1217,7 @@ async function getLendingBalance(
     const deposit = obligation.getDepositByMint(addr(tokenMint) as any);
     if (!deposit) return 0;
 
-    const decimals =
-      params.extraData?.decimals != null
-        ? Number(params.extraData.decimals)
-        : 6;
+    const decimals = await resolveDecimals(params.extraData);
 
     return deposit.amount.div(10 ** decimals).toNumber();
   } catch {
@@ -1184,6 +1264,101 @@ async function getMultiplyBalance(
 }
 
 // ---------------------------------------------------------------------------
+// Price impact estimation (pre-flight, no tx building)
+// ---------------------------------------------------------------------------
+
+async function getMultiplyPriceImpact(
+  params: PriceImpactParams,
+): Promise<PriceImpactEstimate | null> {
+  try {
+    const extra = params.extraData ?? {};
+    const marketAddress = extra.market as string | undefined;
+    const collMint = extra.collateral_mint as string | undefined;
+    const debtMint = extra.debt_mint as string | undefined;
+    if (!marketAddress || !collMint || !debtMint) return null;
+
+    const market = await loadMarketCached(marketAddress);
+    if (!market) return null;
+
+    const collReserve = market.getReserveByMint(addr(collMint));
+    const debtReserve = market.getReserveByMint(addr(debtMint));
+    if (!collReserve || !debtReserve) return null;
+
+    // Oracle prices
+    const debtPrice = debtReserve.getOracleMarketPrice();
+    const collPrice = collReserve.getOracleMarketPrice();
+    if (!debtPrice || !collPrice || collPrice.isZero() || debtPrice.isZero()) return null;
+
+    // Estimate swap amount based on direction
+    const leverage = (extra.leverage as number) ?? 2;
+    const amount = parseFloat(params.amount);
+    if (!amount || amount <= 0) return null;
+
+    let inputMint: string;
+    let outputMint: string;
+    let swapAmountLamports: number;
+    let oraclePrice: number;
+
+    if (params.direction === "deposit") {
+      // Open: swap debt → collateral, amount ≈ deposit * (leverage - 1) in debt terms
+      inputMint = debtMint;
+      outputMint = collMint;
+      const debtDecimals = debtReserve.stats.decimals;
+      const oracleRatio = collPrice.div(debtPrice).toNumber(); // coll per debt
+      swapAmountLamports = Math.round(amount * (leverage - 1) / oracleRatio * 10 ** debtDecimals);
+      oraclePrice = debtPrice.div(collPrice).toNumber(); // debt→coll direction
+    } else {
+      // Withdraw: deleverage by swapping collateral → debt
+      // At leverage L, withdrawing W equity requires swapping ~W*(L-1) collateral to repay debt
+      inputMint = collMint;
+      outputMint = debtMint;
+      const collDecimals = collReserve.stats.decimals;
+      swapAmountLamports = Math.round(amount * (leverage - 1) * 10 ** collDecimals);
+      oraclePrice = collPrice.div(debtPrice).toNumber(); // coll→debt direction
+    }
+
+    if (swapAmountLamports <= 0) {
+      logger.debug({ amount, leverage, direction: params.direction }, "Swap amount too small for impact estimate");
+      return null;
+    }
+
+    const slippageBps = (extra.slippageBps as number) ?? 50;
+    const quote = await getJupiterLiteQuote(inputMint, outputMint, String(swapAmountLamports), slippageBps);
+
+    // Compute execution price and compare to oracle
+    const inDecimals = params.direction === "deposit"
+      ? debtReserve.stats.decimals
+      : collReserve.stats.decimals;
+    const outDecimals = params.direction === "deposit"
+      ? collReserve.stats.decimals
+      : debtReserve.stats.decimals;
+
+    const inputAmountTokens = swapAmountLamports / 10 ** inDecimals;
+    if (inputAmountTokens === 0) return null;
+    const outputActualTokens = Number(quote.outAmount) / 10 ** outDecimals;
+    const outputExpectedTokens = inputAmountTokens * oraclePrice;
+
+    const executionPrice = outputActualTokens / inputAmountTokens;
+    const deviationPct = (Math.abs(executionPrice - oraclePrice) / oraclePrice) * 100;
+
+    const collSymbol = (extra.collateral_symbol as string) ?? "COLL";
+    const debtSymbol = (extra.debt_symbol as string) ?? "DEBT";
+
+    return {
+      priceImpactPct: deviationPct,
+      inputAmount: inputAmountTokens,
+      inputSymbol: params.direction === "deposit" ? debtSymbol : collSymbol,
+      outputExpected: outputExpectedTokens,
+      outputActual: outputActualTokens,
+      outputSymbol: params.direction === "deposit" ? collSymbol : debtSymbol,
+    };
+  } catch (err) {
+    logger.warn({ err }, "Price impact estimation failed");
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Adapter export
 // ---------------------------------------------------------------------------
 
@@ -1219,5 +1394,10 @@ export const kaminoAdapter: ProtocolAdapter = {
     if (category === "multiply")
       return getMultiplyBalance({ walletAddress, depositAddress, category, extraData });
     return null;
+  },
+
+  async getPriceImpact(params) {
+    if (params.category !== "multiply") return null;
+    return getMultiplyPriceImpact(params);
   },
 };

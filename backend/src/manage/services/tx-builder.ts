@@ -12,6 +12,7 @@ import {
   guardDepositLimit,
   guardStablecoinOnly,
   guardCategoryAllowed,
+  guardLeverage,
   guardProgramWhitelist,
 } from "./guards.js";
 import { logger } from "../../shared/logger.js";
@@ -48,6 +49,10 @@ export async function buildTransaction(
   guardAdapterExists(opp);
   guardStablecoinOnly(opp);
   guardCategoryAllowed(opp);
+  guardLeverage(
+    extra_data?.leverage as number | undefined,
+    opp.max_leverage,
+  );
 
   // Load adapter
   const adapter = await getAdapter(opp.protocol!.slug);

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useMemo, useEffect, useDeferredValue } from "react";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { useSelectedWalletAccount } from "@solana/react";
 import { useWalletAccountTransactionSendingSigner } from "@solana/react";
 import type { UiWalletAccount } from "@wallet-standard/react";
@@ -131,7 +131,41 @@ function ConnectedMultiplyPanel({
   // On-chain balance is source of truth for position existence
   const hasActivePosition = (onChainStats?.balance ?? vaultBalance ?? 0) > 0;
 
+  // Pre-flight price impact estimation (for swap-involving actions)
+  const swapTabs = ["open", "withdraw", "close", "adjust"];
+  const piAmount = parseFloat(amount) || 0;
+  const deferredPiAmount = useDeferredValue(piAmount);
+  const deferredLeverage = useDeferredValue(leverage);
+  const piAmountKey = Math.round(deferredPiAmount * 100);
+  const piLeverageKey = Math.round(deferredLeverage * 10);
+  const { data: priceImpact, isLoading: piLoading } = useQuery({
+    queryKey: ["priceImpact", selectedAccount.address, yield_.id, piAmountKey, piLeverageKey, tab],
+    queryFn: () =>
+      api.getPriceImpact({
+        opportunity_id: yield_.id,
+        wallet_address: selectedAccount.address,
+        amount: String(deferredPiAmount),
+        direction: tab === "open" || tab === "adjust" ? "deposit" : "withdraw",
+        extra_data: {
+          leverage: ["withdraw", "close"].includes(tab)
+            ? (currentLeverage ?? deferredLeverage)
+            : deferredLeverage,
+          slippageBps,
+        },
+      }),
+    enabled: !!selectedAccount.address && deferredPiAmount > 0 && swapTabs.includes(tab),
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
+
   const { execute, status, error, txSignature, reset } = useTransaction(signer);
+
+  // Price impact confirmation state — stores build result when impact is high
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    buildResult: import("@/lib/tx-types").BuildTxResult;
+    metadata?: Record<string, unknown>;
+    priceImpactPct: number;
+  } | null>(null);
 
   // Reset transaction state when tab changes
   useEffect(() => { reset(); }, [tab, reset]);
@@ -200,39 +234,31 @@ function ConnectedMultiplyPanel({
       || (tab === "debt" && subAction === "repay");
   }
 
-  async function handleSubmit() {
-    if (!yield_.deposit_address) return;
-    reset();
+  // Only show confirmation when price impact exceeds user's slippage tolerance
+  const impactConfirmThreshold = slippageBps / 100; // bps → percent (30 bps → 0.3%)
 
-    // Read position_id from stored position (for close/adjust/manage operations)
+  function getBuildParams() {
+    const action = getAction();
     const positionNftId = position?.extra_data?.nft_id as number | undefined;
+    return {
+      opportunity_id: yield_.id,
+      wallet_address: selectedAccount.address,
+      amount: needsAmount ? amount : "0",
+      extra_data: {
+        leverage: tab === "deposit" ? (currentLeverage ?? leverage) : leverage,
+        slippageBps,
+        isClosingPosition: tab === "close",
+        ...(action ? { action } : {}),
+        ...(positionNftId != null ? { position_id: positionNftId } : {}),
+      },
+    };
+  }
 
-    let txMetadata: Record<string, unknown> | undefined;
-
-    const success = await execute(async () => {
-      const action = getAction();
-      const params = {
-        opportunity_id: yield_.id,
-        wallet_address: selectedAccount.address,
-        amount: needsAmount ? amount : "0",
-        extra_data: {
-          leverage: tab === "deposit" ? (currentLeverage ?? leverage) : leverage,
-          slippageBps,
-          isClosingPosition: tab === "close",
-          ...(action ? { action } : {}),
-          ...(positionNftId != null ? { position_id: positionNftId } : {}),
-        },
-      };
-
-      const response = isWithdrawAction()
-        ? await api.buildWithdraw(params)
-        : await api.buildDeposit(params);
-
-      const result = deserializeBuildResponse(response);
-      txMetadata = response.metadata;
-      return result;
-    });
-
+  async function signAndFinalize(
+    buildResult: import("@/lib/tx-types").BuildTxResult,
+    txMetadata?: Record<string, unknown>,
+  ) {
+    const success = await execute(async () => buildResult);
     if (!success) return;
 
     const operation: TxOperation = tab === "close" ? "close"
@@ -252,8 +278,45 @@ function ConnectedMultiplyPanel({
       opportunityId: yield_.id,
       vaultAddress: yield_.deposit_address ?? undefined,
       mint: collMint,
-      metadata: txMetadata, // nft_id from open tx, stored in position extra_data
+      metadata: txMetadata,
     });
+  }
+
+  async function handleSubmit() {
+    if (!yield_.deposit_address) return;
+    reset();
+    setPendingConfirm(null);
+
+    // Build the transaction
+    const params = getBuildParams();
+    let response;
+    try {
+      response = isWithdrawAction()
+        ? await api.buildWithdraw(params)
+        : await api.buildDeposit(params);
+    } catch (err) {
+      // Build failed — show error via useTransaction's error state
+      await execute(async () => { throw err; });
+      return;
+    }
+
+    const buildResult = deserializeBuildResponse(response);
+
+    // Check price impact — if above threshold, ask user to confirm
+    const impactPct = (response.metadata?.priceImpactPct as number) ?? 0;
+    if (impactPct >= impactConfirmThreshold && swapTabs.includes(tab)) {
+      setPendingConfirm({ buildResult, metadata: response.metadata, priceImpactPct: impactPct });
+      return;
+    }
+
+    await signAndFinalize(buildResult, response.metadata);
+  }
+
+  async function handleConfirmImpact() {
+    if (!pendingConfirm) return;
+    const { buildResult, metadata } = pendingConfirm;
+    setPendingConfirm(null);
+    await signAndFinalize(buildResult, metadata);
   }
 
   const statusLabel = getMultiplyStatusLabel(status);
@@ -505,21 +568,89 @@ function ConnectedMultiplyPanel({
         </div>
       )}
 
+      {/* Price impact preview for swap-involving actions */}
+      {swapTabs.includes(tab) && deferredPiAmount > 0 && (piLoading && !priceImpact) && (
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-foreground-muted text-[0.6rem] font-sans uppercase tracking-[0.05em]">Price Impact</span>
+          <span className="text-foreground-muted font-sans text-[0.75rem]">Estimating…</span>
+        </div>
+      )}
+      {priceImpact?.priceImpactPct != null && priceImpact.priceImpactPct > 0 && swapTabs.includes(tab) && (() => {
+        const lossUsd = priceImpact.outputExpected - priceImpact.outputActual;
+        const lossTokens = collPriceUsd > 0 ? lossUsd / collPriceUsd : 0;
+        const youReceive = deferredPiAmount - lossTokens;
+        const impactOnAmount = deferredPiAmount > 0 ? (lossTokens / deferredPiAmount) * 100 : 0;
+        const impactColor = impactOnAmount > 0.5 ? "text-red-400" : impactOnAmount > 0.1 ? "text-yellow-400" : "text-foreground-secondary";
+        return (
+          <div className="mb-2 space-y-1">
+            <div className="flex justify-between items-center">
+              <span className="text-foreground-muted text-[0.6rem] font-sans uppercase tracking-[0.05em]">At Oracle Price</span>
+              <span className="font-sans text-[0.75rem] tabular-nums">
+                {fmtNum(deferredPiAmount)} {collSymbol}
+              </span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-foreground-muted text-[0.6rem] font-sans uppercase tracking-[0.05em]">You Receive</span>
+              <span className="font-sans text-[0.75rem] tabular-nums">
+                ~{fmtNum(youReceive)} {collSymbol}{" "}
+                <span className={impactColor}>(-{impactOnAmount.toFixed(2)}%)</span>
+              </span>
+            </div>
+            {lossUsd > 0.01 && (
+              <div className="flex justify-between items-center">
+                <span className="text-foreground-muted text-[0.6rem] font-sans uppercase tracking-[0.05em]">Swap Cost</span>
+                <span className={`font-sans text-[0.75rem] tabular-nums ${impactColor}`}>
+                  ~{fmtUsd(lossUsd)}
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Price impact confirmation */}
+      {pendingConfirm && (
+        <div className="mt-3 p-3 bg-surface-low rounded-sm space-y-2">
+          <p className="text-yellow-400 text-[0.75rem] font-sans font-semibold">
+            Price impact: {pendingConfirm.priceImpactPct.toFixed(2)}%
+          </p>
+          <p className="text-foreground-muted text-[0.65rem] font-sans">
+            The swap execution price deviates from the oracle price. You may receive less than expected.
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setPendingConfirm(null)}
+              className="flex-1 rounded-sm px-4 py-2 text-sm font-sans font-semibold border border-foreground-muted/20 text-foreground-muted hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleConfirmImpact}
+              className="flex-1 bg-yellow-400/20 text-yellow-400 rounded-sm px-4 py-2 text-sm font-sans font-semibold hover:bg-yellow-400/30 transition-colors"
+            >
+              Proceed Anyway
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Action button */}
-      <button
-        onClick={handleSubmit}
-        disabled={!isValid || isBusy || protocolSlug === "drift"}
-        className="bg-neon text-on-neon rounded-sm px-6 py-3 text-sm font-semibold font-sans w-full mt-3 hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
-      >
-        {isBusy ? statusLabel
-          : tab === "open" ? `Open ${leverage.toFixed(1)}x ${collSymbol}/${debtSymbol}`
-          : tab === "deposit" ? `Deposit ${collSymbol}`
-          : tab === "adjust" ? `Adjust to ${leverage.toFixed(1)}x`
-          : tab === "collateral" ? (subAction === "add" ? `Add ${collSymbol}` : `Withdraw ${collSymbol}`)
-          : tab === "debt" ? (subAction === "borrow" ? `Borrow ${debtSymbol}` : `Repay ${debtSymbol}`)
-          : tab === "withdraw" ? `Withdraw ${collSymbol}`
-          : "Close Position"}
-      </button>
+      {!pendingConfirm && (
+        <button
+          onClick={handleSubmit}
+          disabled={!isValid || isBusy || protocolSlug === "drift"}
+          className="bg-neon text-on-neon rounded-sm px-6 py-3 text-sm font-semibold font-sans w-full mt-3 hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {isBusy ? statusLabel
+            : tab === "open" ? `Open ${leverage.toFixed(1)}x ${collSymbol}/${debtSymbol}`
+            : tab === "deposit" ? `Deposit ${collSymbol}`
+            : tab === "adjust" ? `Adjust to ${leverage.toFixed(1)}x`
+            : tab === "collateral" ? (subAction === "add" ? `Add ${collSymbol}` : `Withdraw ${collSymbol}`)
+            : tab === "debt" ? (subAction === "borrow" ? `Borrow ${debtSymbol}` : `Repay ${debtSymbol}`)
+            : tab === "withdraw" ? `Withdraw ${collSymbol}`
+            : "Close Position"}
+        </button>
+      )}
 
       {status === "success" && txSignature && (
         <div className="mt-3 text-center">

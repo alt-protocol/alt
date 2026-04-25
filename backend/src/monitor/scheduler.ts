@@ -5,6 +5,7 @@ import { db } from "./db/connection.js";
 import { snapshotAllWallets as snapshotKamino } from "./services/kamino-position-fetcher.js";
 import { snapshotAllWallets as snapshotDrift } from "./services/drift-position-fetcher.js";
 import { snapshotAllWallets as snapshotJupiter } from "./services/jupiter-position-fetcher.js";
+import { snapshotAllWallets as snapshotExponent } from "./services/exponent-position-fetcher.js";
 
 let task: cron.ScheduledTask | null = null;
 let compactionTask: cron.ScheduledTask | null = null;
@@ -22,8 +23,9 @@ async function snapshotAllPositionsJob() {
     const kaminoCount = await snapshotKamino(db, now);
     const driftCount = await snapshotDrift(db, now);
     const jupiterCount = await snapshotJupiter(db, now);
+    const exponentCount = await snapshotExponent(db, now);
     logger.info(
-      { kaminoCount, driftCount, jupiterCount },
+      { kaminoCount, driftCount, jupiterCount, exponentCount },
       "Position snapshot complete",
     );
   } catch (err) {

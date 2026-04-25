@@ -16,11 +16,11 @@ export function registerDiscoverTools(server: McpServer) {
         .string()
         .optional()
         .describe("Comma-separated token symbols, e.g. 'USDC,USDT'"),
-      stablecoins_only: z
-        .boolean()
+      asset_class: z
+        .string()
         .optional()
-        .default(true)
-        .describe("Only show stablecoin opportunities (default: true)"),
+        .default("stablecoin")
+        .describe("Filter by asset class: stablecoin, sol, btc, eth, other (default: stablecoin)"),
       sort: z
         .enum(["apy_desc", "apy_asc", "tvl_desc", "tvl_asc"])
         .optional()
@@ -39,7 +39,7 @@ export function registerDiscoverTools(server: McpServer) {
       const result = await discoverService.searchYields({
         category: args.category,
         tokens: args.tokens,
-        stablecoins_only: args.stablecoins_only,
+        asset_class: args.asset_class,
         sort: args.sort,
         limit: args.limit,
       });

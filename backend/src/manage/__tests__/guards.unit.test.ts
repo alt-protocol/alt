@@ -5,6 +5,7 @@ import {
   guardAdapterExists,
   guardCategoryAllowed,
   guardProgramWhitelist,
+  guardPriceImpact,
 } from "../services/guards.js";
 import type { OpportunityDetail } from "../../shared/types.js";
 
@@ -121,5 +122,42 @@ describe("guardProgramWhitelist", () => {
 
   it("passes for empty instructions", () => {
     expect(() => guardProgramWhitelist([])).not.toThrow();
+  });
+});
+
+describe("guardPriceImpact", () => {
+  const origWarn = process.env.PRICE_IMPACT_WARN_PCT;
+
+  afterEach(() => {
+    if (origWarn !== undefined) process.env.PRICE_IMPACT_WARN_PCT = origWarn;
+    else delete process.env.PRICE_IMPACT_WARN_PCT;
+  });
+
+  it("returns no warning below warn threshold (default 0.1%)", () => {
+    delete process.env.PRICE_IMPACT_WARN_PCT;
+    const result = guardPriceImpact(0.05);
+    expect(result.warning).toBe(false);
+    expect(result.blocked).toBe(false);
+    expect(result.priceImpactPct).toBe(0.05);
+  });
+
+  it("returns warning above warn threshold", () => {
+    delete process.env.PRICE_IMPACT_WARN_PCT;
+    const result = guardPriceImpact(0.3);
+    expect(result.warning).toBe(true);
+    expect(result.blocked).toBe(false);
+  });
+
+  it("never blocks — high impact returns warning, not error", () => {
+    delete process.env.PRICE_IMPACT_WARN_PCT;
+    const result = guardPriceImpact(5.0);
+    expect(result.warning).toBe(true);
+    expect(result.blocked).toBe(false);
+  });
+
+  it("respects custom warn threshold", () => {
+    process.env.PRICE_IMPACT_WARN_PCT = "0.5";
+    expect(guardPriceImpact(0.3).warning).toBe(false);
+    expect(guardPriceImpact(0.6).warning).toBe(true);
   });
 });

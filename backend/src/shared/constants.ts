@@ -32,6 +32,14 @@ export const KNOWN_TOKEN_MINTS: Record<string, string> = {
   "59obFNBzyTBGowrkif5uK7ojS58vsuWz3ZCvg6tfZAGw": "PST",
   AvZZF1YaZDziPY2RCK4oJrRVrbN3mTD9NL24hPeaZeUj: "syrupUSDC",
   BTRR3sj1Bn2ZjuemgbeQ6SCtf84iXS81CS7UDTSxUCaK: "USCC",
+  // Exponent SOL staking / restaking tokens
+  WFRGSWjaz8tbAxsJitmbfRuFV2mSNwy7BMWcCwaA28U: "fragSOL",
+  BULKoNSGzxtCqzwTvg5hFJg8fx6dqZRScyXe5LYMfxrn: "BulkSOL",
+  hy1oXYgrBW6PVcJ4s6s2FKavRdwgWTXdfE69AxT7kPT: "hyloSOL",
+  hy1opf2bqRDwAxoktyWAj6f3UpeHcLydzEdKjMYGs2u: "hyloSOL+",
+  // Exponent volatile tokens
+  "4sWNB8zGWHkh6UnmwiEtzNxL4XrN7uK9tosbESbJFfVs": "xSOL",
+  WFRGB49tP8CdKubqCdt5Spo2BdGS4BpgoinNER5TYUm: "fragBTC",
 };
 
 // ---------------------------------------------------------------------------
@@ -72,6 +80,9 @@ export const YIELD_BEARING_STABLES = new Set([
 export const LST_SYMBOLS = new Set([
   "JITOSOL", "MSOL", "BSOL", "JUPSOL", "HSOL", "VSOL", "INF", "DSOL",
   "BONKSOL", "COMPASSSOL", "LAINESOL", "PATHSOL", "PICOSOL", "HUBSOL",
+  "FRAGSOL", "BULKSOL", "HYLOSOL", "HYLOSOL+",
+  "BNSOL", "CGNTSOL", "DFDVSOL", "JSOL", "NXSOL", "PSOL",
+  "STKESOL", "STRONGSOL", "LANTERNSOL", "EZSOL",
 ]);
 
 // Derived — union of regular + yield-bearing stables
@@ -143,6 +154,15 @@ export function classifyToken(symbol: string): string {
 
 export function getSymbolForMint(mint: string): string | null {
   return KNOWN_TOKEN_MINTS[mint] ?? null;
+}
+
+const MINT_BY_SYMBOL: Record<string, string> = Object.fromEntries(
+  Object.entries(KNOWN_TOKEN_MINTS).map(([mint, sym]) => [sym.toUpperCase(), mint]),
+);
+
+/** Reverse lookup: symbol → mint address. Returns null if unknown. */
+export function getMintForSymbol(symbol: string): string | null {
+  return MINT_BY_SYMBOL[symbol.toUpperCase()] ?? null;
 }
 
 export function isStablecoinMint(mint: string): boolean {

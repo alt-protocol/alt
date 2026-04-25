@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { YieldOpportunity } from "@/lib/api";
 
@@ -24,7 +24,26 @@ export interface Filters {
 
 export const EMPTY_FILTERS: Filters = { protocol: "", category: "", token: "", tokenType: "", apyMin: "", apyMax: "", apy30dMin: "", apy30dMax: "", tvlMin: "", tvlMax: "", liquidityMin: "", liquidityMax: "" };
 
-export function useYieldFilters(allYields: YieldOpportunity[]) {
+/** Backend query params built from current filter state */
+export interface BackendFilters {
+  protocol?: string;
+  category?: string;
+  tokens?: string;
+  token_type?: string;
+  apy_min?: number;
+  apy_max?: number;
+  tvl_min?: number;
+  tvl_max?: number;
+  liquidity_min?: number;
+  liquidity_max?: number;
+}
+
+/**
+ * Manages filter, sort, and pagination state for the discover page.
+ *
+ * @param optionsData — full unfiltered dataset for populating dropdown options
+ */
+export function useYieldFilters(optionsData: YieldOpportunity[]) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -61,31 +80,41 @@ export function useYieldFilters(allYields: YieldOpportunity[]) {
   const [filters, setFilters] = useState<Filters>(initialFilters);
   const [draftFilters, setDraftFilters] = useState<Filters>(initialFilters);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [offset, setOffset] = useState(0);
 
   // 30d sort is client-side only; for apy/tvl we use backend sort
   const backendSort = sortField === "apy30d" || sortField === "liquidity" ? "apy_desc" : `${sortField}_${sortDir}`;
 
-  const filteredYields = useMemo(() => {
-    let result = allYields;
-    if (filters.protocol) result = result.filter((y) => y.protocol_name === filters.protocol);
-    if (filters.token) result = result.filter((y) => y.tokens.includes(filters.token));
-    if (filters.tokenType) result = result.filter((y) => y.underlying_tokens?.some((t) => t.type === filters.tokenType));
-    const apyMin = filters.apyMin ? parseFloat(filters.apyMin) : null;
-    const apyMax = filters.apyMax ? parseFloat(filters.apyMax) : null;
+  // Build backend filter params from current filter state
+  const backendFilters = useMemo<BackendFilters>(() => {
+    const bf: BackendFilters = {};
+    if (filters.protocol) bf.protocol = filters.protocol;
+    if (filters.category) bf.category = filters.category;
+    if (filters.token) bf.tokens = filters.token;
+    if (filters.tokenType) bf.token_type = filters.tokenType;
+    const apyMin = filters.apyMin ? parseFloat(filters.apyMin) : undefined;
+    const apyMax = filters.apyMax ? parseFloat(filters.apyMax) : undefined;
+    const tvlMin = filters.tvlMin ? parseFloat(filters.tvlMin) : undefined;
+    const tvlMax = filters.tvlMax ? parseFloat(filters.tvlMax) : undefined;
+    const liqMin = filters.liquidityMin ? parseFloat(filters.liquidityMin) : undefined;
+    const liqMax = filters.liquidityMax ? parseFloat(filters.liquidityMax) : undefined;
+    if (apyMin != null && !isNaN(apyMin)) bf.apy_min = apyMin;
+    if (apyMax != null && !isNaN(apyMax)) bf.apy_max = apyMax;
+    if (tvlMin != null && !isNaN(tvlMin)) bf.tvl_min = tvlMin;
+    if (tvlMax != null && !isNaN(tvlMax)) bf.tvl_max = tvlMax;
+    if (liqMin != null && !isNaN(liqMin)) bf.liquidity_min = liqMin;
+    if (liqMax != null && !isNaN(liqMax)) bf.liquidity_max = liqMax;
+    return bf;
+  }, [filters]);
+
+  // Client-side post-processing: 30d range filter + 30d/liquidity sort
+  // Applied by the consumer via processPage()
+  const processPage = useCallback((pageData: YieldOpportunity[]) => {
+    let result = pageData;
     const apy30dMin = filters.apy30dMin ? parseFloat(filters.apy30dMin) : null;
     const apy30dMax = filters.apy30dMax ? parseFloat(filters.apy30dMax) : null;
-    const tvlMin = filters.tvlMin ? parseFloat(filters.tvlMin) : null;
-    const tvlMax = filters.tvlMax ? parseFloat(filters.tvlMax) : null;
-    if (apyMin != null) result = result.filter((y) => (y.apy_current ?? 0) >= apyMin);
-    if (apyMax != null) result = result.filter((y) => (y.apy_current ?? 0) <= apyMax);
     if (apy30dMin != null) result = result.filter((y) => (y.apy_30d_avg ?? 0) >= apy30dMin);
     if (apy30dMax != null) result = result.filter((y) => (y.apy_30d_avg ?? 0) <= apy30dMax);
-    if (tvlMin != null) result = result.filter((y) => (y.tvl_usd ?? 0) >= tvlMin);
-    if (tvlMax != null) result = result.filter((y) => (y.tvl_usd ?? 0) <= tvlMax);
-    const liqMin = filters.liquidityMin ? parseFloat(filters.liquidityMin) : null;
-    const liqMax = filters.liquidityMax ? parseFloat(filters.liquidityMax) : null;
-    if (liqMin != null) result = result.filter((y) => (y.liquidity_available_usd ?? 0) >= liqMin);
-    if (liqMax != null) result = result.filter((y) => (y.liquidity_available_usd ?? 0) <= liqMax);
     // Client-side sort for 30d and liquidity
     if (sortField === "apy30d") {
       result = [...result].sort((a, b) => {
@@ -102,22 +131,23 @@ export function useYieldFilters(allYields: YieldOpportunity[]) {
       });
     }
     return result;
-  }, [allYields, filters, sortField, sortDir]);
+  }, [filters.apy30dMin, filters.apy30dMax, sortField, sortDir]);
 
+  // Dropdown options derived from full unfiltered dataset
   const sources = useMemo(() => {
-    const names = new Set(allYields.map((y) => y.protocol_name).filter(Boolean));
+    const names = new Set(optionsData.map((y) => y.protocol_name).filter(Boolean));
     return Array.from(names).sort() as string[];
-  }, [allYields]);
+  }, [optionsData]);
 
   const allTokens = useMemo(() => {
-    const tokens = new Set(allYields.flatMap((y) => y.tokens).filter(Boolean));
+    const tokens = new Set(optionsData.flatMap((y) => y.tokens).filter(Boolean));
     return Array.from(tokens).sort();
-  }, [allYields]);
+  }, [optionsData]);
 
   const allTokenTypes = useMemo(() => {
-    const types = new Set(allYields.flatMap((y) => y.underlying_tokens ?? []).map((t) => t.type));
+    const types = new Set(optionsData.flatMap((y) => y.underlying_tokens ?? []).map((t) => t.type));
     return Array.from(types).sort();
-  }, [allYields]);
+  }, [optionsData]);
 
   function syncToUrl(f: Filters, sf: SortField, sd: SortDir) {
     const params = new URLSearchParams();
@@ -130,10 +160,12 @@ export function useYieldFilters(allYields: YieldOpportunity[]) {
 
   function updateFilters(f: Filters) {
     setFilters(f);
+    setOffset(0);
     syncToUrl(f, sortField, sortDir);
   }
 
   function toggleSort(field: SortField) {
+    setOffset(0);
     if (sortField === field) {
       const newDir = sortDir === "desc" ? "asc" : "desc";
       setSortDir(newDir);
@@ -147,6 +179,7 @@ export function useYieldFilters(allYields: YieldOpportunity[]) {
 
   function applyFilters() {
     setFilters(draftFilters);
+    setOffset(0);
     setFilterOpen(false);
     syncToUrl(draftFilters, sortField, sortDir);
   }
@@ -154,6 +187,7 @@ export function useYieldFilters(allYields: YieldOpportunity[]) {
   function resetFilters() {
     setDraftFilters(EMPTY_FILTERS);
     setFilters(EMPTY_FILTERS);
+    setOffset(0);
     setFilterOpen(false);
     syncToUrl(EMPTY_FILTERS, sortField, sortDir);
   }
@@ -168,8 +202,11 @@ export function useYieldFilters(allYields: YieldOpportunity[]) {
     sortDir,
     filterOpen,
     setFilterOpen,
-    filteredYields,
+    processPage,
     backendSort,
+    backendFilters,
+    offset,
+    setOffset,
     sources,
     allTokens,
     allTokenTypes,

@@ -14,16 +14,50 @@ interface ActionMetadata {
   label: string;
 }
 
-type Status = "idle" | "loading" | "signing" | "submitted" | "error";
+type Status = "idle" | "loading" | "preparing" | "signing" | "submitted" | "error";
+
+type SignAndSendFeature = {
+  signAndSendTransaction: (
+    ...inputs: {
+      transaction: Uint8Array;
+      account: ReturnType<typeof useSelectedWalletAccount>[0];
+      chain: string;
+    }[]
+  ) => Promise<readonly { signature: Uint8Array }[]>;
+};
+
+const SETUP_TX_WARMUP_MS = 2000;
 
 export default function SignContent() {
   const searchParams = useSearchParams();
-  const actionUrl = searchParams.get("action");
+  // Reconstruct action URL if it was truncated during copy-paste.
+  // When %26 gets decoded to & before pasting, the browser parses
+  // amount/leverage/etc. as sign-page params instead of action URL params.
+  const rawAction = searchParams.get("action");
+  const actionUrl = (() => {
+    if (!rawAction) return null;
+    const actionParams = [
+      "amount", "leverage", "slippageBps", "wallet",
+      "isClosingPosition", "position_id", "deposit_token",
+    ];
+    const extra = new URLSearchParams();
+    for (const key of actionParams) {
+      const val = searchParams.get(key);
+      if (val && !rawAction.includes(`${key}=`)) {
+        extra.set(key, val);
+      }
+    }
+    if (extra.toString()) {
+      return rawAction + (rawAction.includes("?") ? "&" : "?") + extra.toString();
+    }
+    return rawAction;
+  })();
 
   const [selectedAccount] = useSelectedWalletAccount();
 
   const [metadata, setMetadata] = useState<ActionMetadata | null>(null);
   const [status, setStatus] = useState<Status>("idle");
+  const [statusDetail, setStatusDetail] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [signature, setSignature] = useState<string | null>(null);
 
@@ -31,11 +65,12 @@ export default function SignContent() {
     if (!actionUrl) return;
     setStatus("loading");
     fetch(actionUrl, { headers: { Accept: "application/json" } })
-      .then((res) => {
-        if (!res.ok) throw new Error(`Failed to load action (${res.status})`);
-        return res.json();
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || `Failed to load action (${res.status})`);
+        return data as ActionMetadata;
       })
-      .then((data: ActionMetadata) => {
+      .then((data) => {
         setMetadata(data);
         setStatus("idle");
       })
@@ -50,9 +85,20 @@ export default function SignContent() {
 
     setStatus("signing");
     setError(null);
+    setStatusDetail(null);
 
     try {
       const walletAddress = selectedAccount.address;
+
+      // Check wallet supports signAndSendTransaction
+      const featureName = "solana:signAndSendTransaction";
+      const hasFeature = (selectedAccount.features as readonly string[]).includes(featureName);
+      if (!hasFeature) {
+        throw new Error("Your wallet does not support signAndSendTransaction. Try Phantom or Solflare.");
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const feature = getWalletAccountFeature(selectedAccount, featureName as any) as SignAndSendFeature;
 
       // POST to action endpoint — gets unsigned base64 transaction
       const res = await fetch(actionUrl, {
@@ -61,28 +107,34 @@ export default function SignContent() {
         body: JSON.stringify({ account: walletAddress }),
       });
 
+      const data = await res.json();
       if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `Transaction build failed (${res.status})`);
+        throw new Error(data.message || `Transaction build failed (${res.status})`);
       }
 
-      const { transaction: txBase64 } = await res.json();
+      const txBase64: string | undefined = data.transaction;
       if (!txBase64) throw new Error("No transaction returned");
 
-      // Decode base64 to bytes
-      const txBytes = Uint8Array.from(atob(txBase64), (c) => c.charCodeAt(0));
+      // Sign setup transactions first (e.g., LUT creation for multiply)
+      const setupTxs: string[] | undefined = data.setup_transactions;
+      if (setupTxs?.length) {
+        setStatus("preparing");
+        for (let i = 0; i < setupTxs.length; i++) {
+          setStatusDetail(`Step ${i + 1} of ${setupTxs.length + 1}`);
+          const setupBytes = Uint8Array.from(atob(setupTxs[i]), (c) => c.charCodeAt(0));
+          await feature.signAndSendTransaction({
+            transaction: new Uint8Array(setupBytes),
+            account: selectedAccount,
+            chain: "solana:mainnet",
+          });
+          await new Promise((resolve) => setTimeout(resolve, SETUP_TX_WARMUP_MS));
+        }
+        setStatus("signing");
+        setStatusDetail(`Step ${setupTxs.length + 1} of ${setupTxs.length + 1}`);
+      }
 
-      // Use Wallet Standard signAndSendTransaction feature
-      const feature = getWalletAccountFeature(
-        selectedAccount,
-        "solana:signAndSendTransaction" as Parameters<typeof getWalletAccountFeature>[1],
-      ) as {
-        signAndSendTransaction: (input: {
-          transaction: Uint8Array;
-          account: typeof selectedAccount;
-          chain: string;
-        }) => Promise<readonly [{ signature: Uint8Array }]>;
-      };
+      // Decode base64 to bytes and sign main transaction
+      const txBytes = Uint8Array.from(atob(txBase64), (c) => c.charCodeAt(0));
 
       const [result] = await feature.signAndSendTransaction({
         transaction: new Uint8Array(txBytes),
@@ -95,6 +147,7 @@ export default function SignContent() {
       const sigStr = getBase58Decoder().decode(result.signature);
       setSignature(sigStr);
       setStatus("submitted");
+      setStatusDetail(null);
 
       // Sync position to portfolio so it reflects immediately
       try {
@@ -108,6 +161,7 @@ export default function SignContent() {
       const msg = err instanceof Error ? err.message : "Signing failed";
       setError(msg.includes("User rejected") ? "Transaction rejected by user" : msg);
       setStatus("error");
+      setStatusDetail(null);
     }
   }, [actionUrl, selectedAccount]);
 
@@ -162,12 +216,14 @@ export default function SignContent() {
           {selectedAccount && status !== "submitted" && (
             <button
               onClick={handleSign}
-              disabled={status === "signing"}
+              disabled={status === "signing" || status === "preparing"}
               className="w-full py-3 bg-neon text-surface font-sans text-sm font-semibold rounded-sm hover:opacity-90 transition-opacity disabled:opacity-50"
             >
-              {status === "signing"
-                ? "Waiting for wallet..."
-                : metadata.label || "Sign Transaction"}
+              {status === "preparing"
+                ? `Preparing${statusDetail ? ` (${statusDetail})` : ""}...`
+                : status === "signing"
+                  ? `Waiting for wallet${statusDetail ? ` (${statusDetail})` : ""}...`
+                  : metadata.label || "Sign Transaction"}
             </button>
           )}
 

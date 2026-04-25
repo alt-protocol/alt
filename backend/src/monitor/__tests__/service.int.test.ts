@@ -29,7 +29,9 @@ describe("monitorService", () => {
 
   describe("syncPosition", () => {
     it("stores position with metadata", async () => {
-      await monitorService.syncPosition(wallet.address, 2210, {
+      const { resolveOppId, MARKET_EXTERNAL_IDS } = await import("../../__tests__/helpers.js");
+      const oppId = await resolveOppId(MARKET_EXTERNAL_IDS.JUPITER_MULTIPLY_JUICED_USDC);
+      await monitorService.syncPosition(wallet.address, oppId, {
         nft_id: 999,
         vault_id: 68,
         position_id: 999,

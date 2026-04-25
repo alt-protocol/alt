@@ -7,7 +7,7 @@ import { getMultiplyStats } from "../protocols/kamino.js";
 import { getJupiterMultiplyStats } from "../protocols/jupiter.js";
 import { authHook } from "../../shared/auth.js";
 import { logger } from "../../shared/logger.js";
-import { BuildTxBody, SubmitTxBody, BalanceBody, WalletBalanceBody, WithdrawStateBody } from "./schemas.js";
+import { BuildTxBody, SubmitTxBody, BalanceBody, WalletBalanceBody, WithdrawStateBody, PriceImpactBody } from "./schemas.js";
 import { fetchWalletBalance } from "../services/wallet-balance.js";
 import { cachedAsync, bustCacheKey } from "../../shared/utils.js";
 
@@ -21,27 +21,34 @@ export async function txRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const body = BuildTxBody.parse(request.body);
 
-      const result = await buildTransaction(
-        {
-          opportunity_id: body.opportunity_id,
-          wallet_address: body.wallet_address,
-          amount: body.amount,
-          extra_data: body.extra_data,
-        },
-        "deposit",
-      );
-
-      // Optional simulation
-      if (body.simulate) {
-        const simulation = await simulateTransaction(
-          result.instructions,
-          body.wallet_address,
-          result.lookupTableAddresses,
+      try {
+        const result = await buildTransaction(
+          {
+            opportunity_id: body.opportunity_id,
+            wallet_address: body.wallet_address,
+            amount: body.amount,
+            extra_data: body.extra_data,
+          },
+          "deposit",
         );
-        return reply.send({ ...result, simulation });
-      }
 
-      return reply.send(result);
+        // Optional simulation
+        if (body.simulate) {
+          const simulation = await simulateTransaction(
+            result.instructions,
+            body.wallet_address,
+            result.lookupTableAddresses,
+          );
+          return reply.send({ ...result, simulation });
+        }
+
+        return reply.send(result);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to build deposit transaction";
+        logger.error({ err, opportunityId: body.opportunity_id, amount: body.amount }, "build-deposit failed");
+        const statusCode = (err as any)?.statusCode ?? 422;
+        return reply.status(statusCode).send({ message: msg });
+      }
     },
   );
 
@@ -52,27 +59,34 @@ export async function txRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const body = BuildTxBody.parse(request.body);
 
-      const result = await buildTransaction(
-        {
-          opportunity_id: body.opportunity_id,
-          wallet_address: body.wallet_address,
-          amount: body.amount,
-          extra_data: body.extra_data,
-        },
-        "withdraw",
-      );
-
-      // Optional simulation
-      if (body.simulate) {
-        const simulation = await simulateTransaction(
-          result.instructions,
-          body.wallet_address,
-          result.lookupTableAddresses,
+      try {
+        const result = await buildTransaction(
+          {
+            opportunity_id: body.opportunity_id,
+            wallet_address: body.wallet_address,
+            amount: body.amount,
+            extra_data: body.extra_data,
+          },
+          "withdraw",
         );
-        return reply.send({ ...result, simulation });
-      }
 
-      return reply.send(result);
+        // Optional simulation
+        if (body.simulate) {
+          const simulation = await simulateTransaction(
+            result.instructions,
+            body.wallet_address,
+            result.lookupTableAddresses,
+          );
+          return reply.send({ ...result, simulation });
+        }
+
+        return reply.send(result);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to build withdraw transaction";
+        logger.error({ err, opportunityId: body.opportunity_id, amount: body.amount }, "build-withdraw failed");
+        const statusCode = (err as any)?.statusCode ?? 422;
+        return reply.status(statusCode).send({ message: msg });
+      }
     },
   );
 
@@ -199,6 +213,37 @@ export async function txRoutes(app: FastifyInstance) {
         : await getMultiplyStats(body.wallet_address, extra);
 
       return reply.send(stats);
+    },
+  );
+
+  // POST /tx/price-impact — pre-flight price impact estimation (protocol-agnostic)
+  app.post(
+    "/tx/price-impact",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const body = PriceImpactBody.parse(request.body);
+
+      const opp = await discoverService.getOpportunityById(body.opportunity_id);
+      if (!opp?.protocol?.slug || !opp.deposit_address || opp.category !== "multiply") {
+        return reply.send(null);
+      }
+
+      const adapter = await getAdapter(opp.protocol.slug);
+      if (!adapter?.getPriceImpact) return reply.send(null);
+
+      try {
+        const result = await adapter.getPriceImpact({
+          walletAddress: body.wallet_address,
+          depositAddress: opp.deposit_address,
+          category: opp.category,
+          amount: body.amount,
+          direction: body.direction,
+          extraData: { ...(opp.extra_data ?? {}), ...(body.extra_data ?? {}) },
+        });
+        return reply.send(result);
+      } catch {
+        return reply.send(null);
+      }
     },
   );
 }

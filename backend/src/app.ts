@@ -31,15 +31,17 @@ export async function buildApp() {
   // Security headers
   await app.register(helmet, { contentSecurityPolicy: false });
 
-  // CORS — validate against whitelist (Actions endpoints override with * per Solana spec)
+  // CORS — Solana Actions endpoints require origin: * per spec, others use whitelist
   const origins = (process.env.CORS_ORIGINS ?? "http://localhost:3000")
     .split(",")
     .map((o) => o.trim());
   await app.register(cors, {
-    origin: origins,
+    // Solana Actions spec requires Access-Control-Allow-Origin: * for action endpoints.
+    // Allow all origins globally; auth middleware protects mutation endpoints.
+    origin: "*",
     methods: ["GET", "POST", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Mcp-Session-Id", "X-Agent-Id"],
-    exposedHeaders: ["Mcp-Session-Id"],
+    allowedHeaders: ["Content-Type", "Authorization", "Mcp-Session-Id", "X-Agent-Id", "Accept-Encoding"],
+    exposedHeaders: ["Mcp-Session-Id", "X-Action-Version", "X-Blockchain-Ids"],
   });
 
   // Rate limiting
@@ -130,6 +132,9 @@ export async function buildApp() {
   // Solana Actions spec: actions.json maps URL patterns to action endpoints
   app.get("/actions.json", async (_request, reply) => {
     void reply.header("Access-Control-Allow-Origin", "*");
+    void reply.header("Access-Control-Expose-Headers", "X-Action-Version,X-Blockchain-Ids");
+    void reply.header("X-Action-Version", "2.6.1");
+    void reply.header("X-Blockchain-Ids", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp");
     return {
       rules: [
         { pathPattern: "/api/manage/actions/deposit**", apiPath: "/api/manage/actions/deposit**" },

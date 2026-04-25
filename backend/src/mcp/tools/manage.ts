@@ -59,7 +59,11 @@ async function buildAndAssemble(
       ? `Deposit ${amount} into ${oppName} on ${protocol}${apyStr}`
       : `Withdraw ${amount} from ${oppName} on ${protocol}`;
 
-  const actionApiUrl = `${APP_URL}/api/manage/actions/${action}?opportunity_id=${opportunityId}&amount=${encodeURIComponent(amount)}&wallet=${walletAddress}`;
+  const actionUrl = new URL(`${APP_URL}/api/manage/actions/${action}`);
+  actionUrl.searchParams.set("opportunity_id", String(opportunityId));
+  actionUrl.searchParams.set("amount", amount);
+  actionUrl.searchParams.set("wallet", walletAddress);
+  const actionApiUrl = actionUrl.toString();
   const deeplinkUrl = `solana-action:${actionApiUrl}`;
   const qr = await QRCode.toDataURL(deeplinkUrl, { width: 256, margin: 1 });
 
@@ -243,53 +247,38 @@ export function registerManageTools(server: McpServer, ctx?: McpRequestContext) 
   );
 
   server.tool(
-    "get_swap_quote",
-    "Get a Jupiter swap quote for exchanging one token for another on Solana.",
+    "swap",
+    "Jupiter token swap. With quote_only=true returns a quote (no auth needed). With quote_only=false (default) builds an unsigned swap transaction ready for signing.",
     {
+      wallet_address: z.string().regex(BASE58_RE, "Invalid Solana address").describe("Solana wallet address (taker / signer)"),
       input_mint: z.string().regex(BASE58_RE, "Invalid Solana address").describe("Input token mint address"),
       output_mint: z.string().regex(BASE58_RE, "Invalid Solana address").describe("Output token mint address"),
       amount: z.string().describe("Amount in smallest units (lamports for SOL, etc.)"),
       slippage_bps: z.number().int().min(1).max(500).optional().default(50).describe("Slippage tolerance in basis points (default: 50 = 0.5%)"),
-      taker: z.string().describe("Wallet address of the taker"),
+      quote_only: z.boolean().optional().default(false).describe("If true, return quote without building transaction (no auth required)"),
     },
-    withToolHandler("get_swap_quote", async (args) => {
-      const quote = await getSwapQuote({
-        inputMint: args.input_mint,
-        outputMint: args.output_mint,
-        amount: args.amount,
-        slippageBps: args.slippage_bps,
-        taker: args.taker,
-      });
-      return toolResult(quote);
-    }),
-  );
-
-  server.tool(
-    "build_swap_tx",
-    "Build an unsigned Jupiter swap transaction. Returns a base64-encoded transaction ready for signing.",
-    {
-      wallet_address: z.string().describe("Solana wallet address that will sign"),
-      input_mint: z.string().regex(BASE58_RE, "Invalid Solana address").describe("Input token mint address"),
-      output_mint: z.string().regex(BASE58_RE, "Invalid Solana address").describe("Output token mint address"),
-      amount: z.string().describe("Amount in smallest units"),
-      slippage_bps: z.number().int().min(1).max(500).optional().default(50).describe("Slippage tolerance in basis points"),
-    },
-    withToolHandler("build_swap_tx", async (args) => {
-      const authErr = await guardMcpAuth(ctx);
-      if (authErr) return authErr;
-
-      logger.info({ agentId: ctx?.agentId, tool: "build_swap_tx", wallet: args.wallet_address }, "MCP: build swap tx");
-
+    withToolHandler("swap", async (args) => {
       guardWalletValid(args.wallet_address);
 
-      const result = await buildSwapInstructions({
+      const swapParams = {
         inputMint: args.input_mint,
         outputMint: args.output_mint,
         amount: args.amount,
         slippageBps: args.slippage_bps,
         taker: args.wallet_address,
-      });
+      };
 
+      if (args.quote_only) {
+        const quote = await getSwapQuote(swapParams);
+        return toolResult(quote);
+      }
+
+      const authErr = await guardMcpAuth(ctx);
+      if (authErr) return authErr;
+
+      logger.info({ agentId: ctx?.agentId, tool: "swap", wallet: args.wallet_address }, "MCP: build swap tx");
+
+      const result = await buildSwapInstructions(swapParams);
       const serialized = serializeResult(result);
       guardProgramWhitelist(serialized.instructions);
 

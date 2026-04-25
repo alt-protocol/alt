@@ -124,6 +124,7 @@ export function usePortfolioData() {
   }, [historyQuery.data]);
 
   const showSyncing = positionsQuery.isSuccess && positions.length === 0 && statusQuery.data?.fetch_status === "fetching";
+  const isRefreshing = positions.length > 0 && statusQuery.data?.fetch_status === "fetching";
 
   const shortAddr = walletAddress
     ? `${walletAddress.slice(0, 8)}...${walletAddress.slice(-4)}`
@@ -149,6 +150,7 @@ export function usePortfolioData() {
     diversification,
     chartData,
     showSyncing,
+    isRefreshing,
     shortAddr,
   };
 }

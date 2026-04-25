@@ -206,7 +206,22 @@ async function apiPost<T>(path: string, body: unknown): Promise<T> {
 
 export const api = {
   // --- Discover module ---
-  getYields: (params?: { category?: string; sort?: string; tokens?: string; stablecoins_only?: boolean }) => {
+  getYields: (params?: {
+    category?: string;
+    sort?: string;
+    tokens?: string;
+    asset_class?: string;
+    protocol?: string;
+    token_type?: string;
+    apy_min?: number;
+    apy_max?: number;
+    tvl_min?: number;
+    tvl_max?: number;
+    liquidity_min?: number;
+    liquidity_max?: number;
+    limit?: number;
+    offset?: number;
+  }) => {
     const qs = new URLSearchParams(
       Object.fromEntries(
         Object.entries(params ?? {}).filter(([, v]) => v != null) as [string, string][]
@@ -308,6 +323,22 @@ export const api = {
       borrowLimit: number;
       healthFactor: number;
     } | null>("/api/manage/tx/position-stats", params),
+
+  getPriceImpact: (params: {
+    opportunity_id: number;
+    wallet_address: string;
+    amount: string;
+    direction: "deposit" | "withdraw";
+    extra_data?: Record<string, unknown>;
+  }) =>
+    apiPost<{
+      priceImpactPct: number;
+      inputAmount: number;
+      inputSymbol: string;
+      outputExpected: number;
+      outputActual: number;
+      outputSymbol: string;
+    } | null>("/api/manage/tx/price-impact", params),
 
   // --- Health ---
   getHealth: () =>

@@ -2,10 +2,10 @@
  * Fetch yield data from Exponent Finance via their REST API.
  *
  * Pure HTTP — zero SDK dependencies. Matches Drift/Jupiter/Kamino pattern.
- * Only stablecoin/RWA markets, PT and LP opportunities.
+ * Stores ALL markets; asset_class column handles filtering.
  */
 import { getOrNull } from "../../shared/http.js";
-import { getSymbolForMint, classifyToken } from "../../shared/constants.js";
+import { getSymbolForMint } from "../../shared/constants.js";
 import { logger } from "../../shared/logger.js";
 import { db } from "../db/connection.js";
 import {
@@ -13,6 +13,7 @@ import {
   upsertOpportunity,
   deactivateStale,
   getProtocol,
+  tokenType,
 } from "./utils.js";
 
 const EXPONENT_API = "https://api.exponent.finance/markets";
@@ -46,12 +47,12 @@ interface ExponentMarket {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function isStablecoinMarket(m: ExponentMarket): boolean {
-  if (m.categories?.includes("Stablecoins")) return true;
-  const symbol = getSymbolForMint(m.underlyingAsset.mint);
-  if (!symbol) return false;
-  const cls = classifyToken(symbol);
-  return cls === "stable" || cls === "yield_bearing_stable";
+/** Derive asset_class from Exponent's categories field. */
+function exponentAssetClass(m: ExponentMarket): string {
+  if (m.categories?.includes("Stablecoins")) return "stablecoin";
+  if (m.categories?.includes("SOL") || m.categories?.includes("Staking")) return "sol";
+  if (m.tokenName?.toUpperCase().includes("BTC")) return "btc";
+  return "other";
 }
 
 function fmtMaturity(ts: number): string {
@@ -90,12 +91,12 @@ export async function fetchExponentYields(): Promise<number> {
   for (const m of data) {
     if (m.marketStatus !== "active") continue;
     if (m.maturityDateUnixTs <= nowSec) continue;
-    if (!isStablecoinMarket(m)) continue;
     if ((m.totalMarketSize ?? 0) < MIN_TVL_USD) continue;
 
     const symbol = getSymbolForMint(m.underlyingAsset.mint) ?? m.underlyingAsset.ticker;
     const monthYear = fmtMaturity(m.maturityDateUnixTs);
     const daysToMaturity = Math.ceil((m.maturityDateUnixTs - nowSec) / 86400);
+    const assetClass = exponentAssetClass(m);
 
     const commonExtra = {
       market_vault: m.vaultAddress,
@@ -104,6 +105,7 @@ export async function fetchExponentYields(): Promise<number> {
       mint_yt: m.ytMint,
       mint_sy: m.syMint,
       mint_base: m.underlyingAsset.mint,
+      decimals: m.underlyingAsset.decimals ?? 6,
       expiration_ts: m.maturityDateUnixTs,
       expiration_date: new Date(m.maturityDateUnixTs * 1000).toISOString(),
       sy_exchange_rate: m.syExchangeRate,
@@ -131,6 +133,13 @@ export async function fetchExponentYields(): Promise<number> {
       now,
       source: "exponent_api",
       lockPeriodDays: daysToMaturity,
+      assetClass,
+      underlyingTokens: [{
+        symbol,
+        mint: m.underlyingAsset.mint,
+        role: "underlying",
+        type: tokenType(symbol),
+      }],
     });
     count++;
 
@@ -155,6 +164,13 @@ export async function fetchExponentYields(): Promise<number> {
         now,
         source: "exponent_api",
         lockPeriodDays: daysToMaturity,
+        assetClass,
+        underlyingTokens: [{
+          symbol,
+          mint: m.underlyingAsset.mint,
+          role: "underlying",
+          type: tokenType(symbol),
+        }],
       });
       count++;
     }

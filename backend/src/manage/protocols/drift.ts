@@ -6,6 +6,7 @@ import type {
   WithdrawState,
 } from "./types.js";
 import { convertLegacyInstruction as convertIx } from "../services/instruction-converter.js";
+import { resolveDecimals } from "../services/decimals.js";
 
 // Drift SDK uses legacy @solana/web3.js and bn.js internally.
 // We dynamically import everything to avoid loading at startup.
@@ -44,11 +45,6 @@ const dummyWallet = (pubkey: any) => ({
   signTransaction: async (t: any) => t,
   signAllTransactions: async (t: any) => t,
 });
-
-function getDecimals(extraData?: Record<string, unknown>): number {
-  if (extraData?.decimals != null) return Number(extraData.decimals);
-  return 6;
-}
 
 function getMarketIndex(extraData?: Record<string, unknown>): number {
   return extraData?.market_index != null ? Number(extraData.market_index) : 0;
@@ -167,7 +163,7 @@ async function buildInsuranceFundDeposit(
   const ctx = await createDriftContext(params.walletAddress);
   try {
     const marketIndex = getMarketIndex(params.extraData);
-    const decimals = getDecimals(params.extraData);
+    const decimals = await resolveDecimals(params.extraData);
     const amount = new ctx.BN(
       Math.floor(parseFloat(params.amount) * 10 ** decimals),
     );
@@ -215,7 +211,7 @@ async function buildInsuranceFundWithdraw(
 
     if (stake.pendingShares.isZero()) {
       // Step 1: Request unstaking.
-      const decimals = getDecimals(params.extraData);
+      const decimals = await resolveDecimals(params.extraData);
       const amount = new ctx.BN(
         Math.floor(parseFloat(params.amount) * 10 ** decimals),
       );
@@ -342,7 +338,7 @@ async function getIfBalance(
     if (!stake) return 0;
     if (stake.shares.isZero() && stake.pendingShares.isZero()) return 0;
 
-    const decimals = getDecimals(params.extraData);
+    const decimals = await resolveDecimals(params.extraData);
 
     // If there's a pending withdrawal, return the pending value
     if (!stake.pendingShares.isZero())
@@ -434,7 +430,7 @@ async function getIfWithdrawState(
     const stake = await readIfStake(ctx, getMarketIndex(params.extraData));
     if (!stake || stake.pendingShares.isZero()) return { status: "none" };
 
-    const decimals = getDecimals(params.extraData);
+    const decimals = await resolveDecimals(params.extraData);
     const requestedAmount =
       stake.pendingValue.toNumber() / 10 ** decimals;
     const unstakingSeconds =
@@ -480,7 +476,7 @@ async function buildVaultDeposit(
     const existingAccount = await ctx.connection.getAccountInfo(
       ctx.vaultDepositor,
     );
-    const decimals = getDecimals(params.extraData);
+    const decimals = await resolveDecimals(params.extraData);
     const amount = new ctx.BN(
       Math.floor(parseFloat(params.amount) * 10 ** decimals),
     );
@@ -580,7 +576,7 @@ async function buildVaultWithdraw(
 
     if (depositor.lastWithdrawRequest.shares.isZero()) {
       // Step 1: Request withdrawal.
-      const decimals = getDecimals(params.extraData);
+      const decimals = await resolveDecimals(params.extraData);
       const amount = new ctx.BN(
         Math.floor(parseFloat(params.amount) * 10 ** decimals),
       );
@@ -639,7 +635,7 @@ async function getVaultBalance(
     )
       return 0;
 
-    const decimals = getDecimals(params.extraData);
+    const decimals = await resolveDecimals(params.extraData);
 
     if (!depositor.lastWithdrawRequest.shares.isZero()) {
       return (
@@ -683,7 +679,7 @@ async function getVaultWithdrawState(
       return { status: "none" };
 
     const vault = await ctx.vaultClient.getVault(ctx.vaultPubkey);
-    const decimals = getDecimals(params.extraData);
+    const decimals = await resolveDecimals(params.extraData);
     const requestedAmount =
       depositor.lastWithdrawRequest.value.toNumber() / 10 ** decimals;
     const cooldown = checkCooldown(

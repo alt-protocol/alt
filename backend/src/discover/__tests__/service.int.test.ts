@@ -17,8 +17,8 @@ describe("discoverService", () => {
       }
     });
 
-    it("filters stablecoins_only", async () => {
-      const result = await discoverService.searchYields({ stablecoins_only: true, limit: 10 });
+    it("filters by asset_class", async () => {
+      const result = await discoverService.searchYields({ asset_class: "stablecoin", limit: 10 });
       expect(result.data.length).toBeGreaterThan(0);
     });
 
@@ -40,7 +40,9 @@ describe("discoverService", () => {
 
   describe("getOpportunityById", () => {
     it("returns opportunity with protocol and extra_data", async () => {
-      const opp = await discoverService.getOpportunityById(2210);
+      const { resolveOppId, MARKET_EXTERNAL_IDS } = await import("../../__tests__/helpers.js");
+      const oppId = await resolveOppId(MARKET_EXTERNAL_IDS.JUPITER_MULTIPLY_JUICED_USDC);
+      const opp = await discoverService.getOpportunityById(oppId);
       expect(opp).toBeTruthy();
       expect(opp!.protocol?.slug).toBe("jupiter");
       expect(opp!.category).toBe("multiply");

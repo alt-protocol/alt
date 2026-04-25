@@ -4,10 +4,12 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/connection.js";
 import { users, userPreferences } from "../db/schema.js";
 import { executeMutatingTool } from "../tools.js";
-import { generateSignUrl, buildExtraParams } from "../blinks.js";
+import { InputFile } from "grammy";
+import { generateSignOptions, buildExtraParams } from "../blinks.js";
 import { saveConversationTurn } from "../memory/conversation-store.js";
 import { config } from "../config.js";
 import { pendingActions, lastActionResult, awaitingModel, awaitingApiKey } from "./state.js";
+import { pollForPosition } from "../services/tx-poller.js";
 
 /** Get the DB user ID from Telegram ID. */
 async function getUserDbId(telegramId: number): Promise<number | null> {
@@ -145,24 +147,48 @@ export async function handleConfirmAction(
       msg = `Failed: ${r.error}`;
       await ctx.editMessageText(msg);
     } else if (pending.action === "build_deposit_tx" || pending.action === "build_withdraw_tx") {
-      // Generate sign URL for transaction signing
+      // Generate all signing formats
       const txAction = pending.action === "build_deposit_tx" ? "deposit" as const : "withdraw" as const;
       const extraParams = buildExtraParams(pending.params);
-      const signUrl = generateSignUrl(
+      const signOpts = await generateSignOptions(
         txAction,
         pending.params.opportunity_id as number,
         pending.params.amount as string,
         pending.params.wallet_address as string,
         extraParams,
       );
-      msg = `${pending.summary}\n\nTap the button below to sign in your wallet:`;
-      if (signUrl.startsWith("https://")) {
-        const keyboard = new InlineKeyboard().url("Sign in Wallet", signUrl);
-        await ctx.editMessageText(msg, { reply_markup: keyboard });
+
+      msg = `${pending.summary}\n\nSign with your preferred method:`;
+
+      // Edit the confirm message to show status
+      await ctx.editMessageText(msg);
+
+      if (signOpts.web.startsWith("https://")) {
+        // Production: inline keyboard with web link and deeplink
+        const keyboard = new InlineKeyboard()
+          .url("Sign in Browser", signOpts.web).row()
+          .url("Open in Wallet App", signOpts.deeplink);
+
+        await ctx.replyWithPhoto(new InputFile(signOpts.qr, "sign-qr.png"), {
+          caption: "Scan QR with your Solana wallet app, or tap a button below:",
+          reply_markup: keyboard,
+        });
       } else {
-        // Local dev: Telegram rejects non-HTTPS URLs in inline buttons
-        await ctx.editMessageText(`${msg}\n\n${signUrl}`);
+        // Local dev: Telegram rejects non-HTTPS URLs in inline buttons — send QR + text links
+        await ctx.replyWithPhoto(new InputFile(signOpts.qr, "sign-qr.png"), {
+          caption: "Scan QR with your Solana wallet app, or use a link below:",
+        });
+        await ctx.reply(`Browser: ${signOpts.web}\n\nDeeplink: ${signOpts.deeplink}`);
       }
+
+      // Start background polling to detect when user signs the tx
+      pollForPosition(
+        ctx.api,
+        ctx.chat!.id,
+        pending.params.wallet_address as string,
+        pending.params.opportunity_id as number,
+        pending.summary,
+      );
     } else {
       msg = `Done. ${pending.summary}`;
       await ctx.editMessageText(msg);

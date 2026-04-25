@@ -100,15 +100,18 @@ export async function buildSwapInstructions(
     data.addressesByLookupTableAddress ?? {};
   const lookupTableAddresses = Object.keys(altMap);
 
+  const priceImpactPct = Number(data.priceImpactPct ?? 0);
+
   logger.info(
     {
       inputMint: params.inputMint.slice(0, 8),
       outputMint: params.outputMint.slice(0, 8),
       ixCount: instructions.length,
       altCount: lookupTableAddresses.length,
+      priceImpactPct,
     },
     "Jupiter swap instructions built",
   );
 
-  return { instructions, lookupTableAddresses };
+  return { instructions, lookupTableAddresses, metadata: { priceImpactPct } };
 }

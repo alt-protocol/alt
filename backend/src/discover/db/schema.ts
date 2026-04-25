@@ -67,6 +67,8 @@ export const yieldOpportunities = discoverSchema.table(
     }),
     is_automated: boolean("is_automated"),
     depeg: numeric("depeg", { precision: 10, scale: 6 }),
+    asset_class: varchar("asset_class", { length: 20 }).default("other").notNull(),
+    chain: varchar("chain", { length: 20 }).default("solana").notNull(),
     created_at: timestamp("created_at").defaultNow(),
     updated_at: timestamp("updated_at").defaultNow(),
   },
@@ -75,6 +77,9 @@ export const yieldOpportunities = discoverSchema.table(
     index("idx_yo_active_apy").on(t.is_active, t.apy_current),
     index("idx_yo_active_tvl").on(t.is_active, t.tvl_usd),
     index("idx_yo_category").on(t.category),
+    index("idx_yo_asset_class").on(t.asset_class),
+    index("idx_yo_chain").on(t.chain),
+    index("idx_yo_liquidity").on(t.liquidity_available_usd),
     uniqueIndex("idx_yo_protocol_external").on(t.protocol_id, t.external_id),
   ],
 );

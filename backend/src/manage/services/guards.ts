@@ -1,6 +1,6 @@
 import type { OpportunityDetail } from "../../shared/types.js";
 import type { SerializableInstruction } from "../../shared/types.js";
-import { STABLECOIN_SYMBOLS } from "../../shared/constants.js";
+// Asset class check uses opportunity.asset_class column
 import { hasAdapter } from "../protocols/index.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -52,6 +52,19 @@ export function guardAdapterExists(opp: OpportunityDetail): void {
   }
 }
 
+/** Validate leverage does not exceed opportunity's max_leverage. */
+export function guardLeverage(
+  leverage: number | undefined,
+  maxLeverage: number | null | undefined,
+): void {
+  if (leverage == null || maxLeverage == null) return;
+  if (leverage > maxLeverage) {
+    throw new GuardError(
+      `Leverage ${leverage} exceeds maximum ${maxLeverage} for this opportunity`,
+    );
+  }
+}
+
 /** Optional deposit limit check (env: MCP_MAX_DEPOSIT_USD). */
 export function guardDepositLimit(amount: string): void {
   const maxStr = process.env.MCP_MAX_DEPOSIT_USD;
@@ -73,10 +86,10 @@ export function guardDepositLimit(amount: string): void {
 export function guardStablecoinOnly(opp: OpportunityDetail): void {
   if (process.env.STABLECOIN_ONLY !== "true") return;
 
-  const hasStable = opp.tokens.some((t) => STABLECOIN_SYMBOLS.has(t));
-  if (!hasStable) {
+  const ac = (opp as any).asset_class as string | undefined;
+  if (ac !== "stablecoin") {
     throw new GuardError(
-      `Opportunity "${opp.name}" has no stablecoin tokens (${opp.tokens.join(", ")}). ` +
+      `Opportunity "${opp.name}" is not a stablecoin opportunity (asset_class: ${ac ?? "unknown"}). ` +
         `Only stablecoin opportunities are allowed. Set STABLECOIN_ONLY=false to override.`,
     );
   }
@@ -96,6 +109,31 @@ export function guardCategoryAllowed(opp: OpportunityDetail): void {
       `Category "${opp.category}" is blocked. Blocked categories: ${blockedStr}`,
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Price impact guard
+// ---------------------------------------------------------------------------
+
+export interface PriceImpactResult {
+  priceImpactPct: number;
+  blocked: boolean;
+  warning: boolean;
+}
+
+/**
+ * Price impact assessment. Never blocks — returns warning flag for frontend to display.
+ * The frontend shows the real impact and lets the user confirm.
+ *
+ * Env vars:
+ *   PRICE_IMPACT_WARN_PCT — warn threshold (default: 0.1)
+ */
+export function guardPriceImpact(
+  priceImpactPct: number,
+): PriceImpactResult {
+  const warnThreshold = Number(process.env.PRICE_IMPACT_WARN_PCT ?? "0.1");
+  const warning = priceImpactPct >= warnThreshold;
+  return { priceImpactPct, blocked: false, warning };
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +174,14 @@ const KNOWN_PROGRAMS = new Set([
   "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo", // Meteora DLMM
   // Kamino utility
   "HFn8GnPADiny6XqUoWE8uRPPxb29ikn4yTuPa9MF2fWJ", // Kamino Farms v2
+  // Exponent
+  "ExponentnaRg3CQbW6dqQNZKXp7gtZ9DGMp1cwC4HAS7", // Exponent Core
+  "XPMfipyhcbq3DBvgvxkbZY7GekwmGNJLMD3wdiCkBc7", // Exponent Marginfi SY
+  "XPK1ndTK1xrgRg99ifvdPP1exrx8D1mRXTuxBkkroCx", // Exponent Kamino SY
+  "XPJitopeUEhMZVF72CvswnwrS2U2akQvk5s26aEfWv2", // Exponent Jito Restaking SY
+  "XPerenaJPyvnjseLCn7rgzxFEum6zX1k89C13SPTyGZ", // Exponent Perena SY
+  "XP1BRLn8eCYSygrd8er5P4GKdzqKbC3DLoSsS5UYVZy", // Exponent Generic SY
+  "sVau1tXvayVWfotzm9Ahcv2qfnnfRWttt78BCnNC6dD", // Exponent Vaults
 ]);
 
 /**

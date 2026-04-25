@@ -170,14 +170,42 @@ export async function buildAndSubmit(
 // E2E test market constants
 // ---------------------------------------------------------------------------
 
-export const MARKETS = {
-  JUPITER_LENDING_USDC: { id: 2190, token: "USDC", amount: "0.01" },
-  JUPITER_MULTIPLY_JUICED_USDC: { id: 2210, token: "JUICED", amount: "0.1", leverage: 2, slippageBps: 200 },
-  KAMINO_VAULT_USDC: { id: 1483, token: "USDC", amount: "1" },
-  KAMINO_LENDING_USDC: { id: 1531, token: "USDC", amount: "0.01" },
-  KAMINO_MULTIPLY_PST_USDC: { id: 1997, token: "PST", amount: "0.1", leverage: 2, slippageBps: 200 },
-  DRIFT_IF_USDC: { id: 26, token: "USDC", amount: "0.01" },
+/** Stable external_ids — these never change across DB recreations. */
+export const MARKET_EXTERNAL_IDS = {
+  JUPITER_LENDING_USDC: "juplend-earn-EPjFWdd5",
+  JUPITER_MULTIPLY_JUICED_USDC: "juplend-mult-68",
+  JUPITER_MULTIPLY_JUICED_USDT: "juplend-mult-69",
+  KAMINO_VAULT_USDC: "A3hTCWdnfV6uiQLxRmnv17EpiEtmc93v1AGQnWy44Mup",
+  KAMINO_LENDING_USDC: "klend-7u3HeHxY-D6q6wuQS",
+  KAMINO_MULTIPLY_USDC_USDT: "kmul-7u3HeHxY-D6q6wu-H3t6qZ",
+  DRIFT_IF_USDC: "drift-if-0",
 } as const;
+
+export const MARKET_TOKENS = {
+  JUPITER_LENDING_USDC: { token: "USDC", amount: "0.01" },
+  JUPITER_MULTIPLY_JUICED_USDC: { token: "JUICED", amount: "0.1", leverage: 2, slippageBps: 200 },
+  KAMINO_VAULT_USDC: { token: "USDC", amount: "1" },
+  KAMINO_LENDING_USDC: { token: "USDC", amount: "0.01" },
+  KAMINO_MULTIPLY_USDC_USDT: { token: "USDC", amount: "0.1", leverage: 2, slippageBps: 200 },
+  DRIFT_IF_USDC: { token: "USDC", amount: "0.01" },
+} as const;
+
+/** Resolve external_id → DB id at runtime. Caches after first call. */
+let _idCache: Record<string, number> | null = null;
+export async function resolveOppId(externalId: string): Promise<number> {
+  if (!_idCache) {
+    const { db } = await import("../shared/db.js");
+    const { yieldOpportunities } = await import("../discover/db/schema.js");
+    const rows = await db.select({ id: yieldOpportunities.id, external_id: yieldOpportunities.external_id }).from(yieldOpportunities);
+    _idCache = {};
+    for (const r of rows) {
+      if (r.external_id) _idCache[r.external_id] = r.id;
+    }
+  }
+  const id = _idCache[externalId];
+  if (id == null) throw new Error(`Opportunity not found for external_id: ${externalId}`);
+  return id;
+}
 
 // Mints
 export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -185,6 +213,25 @@ export const SOL_MINT = "So11111111111111111111111111111111111111112";
 export const JUICED_MINT = "7GxATsNMnaC88vdwd2t3mwrFuQwwGvmYPrUQ4D6FotXk";
 export const PST_MINT = "59obFNBzyTBGowrkif5uK7ojS58vsuWz3ZCvg6tfZAGw";
 
-// Legacy aliases
-export const JUICED_USDC_OPP_ID = MARKETS.JUPITER_MULTIPLY_JUICED_USDC.id;
-export const JUICED_USDT_OPP_ID = 2211;
+// Legacy aliases — resolve from external_id at runtime
+export const JUICED_USDC_EXT_ID = MARKET_EXTERNAL_IDS.JUPITER_MULTIPLY_JUICED_USDC;
+export const JUICED_USDT_EXT_ID = MARKET_EXTERNAL_IDS.JUPITER_MULTIPLY_JUICED_USDT;
+
+/** Resolved MARKETS object — call resolveMarkets() in beforeAll to populate IDs. */
+export const MARKETS: Record<string, { id: number; token: string; amount: string; leverage?: number; slippageBps?: number }> = {} as any;
+
+export async function resolveMarkets(): Promise<void> {
+  for (const [key, extId] of Object.entries(MARKET_EXTERNAL_IDS)) {
+    try {
+      const id = await resolveOppId(extId);
+      const meta = MARKET_TOKENS[key as keyof typeof MARKET_TOKENS];
+      (MARKETS as any)[key] = { id, ...meta };
+    } catch {
+      // Opportunity may not exist (e.g., Drift IF when API is down)
+    }
+  }
+}
+
+// Legacy int ID aliases — resolve via resolveOppId() in tests
+export const JUICED_USDC_OPP_ID = MARKET_EXTERNAL_IDS.JUPITER_MULTIPLY_JUICED_USDC;
+export const JUICED_USDT_OPP_ID = MARKET_EXTERNAL_IDS.JUPITER_MULTIPLY_JUICED_USDT;

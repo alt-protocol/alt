@@ -1,6 +1,6 @@
 import type { ProtocolAdapter } from "./types.js";
 
-const SUPPORTED_ADAPTERS = new Set(["kamino", "jupiter", "drift"]);
+const SUPPORTED_ADAPTERS = new Set(["kamino", "jupiter", "drift", "exponent"]);
 
 const adapterCache = new Map<string, ProtocolAdapter>();
 
@@ -29,6 +29,12 @@ export async function getAdapter(
     const { driftAdapter } = await import("./drift.js");
     adapterCache.set(key, driftAdapter);
     return driftAdapter;
+  }
+
+  if (key === "exponent") {
+    const { exponentAdapter } = await import("./exponent.js");
+    adapterCache.set(key, exponentAdapter);
+    return exponentAdapter;
   }
 
   return undefined;

@@ -2,16 +2,21 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { monitorService } from "../../monitor/service.js";
 import { validateWallet } from "../../monitor/services/utils.js";
-import { withToolHandler, toolResult, mcpError } from "./utils.js";
+import { withToolHandler, toolResult } from "./utils.js";
 
 export function registerMonitorTools(server: McpServer) {
   server.tool(
     "get_portfolio",
-    "Get DeFi portfolio positions for a Solana wallet. Shows deposits, PnL, APY across Kamino, Drift, and Jupiter protocols.",
+    "Get DeFi portfolio positions for a Solana wallet. Shows deposits, PnL, APY across Kamino, Drift, and Jupiter protocols. Set include_analytics=true to also get ROI, weighted APY, projected yield, and diversification breakdown.",
     {
       wallet_address: z
         .string()
         .describe("Solana wallet address (base58)"),
+      include_analytics: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Include portfolio analytics (ROI, weighted APY, diversification)"),
     },
     withToolHandler("get_portfolio", async (args) => {
       await monitorService.trackWallet(args.wallet_address);
@@ -28,6 +33,11 @@ export function registerMonitorTools(server: McpServer) {
         });
       }
 
+      if (args.include_analytics) {
+        const analytics = await monitorService.getPortfolioAnalytics(args.wallet_address);
+        return toolResult(analytics);
+      }
+
       const result = await monitorService.getPortfolioPositions(args.wallet_address);
       return toolResult(result);
     }),
@@ -35,7 +45,7 @@ export function registerMonitorTools(server: McpServer) {
 
   server.tool(
     "track_wallet",
-    "Register a wallet for portfolio tracking. Triggers background fetching of positions from all protocols. Call get_wallet_status to check progress.",
+    "Register or check a wallet for portfolio tracking. Triggers background fetching and returns current fetch status (fetching/ready/error). Idempotent — safe to call repeatedly.",
     {
       wallet_address: z.string().describe("Solana wallet address (base58)"),
     },
@@ -44,19 +54,6 @@ export function registerMonitorTools(server: McpServer) {
       await monitorService.trackWallet(args.wallet_address);
       const status = await monitorService.getWalletStatus(args.wallet_address);
       return toolResult({ wallet: args.wallet_address, ...status });
-    }),
-  );
-
-  server.tool(
-    "get_wallet_status",
-    "Check the fetch status of a tracked wallet (fetching/ready/error).",
-    {
-      wallet_address: z.string().describe("Solana wallet address (base58)"),
-    },
-    withToolHandler("get_wallet_status", async (args) => {
-      const status = await monitorService.getWalletStatus(args.wallet_address);
-      if (!status) return mcpError("Wallet not tracked. Call track_wallet first.");
-      return toolResult(status);
     }),
   );
 
@@ -113,16 +110,4 @@ export function registerMonitorTools(server: McpServer) {
     }),
   );
 
-  server.tool(
-    "get_portfolio_analytics",
-    "Get portfolio analytics: summary stats (ROI, weighted APY, projected yield), stablecoin allocation, and diversification breakdown by protocol/category/token. Use for risk assessment and portfolio overview.",
-    {
-      wallet_address: z.string().describe("Solana wallet address (base58)"),
-    },
-    withToolHandler("get_portfolio_analytics", async (args) => {
-      validateWallet(args.wallet_address);
-      const result = await monitorService.getPortfolioAnalytics(args.wallet_address);
-      return toolResult(result);
-    }),
-  );
 }

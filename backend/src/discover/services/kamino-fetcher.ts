@@ -23,6 +23,7 @@ import {
   batchSnapshotAvg,
   deactivateStale,
   getProtocol,
+  tokenType,
 } from "./utils.js";
 
 const KAMINO_API = "https://api.kamino.finance";
@@ -396,6 +397,12 @@ async function fetchEarnVaults(
           tokensAvailableUsd !== null
             ? Math.round(tokensAvailableUsd * 100) / 100
             : null,
+        underlyingTokens: [{
+          symbol,
+          mint: tokenMint,
+          role: "underlying",
+          type: tokenType(symbol),
+        }],
       });
       count++;
     } catch (err) {
@@ -511,6 +518,12 @@ async function fetchLendingReserves(
           now,
           source: "kamino_api",
           liquidityAvailableUsd: null,
+          underlyingTokens: [{
+            symbol,
+            mint: tokenMint,
+            role: "underlying",
+            type: tokenType(symbol),
+          }],
         });
         count++;
       } catch (err) {
@@ -794,6 +807,7 @@ async function fetchMultiplyMarkets(
         const supplyAvailable = debtTotalSupply - debtTotalBorrow;
         let liqAvailableTokens = Math.max(0, supplyAvailable);
 
+        let debtCrossReserveAvailable: number | null = null;
         const onChainMarket = await loadOnChainMarket(marketPubkey);
         if (onChainMarket) {
           const { address } = await import("@solana/kit");
@@ -810,6 +824,26 @@ async function fetchMultiplyMarkets(
                 0,
                 Math.min(supplyAvailable, borrowAvail),
               );
+            }
+
+            // Cross-reserve check: can this debt actually be borrowed against this collateral?
+            const onChainCollRes = onChainMarket.getReserveByMint(
+              address(collReserve.liquidityTokenMint as string),
+            );
+            if (onChainCollRes) {
+              const maxBorrowCross =
+                onChainDebtRes.getMaxBorrowAmountWithCollReserve(
+                  onChainMarket,
+                  onChainCollRes,
+                );
+              const crossVal = maxBorrowCross.toNumber();
+              debtCrossReserveAvailable = crossVal;
+              if (crossVal >= 0) {
+                liqAvailableTokens = Math.min(
+                  liqAvailableTokens,
+                  crossVal,
+                );
+              }
             }
           }
         }
@@ -857,6 +891,7 @@ async function fetchMultiplyMarkets(
           collateral_deposit_limit: collDepositLimit,
           debt_available_usd: liqAvailableUsd,
           debt_available_tokens: liqAvailableTokens,
+          debt_cross_reserve_available: debtCrossReserveAvailable,
           debt_borrow_limit: liqAvailableTokens < supplyAvailable
             ? liqAvailableTokens + debtTotalBorrow
             : null,
@@ -915,6 +950,20 @@ async function fetchMultiplyMarkets(
           now,
           source: "kamino_api",
           liquidityAvailableUsd: liqAvailableUsd,
+          underlyingTokens: [
+            {
+              symbol: collSymbol,
+              mint: collReserve.liquidityTokenMint,
+              role: "collateral",
+              type: tokenType(collSymbol),
+            },
+            {
+              symbol: debtSymbol,
+              mint: debtReserve.liquidityTokenMint,
+              role: "debt",
+              type: tokenType(debtSymbol),
+            },
+          ],
         });
 
         upsertedIds.add(externalId);

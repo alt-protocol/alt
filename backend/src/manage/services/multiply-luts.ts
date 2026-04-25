@@ -70,7 +70,7 @@ export async function resolveMissingLuts(
   const res = await fetch(LUT_FINDER_API, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ addresses: missing, verify: false }),
+    body: JSON.stringify({ addresses: missing, verify: true }),
   });
   if (!res.ok) return [];
 

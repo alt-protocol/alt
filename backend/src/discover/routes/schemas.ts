@@ -65,11 +65,17 @@ export const YieldsQuery = z.object({
     .default("apy_desc"),
   tokens: z.string().optional(),
   vault_tag: z.string().optional(),
-  stablecoins_only: z
-    .preprocess((v) => v === "true" || v === "1", z.boolean())
-    .default(false),
+  asset_class: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
   offset: z.coerce.number().int().min(0).default(0),
+  protocol: z.string().optional(),
+  token_type: z.string().optional(),
+  apy_min: z.coerce.number().optional(),
+  apy_max: z.coerce.number().optional(),
+  tvl_min: z.coerce.number().optional(),
+  tvl_max: z.coerce.number().optional(),
+  liquidity_min: z.coerce.number().optional(),
+  liquidity_max: z.coerce.number().optional(),
 });
 
 export const YieldHistoryQuery = z.object({

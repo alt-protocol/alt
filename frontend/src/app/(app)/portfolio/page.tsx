@@ -104,6 +104,7 @@ export default function Portfolio() {
     diversification,
     chartData,
     showSyncing,
+    isRefreshing,
     shortAddr,
   } = usePortfolioData();
 
@@ -122,7 +123,10 @@ export default function Portfolio() {
           <div className="flex items-center gap-3 mb-[2.25rem]">
             <div>
               <h1 className="font-display text-2xl tracking-[-0.02em]">Portfolio</h1>
-              <p className="text-foreground-muted font-sans text-[0.8rem] mt-1">{shortAddr}</p>
+              <p className="text-foreground-muted font-sans text-[0.8rem] mt-1">
+                {shortAddr}
+                {isRefreshing && <span className="ml-2 text-neon-primary animate-pulse">Refreshing...</span>}
+              </p>
             </div>
             {walletAddress && (
               <RefreshButton

@@ -11,20 +11,25 @@
  *   - 1+ PST
  */
 import "dotenv/config";
-import { describe, it, expect } from "vitest";
-import { getTestWallet, buildAndSubmit, MARKETS } from "../../__tests__/helpers.js";
+import { describe, it, expect, beforeAll } from "vitest";
+import { getTestWallet, buildAndSubmit, MARKETS, resolveMarkets } from "../../__tests__/helpers.js";
 
 const wallet = getTestWallet();
 const API = "/manage/tx";
+
+beforeAll(async () => {
+  await resolveMarkets();
+}, 10_000);
 
 // ---------------------------------------------------------------------------
 // Jupiter Lending (Earn): USDC deposit → withdraw
 // ---------------------------------------------------------------------------
 
 describe("Jupiter Lending — USDC", () => {
-  const m = MARKETS.JUPITER_LENDING_USDC;
-
   it("deposit → withdraw", async () => {
+    const m = MARKETS.JUPITER_LENDING_USDC;
+    if (!m) throw new Error("JUPITER_LENDING_USDC not resolved");
+
     // Deposit
     const deposit = await buildAndSubmit(`${API}/build-deposit`, {
       opportunity_id: m.id,
@@ -52,10 +57,10 @@ describe("Jupiter Lending — USDC", () => {
 // ---------------------------------------------------------------------------
 
 describe("Jupiter Multiply — JUICED/USDC", () => {
-  const m = MARKETS.JUPITER_MULTIPLY_JUICED_USDC;
-  let nftId: number | undefined;
-
   it("open → stats → close", async () => {
+    const m = MARKETS.JUPITER_MULTIPLY_JUICED_USDC;
+    if (!m) throw new Error("JUPITER_MULTIPLY_JUICED_USDC not resolved");
+    let nftId: number | undefined;
     // Open
     const open = await buildAndSubmit(`${API}/build-deposit`, {
       opportunity_id: m.id,
@@ -97,9 +102,9 @@ describe("Jupiter Multiply — JUICED/USDC", () => {
 // ---------------------------------------------------------------------------
 
 describe("Kamino Vault — USDC", () => {
-  const m = MARKETS.KAMINO_VAULT_USDC;
-
   it("deposit → withdraw", async () => {
+    const m = MARKETS.KAMINO_VAULT_USDC;
+    if (!m) throw new Error("KAMINO_VAULT_USDC not resolved");
     const deposit = await buildAndSubmit(`${API}/build-deposit`, {
       opportunity_id: m.id,
       wallet_address: wallet.address,
@@ -123,9 +128,9 @@ describe("Kamino Vault — USDC", () => {
 // ---------------------------------------------------------------------------
 
 describe("Kamino Lending — USDC", () => {
-  const m = MARKETS.KAMINO_LENDING_USDC;
-
   it("deposit → withdraw", async () => {
+    const m = MARKETS.KAMINO_LENDING_USDC;
+    if (!m) throw new Error("KAMINO_LENDING_USDC not resolved");
     const deposit = await buildAndSubmit(`${API}/build-deposit`, {
       opportunity_id: m.id,
       wallet_address: wallet.address,
@@ -145,13 +150,14 @@ describe("Kamino Lending — USDC", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Kamino Multiply: PST/USDC open → stats → close
+// Kamino Multiply: USDC/USDT open → stats → close
 // ---------------------------------------------------------------------------
 
-describe("Kamino Multiply — PST/USDC", () => {
-  const m = MARKETS.KAMINO_MULTIPLY_PST_USDC;
-
+describe("Kamino Multiply — USDC/USDT", () => {
   it("open → stats → close", async () => {
+    const m = MARKETS.KAMINO_MULTIPLY_USDC_USDT;
+    if (!m) throw new Error("KAMINO_MULTIPLY_USDC_USDT not resolved");
+
     // Open
     const open = await buildAndSubmit(`${API}/build-deposit`, {
       opportunity_id: m.id,
@@ -189,9 +195,9 @@ describe("Kamino Multiply — PST/USDC", () => {
 // ---------------------------------------------------------------------------
 
 describe.skip("Drift Insurance Fund — USDC", () => {
-  const m = MARKETS.DRIFT_IF_USDC;
-
   it("deposit → check state → withdraw if redeemable", async () => {
+    const m = MARKETS.DRIFT_IF_USDC;
+    if (!m) throw new Error("DRIFT_IF_USDC not resolved");
     // Deposit
     const deposit = await buildAndSubmit(`${API}/build-deposit`, {
       opportunity_id: m.id,

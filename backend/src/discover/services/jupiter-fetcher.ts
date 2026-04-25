@@ -20,6 +20,7 @@ import {
   batchSnapshotAvg,
   deactivateStale,
   getProtocol,
+  tokenType,
 } from "./utils.js";
 
 const JUPITER_LEND_API = "https://api.jup.ag/lend/v1";
@@ -109,6 +110,12 @@ async function fetchEarnTokens(
       apy7dAvg: oppAvgs["7d"] ?? null,
       apy30dAvg: oppAvgs["30d"] ?? await getDefiLlama30dAvg("jupiter-lend", symbol, "Earn"),
       liquidityAvailableUsd: null,
+      underlyingTokens: symbol ? [{
+        symbol,
+        mint: assetAddress,
+        role: "underlying",
+        type: tokenType(symbol),
+      }] : [],
     });
 
     upsertedIds.add(externalId);
@@ -298,6 +305,20 @@ async function fetchMultiplyVaults(
         depeg: multiplyDepeg,
         apy7dAvg: oppAvgs["7d"] ?? null,
         apy30dAvg: oppAvgs["30d"] ?? null,
+        underlyingTokens: [
+          {
+            symbol: supplySymbol,
+            mint: (supplyToken.address as string | undefined) ?? "",
+            role: "collateral",
+            type: tokenType(supplySymbol),
+          },
+          {
+            symbol: borrowSymbol,
+            mint: (borrowToken.address as string | undefined) ?? "",
+            role: "debt",
+            type: tokenType(borrowSymbol),
+          },
+        ],
       });
 
       upsertedIds.add(externalId);

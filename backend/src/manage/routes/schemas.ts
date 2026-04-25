@@ -93,3 +93,16 @@ export const WithdrawStateBody = z.object({
     .string()
     .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "Invalid Solana wallet address"),
 });
+
+export const PriceImpactBody = z.object({
+  opportunity_id: z.number().int().positive(),
+  wallet_address: z
+    .string()
+    .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "Invalid Solana wallet address"),
+  amount: z.string().refine(
+    (v) => !isNaN(Number(v)) && Number(v) > 0,
+    "Amount must be a positive number",
+  ),
+  direction: z.enum(["deposit", "withdraw"]),
+  extra_data: z.record(z.unknown()).optional(),
+});

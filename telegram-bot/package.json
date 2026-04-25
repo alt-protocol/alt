@@ -14,11 +14,13 @@
     "@ai-sdk/openai": "^1.0.0",
     "@grammyjs/parse-mode": "^2.3.0",
     "@grammyjs/runner": "^2.0.3",
+    "@types/qrcode": "^1.5.6",
     "ai": "^4.0.0",
     "dotenv": "^17.4.1",
     "drizzle-orm": "^0.38.4",
     "grammy": "^1.30.0",
     "pg": "^8.13.1",
+    "qrcode": "^1.5.4",
     "zod": "^3.24.2"
   },
   "devDependencies": {

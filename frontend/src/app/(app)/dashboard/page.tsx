@@ -1,7 +1,7 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { Suspense } from "react";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { Suspense, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { api, YieldOpportunity } from "@/lib/api";
 import { fmtNum, fmtTvl, fmtCategory, fmtPriceRange, fmtSpread, fmtShieldWarning } from "@/lib/format";
@@ -84,17 +84,45 @@ export default function Dashboard() {
   );
 }
 
+const PAGE_SIZE = 50;
+
 function DashboardContent() {
   const router = useRouter();
 
-  const { data, isLoading, isError, error } = useQuery({
+  // Unfiltered query — for dropdown options + stats (cached long)
+  const optionsQuery = useQuery({
     queryKey: queryKeys.yields.all,
-    queryFn: () => api.getYields({ stablecoins_only: true }),
+    queryFn: () => api.getYields({ asset_class: "stablecoin", limit: 500 }),
+    staleTime: 60_000,
+  });
+  const optionsData: YieldOpportunity[] = optionsQuery.data?.data ?? [];
+
+  // Hook manages filter/sort/offset state and builds backend params
+  const f = useYieldFilters(optionsData);
+
+  // Filtered + paginated query — for table display
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ["yields", "filtered", f.backendSort, f.backendFilters, f.offset],
+    queryFn: () => api.getYields({
+      asset_class: "stablecoin",
+      sort: f.backendSort,
+      ...f.backendFilters,
+      limit: PAGE_SIZE,
+      offset: f.offset,
+    }),
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
   });
 
-  const allYields: YieldOpportunity[] = data?.data ?? [];
-  const f = useYieldFilters(allYields);
-  const yields = f.filteredYields;
+  // Client-side post-processing (30d filter + 30d/liquidity sort)
+  const { processPage } = f;
+  const yields = useMemo(() => processPage(data?.data ?? []), [data?.data, processPage]);
+  const total = data?.meta?.total ?? 0;
+
+  const topYield = optionsData.reduce<YieldOpportunity | null>(
+    (best, y) => (y.apy_current ?? 0) > (best?.apy_current ?? 0) ? y : best,
+    null
+  );
 
   return (
     <>
@@ -102,9 +130,9 @@ function DashboardContent() {
       <StatsGrid
         stats={[
           { label: "Protocols", value: `${f.sources.length || "\u2014"}`, sub: "integrated" },
-          { label: "Categories", value: `${new Set(allYields.map(y => y.category)).size || "\u2014"}`, sub: "types" },
-          { label: "Opportunities", value: `${allYields.length || "\u2014"}`, sub: "active" },
-          { label: "Top APR", value: allYields[0] ? `${fmtNum(allYields[0].apy_current, 1)}%` : "\u2014", sub: allYields[0]?.tokens[0] ?? "" },
+          { label: "Categories", value: `${new Set(optionsData.map(y => y.category)).size || "\u2014"}`, sub: "types" },
+          { label: "Opportunities", value: `${optionsData.length || "\u2014"}`, sub: "active" },
+          { label: "Top APR", value: topYield ? `${fmtNum(topYield.apy_current, 1)}%` : "\u2014", sub: topYield?.tokens[0] ?? "" },
         ]}
         columns="grid-cols-2 sm:grid-cols-4"
         className="mb-[2.25rem]"
@@ -347,12 +375,33 @@ function DashboardContent() {
                 </tbody>
               </table>
             </div>
-            <div className="px-5 py-3 text-center">
-              <p className="text-foreground-muted text-[0.7rem] font-sans">
-                {yields.length} opportunities &middot; {data?.meta?.last_updated
-                  ? `Updated ${new Date(data.meta.last_updated).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
-                  : ""}
-              </p>
+            <div className="flex items-center justify-between px-5 py-3 text-[0.75rem] font-sans text-foreground-muted">
+              <span>
+                {total > 0
+                  ? `${f.offset + 1}\u2013${Math.min(f.offset + PAGE_SIZE, total)} of ${total}`
+                  : "0 results"}
+                {data?.meta?.last_updated && (
+                  <> &middot; Updated {new Date(data.meta.last_updated).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</>
+                )}
+              </span>
+              {total > PAGE_SIZE && (
+                <div className="flex gap-2">
+                  <button
+                    className="px-3 py-1 rounded-sm text-[0.7rem] border border-surface-high hover:bg-surface-high transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    onClick={() => f.setOffset(Math.max(0, f.offset - PAGE_SIZE))}
+                    disabled={f.offset === 0}
+                  >
+                    Previous
+                  </button>
+                  <button
+                    className="px-3 py-1 rounded-sm text-[0.7rem] border border-surface-high hover:bg-surface-high transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    onClick={() => f.setOffset(f.offset + PAGE_SIZE)}
+                    disabled={f.offset + PAGE_SIZE >= total}
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
             </div>
           </>
         )}

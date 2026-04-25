@@ -22,6 +22,8 @@ export interface BuildTxResultWithSetup {
   lookupTableAddresses: string[];
   /** Each element is a set of instructions for a separate setup tx (e.g. user LUT creation). */
   setupInstructionSets?: Instruction[][];
+  /** Protocol-specific metadata returned alongside the tx (e.g. price impact). */
+  metadata?: Record<string, unknown>;
 }
 
 export type BuildTxResult =
@@ -58,6 +60,29 @@ export interface WithdrawState {
   requestedAmount?: number;
 }
 
+/** Params for pre-flight price impact estimation. */
+export interface PriceImpactParams {
+  walletAddress: string;
+  depositAddress: string;
+  category: string;
+  amount: string;
+  direction: "deposit" | "withdraw";
+  extraData?: Record<string, unknown>;
+}
+
+/** Price impact estimation result. */
+export interface PriceImpactEstimate {
+  priceImpactPct: number;
+  /** Human-readable input amount being swapped. */
+  inputAmount: number;
+  inputSymbol: string;
+  /** Output at oracle/reference price (what you'd get with zero impact). */
+  outputExpected: number;
+  /** Actual output from Jupiter quote. */
+  outputActual: number;
+  outputSymbol: string;
+}
+
 export interface ProtocolAdapter {
   buildDepositTx(params: BuildTxParams): Promise<BuildTxResult>;
   buildWithdrawTx(params: BuildTxParams): Promise<BuildTxResult>;
@@ -65,4 +90,6 @@ export interface ProtocolAdapter {
   getBalance?(params: GetBalanceParams): Promise<number | null>;
   /** Optional: query multi-step withdrawal state (e.g. Drift vault redeem period). */
   getWithdrawState?(params: GetBalanceParams): Promise<WithdrawState>;
+  /** Optional: estimate price impact before building the full transaction. */
+  getPriceImpact?(params: PriceImpactParams): Promise<PriceImpactEstimate | null>;
 }

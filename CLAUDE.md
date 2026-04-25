@@ -20,6 +20,12 @@ All UI follows `DESIGN.md`. Key: dark-only, no 1px borders, `rounded-sm` or `rou
 ### Solana SDK
 Always use `@solana/kit` + `@solana/react` (Wallet Standard). NEVER use legacy `@solana/wallet-adapter-*` or `@solana/web3.js` v1.
 
+### Run Tests Before Finishing
+Before completing your task, run the test suite for every module you modified. Fix all failures before finishing.
+- Backend: `cd backend && npm run test:unit`
+- Frontend: `cd frontend && npm run lint`
+- Telegram bot: `cd telegram-bot && npx tsc --noEmit`
+
 ## Architecture
 
 Backend: modular monolith — one Fastify process, 3 modules as Fastify plugins.

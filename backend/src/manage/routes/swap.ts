@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { getSwapQuote, buildSwapInstructions } from "../services/jupiter-swap.js";
 import { serializeResult } from "../services/instruction-serializer.js";
-import { guardWalletValid, guardProgramWhitelist } from "../services/guards.js";
+import { guardWalletValid, guardProgramWhitelist, guardPriceImpact } from "../services/guards.js";
 import { logger } from "../../shared/logger.js";
 import { SwapQuoteQuery, BuildSwapBody } from "./swap-schemas.js";
 
@@ -48,12 +48,23 @@ export async function swapRoutes(app: FastifyInstance) {
       // Verify all programs are whitelisted
       guardProgramWhitelist(serialized.instructions);
 
+      // Price impact guard (post-build, pre-response)
+      const priceImpactPct = (serialized.metadata?.priceImpactPct as number) ?? 0;
+      const impact = guardPriceImpact(priceImpactPct);
+      if (impact.warning) {
+        serialized.metadata = {
+          ...serialized.metadata,
+          priceImpactWarning: true,
+        };
+      }
+
       logger.info(
         {
           wallet: body.wallet_address.slice(0, 8),
           inputMint: body.input_mint.slice(0, 8),
           outputMint: body.output_mint.slice(0, 8),
           ixCount: serialized.instructions.length,
+          priceImpactPct,
         },
         "Swap transaction built",
       );

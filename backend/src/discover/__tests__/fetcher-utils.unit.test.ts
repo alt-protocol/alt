@@ -3,7 +3,7 @@
  * Tests pure logic without DB dependencies.
  */
 import { describe, it, expect } from "vitest";
-import { buildUnderlyingTokens, classifyMultiplyPair } from "../services/utils.js";
+import { buildUnderlyingTokens, classifyMultiplyPair, deriveAssetClass } from "../services/utils.js";
 
 describe("buildUnderlyingTokens", () => {
   it("builds multiply pair with collateral and debt roles", () => {
@@ -87,5 +87,71 @@ describe("classifyMultiplyPair", () => {
 
   it("classifies BONK/USDC as directional_leverage", () => {
     expect(classifyMultiplyPair("BONK", "USDC")).toBe("directional_leverage");
+  });
+});
+
+describe("deriveAssetClass", () => {
+  it("returns stablecoin for USDC earn", () => {
+    expect(deriveAssetClass("earn", ["USDC"], {})).toBe("stablecoin");
+  });
+
+  it("returns stablecoin for yield-bearing stables", () => {
+    expect(deriveAssetClass("earn", ["eUSX"], {})).toBe("stablecoin");
+    expect(deriveAssetClass("earn", ["ONyc"], {})).toBe("stablecoin");
+    expect(deriveAssetClass("earn", ["PRIME"], {})).toBe("stablecoin");
+  });
+
+  it("returns sol for LST tokens", () => {
+    expect(deriveAssetClass("earn", ["JITOSOL"], {})).toBe("sol");
+    expect(deriveAssetClass("earn", ["MSOL"], {})).toBe("sol");
+  });
+
+  it("returns sol for SOL token", () => {
+    expect(deriveAssetClass("earn", ["SOL"], {})).toBe("sol");
+  });
+
+  it("returns btc for BTC tokens", () => {
+    expect(deriveAssetClass("earn", ["fragBTC"], {})).toBe("btc");
+    expect(deriveAssetClass("earn", ["cbBTC"], {})).toBe("btc");
+  });
+
+  it("returns stablecoin for multiply stable_loop", () => {
+    expect(deriveAssetClass("multiply", ["USDC", "USDT"], { vault_tag: "stable_loop" })).toBe("stablecoin");
+  });
+
+  it("returns stablecoin for multiply rwa_loop", () => {
+    expect(deriveAssetClass("multiply", ["USDY", "USDC"], { vault_tag: "rwa_loop" })).toBe("stablecoin");
+  });
+
+  it("returns sol for multiply sol_loop", () => {
+    expect(deriveAssetClass("multiply", ["JITOSOL", "SOL"], { vault_tag: "sol_loop" })).toBe("sol");
+  });
+
+  it("returns eth for ETH token", () => {
+    expect(deriveAssetClass("lending", ["ETH"], {})).toBe("eth");
+    expect(deriveAssetClass("lending", ["WETH"], {})).toBe("eth");
+  });
+
+  it("returns sol for unlisted SOL LSTs via wildcard", () => {
+    expect(deriveAssetClass("lending", ["nxSOL"], {})).toBe("sol");
+    expect(deriveAssetClass("lending", ["strongSOL"], {})).toBe("sol");
+    expect(deriveAssetClass("lending", ["cgntSOL"], {})).toBe("sol");
+  });
+
+  it("returns other for non-SOL tokens ending in SOL-like suffix", () => {
+    expect(deriveAssetClass("earn", ["JLP"], {})).toBe("other");
+  });
+
+  it("keeps multiply directional_leverage as other", () => {
+    expect(deriveAssetClass("multiply", ["USDC", "SOL"], { vault_tag: "directional_leverage" })).toBe("other");
+    expect(deriveAssetClass("multiply", ["SOL", "USDC"], { vault_tag: "directional_leverage" })).toBe("other");
+  });
+
+  it("returns other for unknown tokens", () => {
+    expect(deriveAssetClass("earn", ["BONK"], {})).toBe("other");
+  });
+
+  it("returns other for empty tokens", () => {
+    expect(deriveAssetClass("earn", [], {})).toBe("other");
   });
 });

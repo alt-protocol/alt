@@ -49,7 +49,7 @@ export function serializeResult(result: BuildTxResult): SerializedBuildResult {
     );
   }
 
-  if (isBuildTxResultWithLookups(result) && result.metadata) {
+  if (!Array.isArray(result) && "metadata" in result && result.metadata) {
     base.metadata = result.metadata;
   }
 

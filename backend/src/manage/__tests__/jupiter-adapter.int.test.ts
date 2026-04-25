@@ -1,12 +1,19 @@
 import "dotenv/config";
-import { describe, it, expect } from "vitest";
-import { getTestWallet, JUICED_USDC_OPP_ID, JUICED_USDT_OPP_ID } from "../../__tests__/helpers.js";
+import { describe, it, expect, beforeAll } from "vitest";
+import { getTestWallet, JUICED_USDC_EXT_ID, JUICED_USDT_EXT_ID, resolveOppId } from "../../__tests__/helpers.js";
 import { discoverService } from "../../discover/service.js";
 import { getAdapter } from "../protocols/index.js";
 import { getJupiterMultiplyStats } from "../protocols/jupiter.js";
 import type { BuildTxResultWithLookups } from "../protocols/types.js";
 
 const wallet = getTestWallet();
+let JUICED_USDC_OPP_ID: number;
+let JUICED_USDT_OPP_ID: number;
+
+beforeAll(async () => {
+  JUICED_USDC_OPP_ID = await resolveOppId(JUICED_USDC_EXT_ID);
+  JUICED_USDT_OPP_ID = await resolveOppId(JUICED_USDT_EXT_ID);
+});
 
 describe("Jupiter adapter", () => {
   describe("multiply open", () => {

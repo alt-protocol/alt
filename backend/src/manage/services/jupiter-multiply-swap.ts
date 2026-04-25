@@ -13,10 +13,24 @@
  */
 import type { Instruction } from "@solana/kit";
 import { getWithRetry, jupiterHeaders } from "../../shared/http.js";
+import { cachedAsync } from "../../shared/utils.js";
 import { logger } from "../../shared/logger.js";
 import { convertJupiterApiInstruction } from "./instruction-converter.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+// ---------------------------------------------------------------------------
+// Impact capture — shared mutable ref populated by callbacks, read by caller
+// ---------------------------------------------------------------------------
+
+export interface SwapImpactCapture {
+  /** Execution price (output tokens per input token) from the swap. */
+  executionPrice: number | null;
+}
+
+export function createImpactCapture(): SwapImpactCapture {
+  return { executionPrice: null };
+}
 
 async function loadDecimal(): Promise<any> {
   const mod = await import("decimal.js");
@@ -37,7 +51,7 @@ function buildQueryString(
     amount: inputs.inputAmountLamports.toDP(0).toString(),
     taker: executor,
     slippageBps: String(slippageBps),
-    maxAccounts: "15", // keep swap compact — multiply txs already use many accounts
+    maxAccounts: "20", // allow multi-hop routes for stablecoin pairs (LUTs cover extra accounts)
     ...extra,
   }).toString();
 }
@@ -52,13 +66,17 @@ export function createJupiterMultiplyQuoter(
   slippageBps: number,
   inputMintReserve: any,
   outputMintReserve: any,
+  impactCapture?: SwapImpactCapture,
 ): (inputs: any) => Promise<any> {
   return async (inputs: any): Promise<any> => {
     const Decimal = await loadDecimal();
 
     const qs = buildQueryString(inputs, executor, slippageBps);
     const url = `${JUPITER_SWAP_API}/order?${qs}`;
-    const data = (await getWithRetry(url, { headers: jupiterHeaders() })) as any;
+    const cacheKey = `jup:kamino:order:${inputs.inputMint}:${inputs.outputMint}:${inputs.inputAmountLamports.toDP(0)}`;
+    const data = await cachedAsync(cacheKey, 5_000, () =>
+      getWithRetry(url, { headers: jupiterHeaders() }),
+    ) as any;
 
     const outAmount = String(data.outAmount ?? "0");
     if (outAmount === "0") {
@@ -70,6 +88,11 @@ export function createJupiterMultiplyQuoter(
     const inAmt = new Decimal(inputs.inputAmountLamports.toDP(0).toString()).div(inFactor);
     const outAmt = new Decimal(outAmount).div(outFactor);
     const priceAInB = outAmt.div(inAmt);
+
+    // Capture execution price for oracle comparison by caller
+    if (impactCapture) {
+      impactCapture.executionPrice = priceAInB.toNumber();
+    }
 
     return { priceAInB, quoteResponse: data };
   };
@@ -87,6 +110,7 @@ export function createJupiterMultiplySwapper(
   slippageBps: number,
   inputMintReserve: any,
   outputMintReserve: any,
+  impactCapture?: SwapImpactCapture,
 ): (inputs: any) => Promise<any[]> {
   return async (inputs: any): Promise<any[]> => {
     const Decimal = await loadDecimal();
@@ -95,7 +119,10 @@ export function createJupiterMultiplySwapper(
       wrapAndUnwrapSol: "false", // flash loan handles token flows
     });
     const url = `${JUPITER_SWAP_API}/build?${qs}`;
-    const data = (await getWithRetry(url, { headers: jupiterHeaders() })) as any;
+    const cacheKey = `jup:kamino:build:${inputs.inputMint}:${inputs.outputMint}:${inputs.inputAmountLamports.toDP(0)}`;
+    const data = await cachedAsync(cacheKey, 5_000, () =>
+      getWithRetry(url, { headers: jupiterHeaders() }),
+    ) as any;
 
     // Convert instructions — skip computeBudget (SDK adds its own)
     const setupIxs: Instruction[] = (data.setupInstructions ?? []).map(
@@ -127,6 +154,11 @@ export function createJupiterMultiplySwapper(
     const priceAInB = new Decimal(outStr)
       .div(outFactor)
       .div(new Decimal(inStr).div(inFactor));
+
+    // Capture execution price for oracle comparison by caller (overwrites quoter value — build is more authoritative)
+    if (impactCapture) {
+      impactCapture.executionPrice = priceAInB.toNumber();
+    }
 
     logger.info(
       {

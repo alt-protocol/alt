@@ -184,12 +184,23 @@ async function fetchEarnPositions(
     if (jlMint) jlTokenMap[assetAddress] = jlMint;
   }
 
+  // Reverse map: vault token (jl) address → asset address
+  const jlToAsset: Record<string, string> = {};
+  for (const [assetAddr, jlAddr] of Object.entries(jlTokenMap)) {
+    jlToAsset[jlAddr] = assetAddr;
+  }
+
+  // Earnings API expects vault token (jl) addresses, not asset addresses
+  const jlPositionIds = positionIds
+    .map((assetAddr) => jlTokenMap[assetAddr])
+    .filter(Boolean);
+
   // Fetch earnings
   const earningsMap: Record<string, number> = {};
-  if (positionIds.length > 0) {
+  if (jlPositionIds.length > 0) {
     try {
       const earningsData = await getWithRetry(
-        `${JUPITER_LEND_API}/earn/earnings?user=${wallet}&positions=${positionIds.join(",")}`,
+        `${JUPITER_LEND_API}/earn/earnings?user=${wallet}&positions=${jlPositionIds.join(",")}`,
         { headers },
       );
       logger.debug(
@@ -204,24 +215,35 @@ async function fetchEarnPositions(
       );
       if (Array.isArray(earningsData)) {
         for (const e of earningsData as Record<string, unknown>[]) {
-          const addr =
-            (e.address as string) ?? (e.assetAddress as string) ?? "";
-          const raw = e.earningsUsd ?? e.earnings;
-          const val = safeFloat(raw);
-          if (addr && val !== null) earningsMap[addr] = val;
+          const jlAddr = (e.address as string) ?? "";
+          const assetAddr = jlToAsset[jlAddr] ?? jlAddr;
+          const rawEarnings = safeFloat(e.earnings);
+          if (assetAddr && rawEarnings !== null) {
+            // earnings is in lamports — convert to USD
+            const info = tokenMap[assetAddr];
+            const dec = Number(info?.decimals ?? 6);
+            const px = safeFloat(info?.price) ?? 1;
+            earningsMap[assetAddr] = (rawEarnings / 10 ** dec) * px;
+          }
         }
       } else if (earningsData && typeof earningsData === "object") {
-        for (const [addr, val] of Object.entries(
+        for (const [jlAddr, val] of Object.entries(
           earningsData as Record<string, unknown>,
         )) {
-          const parsed =
+          const assetAddr = jlToAsset[jlAddr] ?? jlAddr;
+          const rawEarnings =
             typeof val !== "object"
               ? safeFloat(val)
               : safeFloat(
                   (val as Record<string, unknown>).usd ??
                     (val as Record<string, unknown>).earnings,
                 );
-          if (parsed !== null) earningsMap[addr] = parsed;
+          if (rawEarnings !== null) {
+            const info = tokenMap[assetAddr];
+            const dec = Number(info?.decimals ?? 6);
+            const px = safeFloat(info?.price) ?? 1;
+            earningsMap[assetAddr] = (rawEarnings / 10 ** dec) * px;
+          }
         }
       }
     } catch (err) {
@@ -243,12 +265,9 @@ async function fetchEarnPositions(
     );
   }
 
-  const noEarnings = positionIds.length > 0 && Object.keys(earningsMap).length === 0;
   const [earliestMap, earliestDeposits] = await Promise.all([
     batchEarliestSnapshots(database, wallet),
-    noEarnings
-      ? batchEarliestDeposits(database, wallet)
-      : Promise.resolve({} as Record<string, { snapshot_at: Date; deposit_amount_usd: number }>),
+    batchEarliestDeposits(database, wallet),
   ]);
   const results: PositionDict[] = [];
 
@@ -264,7 +283,18 @@ async function fetchEarnPositions(
     const depositAmountUsd = price ? underlyingAmount * price : null;
     if (depositAmountUsd === null || depositAmountUsd < 0.01) continue;
 
-    let pnlUsd = earningsMap[assetAddress] ?? null;
+    let pnlUsd: number | null = earningsMap[assetAddress] ?? null;
+
+    // Earnings API returns lifetime cumulative earnings (includes withdrawn positions).
+    // If earnings exceed current position value, they're from a larger prior position
+    // and can't represent this position's PnL — discard and fall back to snapshots.
+    if (pnlUsd !== null && depositAmountUsd && pnlUsd > depositAmountUsd) {
+      logger.debug(
+        { wallet: wallet.slice(0, 8), asset: assetAddress.slice(0, 8), earnings: pnlUsd, current: depositAmountUsd },
+        "Jupiter: earnings exceed position value (cumulative lifetime) — using snapshot fallback",
+      );
+      pnlUsd = null;
+    }
 
     // Fallback: approximate PnL from historical snapshots when earnings API fails.
     // This is current_value - earliest_value, so it underestimates PnL if the user

@@ -25,7 +25,7 @@ import type {
   UnderlyingToken,
 } from "../shared/types.js";
 import { numOrNull } from "../shared/utils.js";
-import { STABLECOIN_SYMBOLS } from "../shared/constants.js";
+// STABLECOIN_SYMBOLS removed — filtering uses asset_class column now
 import { getPegStatsMap } from "./services/peg-stats-cache.js";
 import { getShieldWarningsMap } from "./services/shield-warnings-cache.js";
 
@@ -54,6 +54,7 @@ export const discoverService: DiscoverService = {
       apy_current: numOrNull(opp.apy_current),
       tvl_usd: numOrNull(opp.tvl_usd),
       deposit_address: opp.deposit_address,
+      max_leverage: numOrNull(opp.max_leverage),
       extra_data: opp.extra_data as Record<string, unknown> | null,
       protocol: protocol
         ? { id: protocol.id, slug: protocol.slug, name: protocol.name }
@@ -85,6 +86,35 @@ export const discoverService: DiscoverService = {
       conditions.push(arrayOverlaps(yieldOpportunities.tokens, tokenList));
     }
 
+    if (params.protocol) {
+      conditions.push(eq(yieldOpportunities.protocol_name, params.protocol));
+    }
+
+    if (params.token_type) {
+      conditions.push(
+        sql`EXISTS (SELECT 1 FROM jsonb_array_elements(${yieldOpportunities.underlying_tokens}) AS t WHERE t->>'type' = ${params.token_type})`,
+      );
+    }
+
+    if (params.apy_min != null) {
+      conditions.push(sql`${yieldOpportunities.apy_current} >= ${params.apy_min}`);
+    }
+    if (params.apy_max != null) {
+      conditions.push(sql`${yieldOpportunities.apy_current} <= ${params.apy_max}`);
+    }
+    if (params.tvl_min != null) {
+      conditions.push(sql`${yieldOpportunities.tvl_usd} >= ${params.tvl_min}`);
+    }
+    if (params.tvl_max != null) {
+      conditions.push(sql`${yieldOpportunities.tvl_usd} <= ${params.tvl_max}`);
+    }
+    if (params.liquidity_min != null) {
+      conditions.push(sql`${yieldOpportunities.liquidity_available_usd} >= ${params.liquidity_min}`);
+    }
+    if (params.liquidity_max != null) {
+      conditions.push(sql`${yieldOpportunities.liquidity_available_usd} <= ${params.liquidity_max}`);
+    }
+
     // Hide opportunities with negligible available liquidity
     conditions.push(
       or(
@@ -93,22 +123,11 @@ export const discoverService: DiscoverService = {
       )!,
     );
 
-    if (params.stablecoins_only) {
-      conditions.push(sql`${yieldOpportunities.apy_current} > 0`);
-      const stableArr = [...STABLECOIN_SYMBOLS];
-      conditions.push(
-        or(
-          and(
-            eq(yieldOpportunities.category, "multiply"),
-            sql`${yieldOpportunities.extra_data}->>'vault_tag' IN ('stable_loop', 'rwa_loop')`,
-          ),
-          and(
-            sql`${yieldOpportunities.category} != 'multiply'`,
-            arrayOverlaps(yieldOpportunities.tokens, stableArr),
-          ),
-          sql`EXISTS (SELECT 1 FROM unnest(${yieldOpportunities.tokens}) AS t WHERE t LIKE 'PT-%')`,
-        )!,
-      );
+    if (params.asset_class) {
+      conditions.push(eq(yieldOpportunities.asset_class, params.asset_class));
+      if (params.asset_class === "stablecoin") {
+        conditions.push(sql`${yieldOpportunities.apy_current} > 0`);
+      }
     }
 
     let orderBy;
@@ -160,7 +179,7 @@ export const discoverService: DiscoverService = {
       }
       if (!pegStability) {
         for (const t of o.tokens) {
-          if (STABLECOIN_SYMBOLS.has(t) && pegMap.has(t)) {
+          if (pegMap.has(t)) {
             pegStability = pegMap.get(t)!;
             break;
           }
@@ -190,6 +209,13 @@ export const discoverService: DiscoverService = {
         depeg: numOrNull(o.depeg),
         underlying_tokens: o.underlying_tokens ?? null,
         protocol_url: (extra?.protocol_url as string) ?? null,
+        multiply_info: o.category === "multiply" ? {
+          collateral_symbol: (extra?.collateral_symbol as string) ?? null,
+          debt_symbol: (extra?.debt_symbol as string) ?? null,
+          debt_available_usd: (extra?.debt_available_usd as number) ?? null,
+          borrow_apy_current_pct: (extra?.borrow_apy_current_pct as number) ?? null,
+          collateral_yield_current_pct: (extra?.collateral_yield_current_pct as number) ?? null,
+        } : null,
         updated_at: o.updated_at,
         peg_stability: pegStability,
         token_warnings: (() => {
