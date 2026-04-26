@@ -38,11 +38,11 @@ export async function handleStart(ctx: CommandContext<Context>): Promise<void> {
     // Create default preferences
     await db.insert(userPreferences).values({ user_id: inserted[0].id });
 
+    awaitingWallet.add(ctx.from!.id);
     await ctx.reply(
       "Hey! I'm Akashi, your Solana DeFi advisor.\n\n" +
-        "Link your wallet to get started:\n" +
-        "/connect <your-solana-address>\n\n" +
-        "Then ask me anything — yield opportunities, portfolio status, or position management.",
+        "Paste your Solana wallet address to get started.\n\n" +
+        "Or ask me anything — I can help without a wallet too.",
     );
   } else {
     // Update chat_id and username in case they changed
@@ -51,11 +51,12 @@ export async function handleStart(ctx: CommandContext<Context>): Promise<void> {
       .set({ chat_id: chatId, username })
       .where(eq(users.telegram_id, telegramId));
 
-    await ctx.reply(
-      existing[0].wallet_address
-        ? `Welcome back! Tracking wallet ${existing[0].wallet_address.slice(0, 6)}...${existing[0].wallet_address.slice(-4)}. Ask me anything.`
-        : "Welcome back! Link your wallet with /connect <address> to get started.",
-    );
+    if (existing[0].wallet_address) {
+      await ctx.reply(`Welcome back! Tracking wallet ${existing[0].wallet_address.slice(0, 6)}...${existing[0].wallet_address.slice(-4)}. Ask me anything.`);
+    } else {
+      awaitingWallet.add(ctx.from!.id);
+      await ctx.reply("Welcome back! Paste your wallet address to get started, or ask me anything.");
+    }
   }
 }
 

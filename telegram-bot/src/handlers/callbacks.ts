@@ -164,13 +164,12 @@ export async function handleConfirmAction(
       await ctx.editMessageText(msg);
 
       if (signOpts.web.startsWith("https://")) {
-        // Production: inline keyboard with web link and deeplink
+        // Production: inline keyboard with web link; deeplink is encoded in QR
         const keyboard = new InlineKeyboard()
-          .url("Sign in Browser", signOpts.web).row()
-          .url("Open in Wallet App", signOpts.deeplink);
+          .url("Sign in Browser", signOpts.web);
 
         await ctx.replyWithPhoto(new InputFile(signOpts.qr, "sign-qr.png"), {
-          caption: "Scan QR with your Solana wallet app, or tap a button below:",
+          caption: "Scan QR with your Solana wallet app, or tap the button below:",
           reply_markup: keyboard,
         });
       } else {
