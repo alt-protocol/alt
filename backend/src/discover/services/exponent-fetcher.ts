@@ -100,6 +100,7 @@ export async function fetchExponentYields(): Promise<number> {
 
     const commonExtra = {
       market_vault: m.vaultAddress,
+      market_address: (m as any).legacyMarketAddresses?.[0] ?? null,
       platform: m.platformName,
       mint_pt: m.ptMint,
       mint_yt: m.ytMint,
@@ -108,6 +109,7 @@ export async function fetchExponentYields(): Promise<number> {
       decimals: m.underlyingAsset.decimals ?? 6,
       expiration_ts: m.maturityDateUnixTs,
       expiration_date: new Date(m.maturityDateUnixTs * 1000).toISOString(),
+      pt_price: safeFloat((m as any).ptPriceInAsset) ?? 1.0,
       sy_exchange_rate: m.syExchangeRate,
       underlying_apy: m.underlyingApy,
       source: "exponent_api",

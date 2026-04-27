@@ -13,12 +13,14 @@ import { validateWallet, storePositionRows, storeEventsBatch } from "../services
 import { fetchWalletPositions as fetchKaminoPositions } from "../services/kamino-position-fetcher.js";
 import { fetchWalletPositions as fetchDriftPositions } from "../services/drift-position-fetcher.js";
 import { fetchWalletPositions as fetchJupiterPositions } from "../services/jupiter-position-fetcher.js";
+import { fetchWalletPositions as fetchExponentPositions } from "../services/exponent-position-fetcher.js";
 import { numOrNull } from "../../shared/utils.js";
 import {
   PositionsQuery,
   PositionHistoryQuery,
   EventsQuery,
   PortfolioAnalyticsOut,
+  SyncBody,
 } from "./schemas.js";
 import { monitorService } from "../service.js";
 
@@ -44,13 +46,14 @@ async function backgroundFetchAndStore(walletAddress: string) {
 
     const now = new Date();
 
-    // Fetch all 3 protocols in parallel, with a hard timeout
-    const [kaminoResult, driftResult, jupiterResult] =
+    // Fetch all protocols in parallel, with a hard timeout
+    const [kaminoResult, driftResult, jupiterResult, exponentResult] =
       await Promise.race([
         Promise.allSettled([
           fetchKaminoPositions(walletAddress),
           fetchDriftPositions(walletAddress),
           fetchJupiterPositions(walletAddress, db),
+          fetchExponentPositions(walletAddress),
         ]),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("Background fetch timeout (5min)")), FETCH_TIMEOUT_MS),
@@ -66,6 +69,9 @@ async function backgroundFetchAndStore(walletAddress: string) {
         : []),
       ...(jupiterResult.status === "fulfilled"
         ? jupiterResult.value.positions
+        : []),
+      ...(exponentResult.status === "fulfilled"
+        ? exponentResult.value.positions
         : []),
     ];
 
@@ -300,16 +306,8 @@ export async function portfolioRoutes(app: FastifyInstance) {
       const { wallet } = request.params;
       validateWallet(wallet);
 
-      const body = request.body as Record<string, unknown> | null;
-      const opportunityId = Number(body?.opportunity_id);
-      if (!Number.isFinite(opportunityId) || opportunityId <= 0) {
-        const err = new Error("opportunity_id is required") as Error & { statusCode: number };
-        err.statusCode = 400;
-        throw err;
-      }
-
-      const metadata = body?.metadata as Record<string, unknown> | undefined;
-      await monitorService.syncPosition(wallet, opportunityId, metadata);
+      const body = SyncBody.parse(request.body);
+      await monitorService.syncPosition(wallet, body.opportunity_id, body.metadata);
       return { ok: true };
     },
   });
@@ -366,6 +364,7 @@ export async function portfolioRoutes(app: FastifyInstance) {
         wallet,
         q.protocol,
         q.product_type,
+        q.asset_class,
       );
       return result.positions;
     },

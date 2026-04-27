@@ -51,9 +51,9 @@ async function callTool(name: string, args: Record<string, unknown> = {}) {
 // ---------------------------------------------------------------------------
 
 describe("MCP Server — tool registration", () => {
-  it("lists all 14 tools", async () => {
+  it("lists all 20 tools", async () => {
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(14);
+    expect(tools.length).toBe(20);
   });
 
   it("every tool has a description", async () => {
@@ -73,14 +73,19 @@ describe("MCP Server — tool registration", () => {
       "get_portfolio",
       "get_position_events",
       "get_position_history",
+      "get_position_stats",
+      "get_price_impact",
       "get_protocols",
+      "get_wallet_balance",
       "get_wallet_balances",
+      "get_wallet_status",
       "get_withdraw_state",
       "get_yield_details",
       "get_yield_history",
       "search_yields",
       "submit_transaction",
       "swap",
+      "sync_position",
       "track_wallet",
     ]);
   });

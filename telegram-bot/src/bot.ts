@@ -15,6 +15,8 @@ import {
   handleSettingsApiKey,
   handleConfirmAction,
   handleCancelAction,
+  handleManageAlerts,
+  handleAlertToggleRule,
 } from "./handlers/callbacks.js";
 import { handleMessage, setSoul } from "./handlers/message.js";
 
@@ -65,8 +67,14 @@ bot.callbackQuery(/^set:provider:(.+)$/, handleSetProvider);
 bot.callbackQuery("settings:risk", handleSettingsRisk);
 bot.callbackQuery(/^set:risk:(.+)$/, handleSetRisk);
 bot.callbackQuery("settings:alerts_toggle", handleAlertsToggle);
+bot.callbackQuery("settings:manage_alerts", handleManageAlerts);
+bot.callbackQuery(/^alert:toggle:\d+:(on|off)$/, handleAlertToggleRule);
 bot.callbackQuery("settings:model", handleSettingsModel);
 bot.callbackQuery("settings:apikey", handleSettingsApiKey);
+bot.callbackQuery("settings:back", async (ctx) => {
+  await ctx.editMessageText("Use /settings to return to settings.");
+  await ctx.answerCallbackQuery();
+});
 bot.callbackQuery("confirm_action", handleConfirmAction);
 bot.callbackQuery("cancel_action", handleCancelAction);
 

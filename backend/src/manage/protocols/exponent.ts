@@ -9,10 +9,13 @@ import type {
   ProtocolAdapter,
   BuildTxParams,
   BuildTxResult,
+  GetBalanceParams,
 } from "./types.js";
 import { convertLegacyInstruction as convertIx } from "../services/instruction-converter.js";
 import { getLegacyConnection } from "../../shared/rpc.js";
 import { resolveDecimals } from "../services/decimals.js";
+import { postJson } from "../../shared/http.js";
+import { logger } from "../../shared/logger.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -20,7 +23,7 @@ import { resolveDecimals } from "../services/decimals.js";
 // Cached SDK — loaded once on first call, reused after
 // ---------------------------------------------------------------------------
 
-let _sdk: { MarketThree: any; LOCAL_ENV: any; web3: any } | undefined;
+let _sdk: { Market: any; LOCAL_ENV: any; web3: any } | undefined;
 
 async function loadSdk() {
   if (!_sdk) {
@@ -28,7 +31,7 @@ async function loadSdk() {
       import("@exponent-labs/exponent-sdk"),
       import("@solana/web3.js"),
     ]);
-    _sdk = { MarketThree: sdk.MarketThree, LOCAL_ENV: sdk.LOCAL_ENV, web3 };
+    _sdk = { Market: sdk.Market, LOCAL_ENV: sdk.LOCAL_ENV, web3 };
   }
   return _sdk;
 }
@@ -37,12 +40,13 @@ async function loadSdk() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Load a single MarketThree by its vault address. */
-async function loadMarket(marketVault: string) {
-  const { MarketThree, LOCAL_ENV, web3 } = await loadSdk();
+/** Load a legacy Market by its market address (from legacyMarketAddresses). */
+async function loadMarket(extraData?: Record<string, unknown>) {
+  const { Market, LOCAL_ENV, web3 } = await loadSdk();
   const connection = await getLegacyConnection();
-  const address = new web3.PublicKey(marketVault);
-  return MarketThree.load(LOCAL_ENV, connection, address);
+  const addr = (extraData?.market_address ?? extraData?.market_vault) as string;
+  if (!addr) throw new Error("No market_address or market_vault in extra_data");
+  return Market.load(LOCAL_ENV, connection, new web3.PublicKey(addr));
 }
 
 /** Convert SDK instruction results ({ixs, setupIxs}) to kit Instruction[]. */
@@ -67,17 +71,17 @@ function convertIxResult(result: any): Instruction[] {
 
 async function buildPtDeposit(params: BuildTxParams): Promise<BuildTxResult> {
   const { web3 } = await loadSdk();
-  const market = await loadMarket(params.extraData?.market_vault as string);
+  const market = await loadMarket(params.extraData);
   const owner = new web3.PublicKey(params.walletAddress);
   const decimals = await resolveDecimals(params.extraData);
-  const baseIn = BigInt(Math.floor(Number(params.amount) * 10 ** decimals));
+  const baseAmount = BigInt(Math.floor(Number(params.amount) * 10 ** decimals));
 
-  // Allow 2% slippage on PT out
-  const ptPrice = market.state.ticks?.currentSpotPrice ?? 0;
-  const estimatedPt = Number(baseIn) * (1 / Math.exp(-ptPrice));
-  const minPtOut = BigInt(Math.floor(estimatedPt * 0.98));
+  // Legacy Market: specify desired PT output + max base input (with 2% slippage)
+  const ptPrice = market.currentPtPriceInAsset ?? 1;
+  const ptOut = BigInt(Math.floor(Number(baseAmount) / ptPrice));
+  const maxBaseIn = BigInt(Math.floor(Number(baseAmount) * 1.02));
 
-  const result = await market.ixWrapperBuyPt({ owner, baseIn, minPtOut });
+  const result = await market.ixWrapperBuyPt({ owner, ptOut, maxBaseIn });
   const instructions = convertIxResult(result);
   const alt = market.addressLookupTable.toBase58();
 
@@ -86,7 +90,7 @@ async function buildPtDeposit(params: BuildTxParams): Promise<BuildTxResult> {
 
 async function buildPtWithdraw(params: BuildTxParams): Promise<BuildTxResult> {
   const { web3 } = await loadSdk();
-  const market = await loadMarket(params.extraData?.market_vault as string);
+  const market = await loadMarket(params.extraData);
   const owner = new web3.PublicKey(params.walletAddress);
   const decimals = await resolveDecimals(params.extraData);
   const amount = BigInt(Math.floor(Number(params.amount) * 10 ** decimals));
@@ -107,22 +111,18 @@ async function buildPtWithdraw(params: BuildTxParams): Promise<BuildTxResult> {
 
 async function buildLpDeposit(params: BuildTxParams): Promise<BuildTxResult> {
   const { web3 } = await loadSdk();
-  const market = await loadMarket(params.extraData?.market_vault as string);
+  const market = await loadMarket(params.extraData);
   const depositor = new web3.PublicKey(params.walletAddress);
   const decimals = await resolveDecimals(params.extraData);
   const amountBase = BigInt(Math.floor(Number(params.amount) * 10 ** decimals));
 
-  // Full-range liquidity (0% to 100% APY tick range)
-  const result = await market.ixWrapperProvideLiquidity({
+  const result = await market.ixProvideLiquidityNoPriceImpact({
     depositor,
     amountBase,
     minLpOut: 0n,
-    lowerTickApy: 0,
-    upperTickApy: 10000, // 100% APY in basis points
   });
 
   const instructions = convertIxResult(result);
-  // Add signer keypairs if present (LP position account)
   const alt = market.addressLookupTable.toBase58();
 
   return { instructions, lookupTableAddresses: [alt] };
@@ -130,19 +130,15 @@ async function buildLpDeposit(params: BuildTxParams): Promise<BuildTxResult> {
 
 async function buildLpWithdraw(params: BuildTxParams): Promise<BuildTxResult> {
   const { web3 } = await loadSdk();
-  const market = await loadMarket(params.extraData?.market_vault as string);
+  const market = await loadMarket(params.extraData);
   const owner = new web3.PublicKey(params.walletAddress);
   const decimals = await resolveDecimals(params.extraData);
   const amountLp = BigInt(Math.floor(Number(params.amount) * 10 ** decimals));
-
-  const lpPosition = params.extraData?.lp_position as string | undefined;
-  if (!lpPosition) throw new Error("LP position address required for withdrawal");
 
   const result = await market.ixWithdrawLiquidityToBase({
     owner,
     amountLp,
     minBaseOut: 0n,
-    lpPosition: new web3.PublicKey(lpPosition),
   });
 
   const instructions = convertIxResult(result);
@@ -155,6 +151,42 @@ async function buildLpWithdraw(params: BuildTxParams): Promise<BuildTxResult> {
 // Adapter export
 // ---------------------------------------------------------------------------
 
+/** Query wallet's token account balance for a given mint via RPC. */
+async function getTokenBalance(wallet: string, mint: string): Promise<number | null> {
+  const rpcUrl = process.env.HELIUS_RPC_URL;
+  if (!rpcUrl) return null;
+
+  try {
+    const resp = (await postJson(rpcUrl, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "getTokenAccountsByOwner",
+      params: [
+        wallet,
+        { mint },
+        { encoding: "jsonParsed" },
+      ],
+    })) as Record<string, unknown>;
+
+    const result = resp?.result as Record<string, unknown> | undefined;
+    const accounts = (result?.value ?? []) as Record<string, unknown>[];
+    if (accounts.length === 0) return null;
+
+    let total = 0;
+    for (const acct of accounts) {
+      const data = acct.account as Record<string, unknown>;
+      const parsed = (data?.data as Record<string, unknown>)?.parsed as Record<string, unknown>;
+      const info = parsed?.info as Record<string, unknown>;
+      const tokenAmount = info?.tokenAmount as Record<string, unknown>;
+      total += Number(tokenAmount?.uiAmount ?? 0);
+    }
+    return total > 0 ? total : null;
+  } catch (err) {
+    logger.warn({ err, wallet: wallet.slice(0, 8), mint: mint.slice(0, 8) }, "Exponent getTokenBalance failed");
+    return null;
+  }
+}
+
 export const exponentAdapter: ProtocolAdapter = {
   async buildDepositTx(params) {
     const type = params.extraData?.type as string;
@@ -166,5 +198,14 @@ export const exponentAdapter: ProtocolAdapter = {
     const type = params.extraData?.type as string;
     if (type === "exponent_lp") return buildLpWithdraw(params);
     return buildPtWithdraw(params);
+  },
+
+  async getBalance(params: GetBalanceParams): Promise<number | null> {
+    const type = params.extraData?.type as string;
+    const mint = type === "exponent_lp"
+      ? (params.extraData?.mint_lp as string | undefined)
+      : (params.extraData?.mint_pt as string | undefined);
+    if (!mint) return null;
+    return getTokenBalance(params.walletAddress, mint);
   },
 };

@@ -7,20 +7,20 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Mock the SDK — must be before imports
 const mockIxWrapperBuyPt = vi.fn();
 const mockIxWrapperSellPt = vi.fn();
-const mockIxWrapperProvideLiquidity = vi.fn();
+const mockIxProvideLiquidityNoPriceImpact = vi.fn();
 const mockIxWithdrawLiquidityToBase = vi.fn();
 
 const mockMarketInstance = {
   addressLookupTable: { toBase58: () => "ALT_ADDRESS" },
-  state: { ticks: { currentSpotPrice: 0.05 } },
+  currentPtPriceInAsset: 0.95,
   ixWrapperBuyPt: mockIxWrapperBuyPt,
   ixWrapperSellPt: mockIxWrapperSellPt,
-  ixWrapperProvideLiquidity: mockIxWrapperProvideLiquidity,
+  ixProvideLiquidityNoPriceImpact: mockIxProvideLiquidityNoPriceImpact,
   ixWithdrawLiquidityToBase: mockIxWithdrawLiquidityToBase,
 };
 
 vi.mock("@exponent-labs/exponent-sdk", () => ({
-  MarketThree: {
+  Market: {
     load: vi.fn().mockResolvedValue(mockMarketInstance),
   },
   LOCAL_ENV: {},
@@ -55,7 +55,7 @@ describe("exponentAdapter", () => {
     vi.clearAllMocks();
     mockIxWrapperBuyPt.mockResolvedValue({ ixs: [makeLegacyIx()], setupIxs: [] });
     mockIxWrapperSellPt.mockResolvedValue({ ixs: [makeLegacyIx()], setupIxs: [] });
-    mockIxWrapperProvideLiquidity.mockResolvedValue({ ixs: [makeLegacyIx()], setupIxs: [], signers: [] });
+    mockIxProvideLiquidityNoPriceImpact.mockResolvedValue({ ixs: [makeLegacyIx()], setupIxs: [], signers: [] });
     mockIxWithdrawLiquidityToBase.mockResolvedValue({ ixs: [makeLegacyIx()], setupIxs: [] });
   });
 
@@ -70,7 +70,7 @@ describe("exponentAdapter", () => {
       });
 
       expect(mockIxWrapperBuyPt).toHaveBeenCalledTimes(1);
-      expect(mockIxWrapperProvideLiquidity).not.toHaveBeenCalled();
+      expect(mockIxProvideLiquidityNoPriceImpact).not.toHaveBeenCalled();
       expect(Array.isArray(result) ? result : (result as any).instructions).toBeDefined();
     });
 
@@ -83,7 +83,7 @@ describe("exponentAdapter", () => {
         extraData: { type: "exponent_lp", market_vault: "VAULT_ADDR", decimals: 6 },
       });
 
-      expect(mockIxWrapperProvideLiquidity).toHaveBeenCalledTimes(1);
+      expect(mockIxProvideLiquidityNoPriceImpact).toHaveBeenCalledTimes(1);
       expect(mockIxWrapperBuyPt).not.toHaveBeenCalled();
     });
 
@@ -125,17 +125,6 @@ describe("exponentAdapter", () => {
       expect(mockIxWithdrawLiquidityToBase).toHaveBeenCalledTimes(1);
     });
 
-    it("throws for LP withdraw without position address", async () => {
-      await expect(
-        exponentAdapter.buildWithdrawTx({
-          walletAddress: "WALLET123",
-          depositAddress: "VAULT_ADDR",
-          amount: "50",
-          category: "earn",
-          extraData: { type: "exponent_lp", market_vault: "VAULT_ADDR" },
-        }),
-      ).rejects.toThrow("LP position address required");
-    });
   });
 
   it("returns lookup table addresses", async () => {

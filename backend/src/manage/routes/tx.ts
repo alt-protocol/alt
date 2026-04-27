@@ -1,17 +1,77 @@
 import type { FastifyInstance } from "fastify";
 import { buildTransaction } from "../services/tx-builder.js";
 import { simulateTransaction } from "../services/tx-preview.js";
+import { assembleTransaction } from "../services/tx-assembler.js";
+import { generateSignOptions } from "../services/sign-options.js";
 import { discoverService } from "../../discover/service.js";
 import { getAdapter } from "../protocols/index.js";
 import { getMultiplyStats } from "../protocols/kamino.js";
 import { getJupiterMultiplyStats } from "../protocols/jupiter.js";
 import { authHook } from "../../shared/auth.js";
 import { logger } from "../../shared/logger.js";
-import { BuildTxBody, SubmitTxBody, BalanceBody, WalletBalanceBody, WithdrawStateBody, PriceImpactBody } from "./schemas.js";
+import { BuildTxBody, FormatQuery, SubmitTxBody, BalanceBody, WalletBalanceBody, WithdrawStateBody, PriceImpactBody } from "./schemas.js";
 import { fetchWalletBalance } from "../services/wallet-balance.js";
 import { cachedAsync, bustCacheKey } from "../../shared/utils.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+/**
+ * Assemble a rich response for format=assembled: base64 tx + sign options + summary.
+ */
+async function assembleRichResponse(
+  buildResult: { instructions: any[]; lookupTableAddresses?: string[]; setupInstructionSets?: any[][] },
+  walletAddress: string,
+  opportunityId: number,
+  amount: string,
+  action: "deposit" | "withdraw",
+  extraData?: Record<string, unknown>,
+  simulate?: boolean,
+) {
+  const assembled = await assembleTransaction(
+    buildResult.instructions,
+    walletAddress,
+    buildResult.lookupTableAddresses,
+  );
+
+  let setupTransactions: string[] | undefined;
+  if (buildResult.setupInstructionSets?.length) {
+    setupTransactions = [];
+    for (const setupIxs of buildResult.setupInstructionSets) {
+      if (setupIxs.length === 0) continue;
+      const setupAssembled = await assembleTransaction(setupIxs, walletAddress, buildResult.lookupTableAddresses);
+      setupTransactions.push(setupAssembled.transaction);
+    }
+  }
+
+  const opp = await discoverService.getOpportunityById(opportunityId);
+  const oppName = opp?.name ?? `opportunity #${opportunityId}`;
+  const protocol = opp?.protocol?.name ?? "unknown protocol";
+  const apyStr = opp?.apy_current ? ` (~${opp.apy_current.toFixed(1)}% APY)` : "";
+  const summary = action === "deposit"
+    ? `Deposit ${amount} into ${oppName} on ${protocol}${apyStr}`
+    : `Withdraw ${amount} from ${oppName} on ${protocol}`;
+
+  const sign = await generateSignOptions(action, opportunityId, amount, walletAddress, extraData);
+
+  const result: Record<string, unknown> = {
+    transaction: assembled.transaction,
+    blockhash: assembled.blockhash,
+    lastValidBlockHeight: assembled.lastValidBlockHeight,
+    ...(setupTransactions?.length ? { setup_transactions: setupTransactions } : {}),
+    summary,
+    sign,
+  };
+
+  if (simulate) {
+    result.simulation = await simulateTransaction(
+      buildResult.instructions,
+      walletAddress,
+      buildResult.lookupTableAddresses,
+    );
+  }
+
+  return result;
+}
 
 export async function txRoutes(app: FastifyInstance) {
   // POST /tx/build-deposit
@@ -20,6 +80,7 @@ export async function txRoutes(app: FastifyInstance) {
     { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const body = BuildTxBody.parse(request.body);
+      const { format } = FormatQuery.parse(request.query);
 
       try {
         const result = await buildTransaction(
@@ -32,7 +93,12 @@ export async function txRoutes(app: FastifyInstance) {
           "deposit",
         );
 
-        // Optional simulation
+        if (format === "assembled") {
+          return reply.send(await assembleRichResponse(
+            result, body.wallet_address, body.opportunity_id, body.amount, "deposit", body.extra_data, body.simulate,
+          ));
+        }
+
         if (body.simulate) {
           const simulation = await simulateTransaction(
             result.instructions,
@@ -58,6 +124,7 @@ export async function txRoutes(app: FastifyInstance) {
     { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const body = BuildTxBody.parse(request.body);
+      const { format } = FormatQuery.parse(request.query);
 
       try {
         const result = await buildTransaction(
@@ -70,7 +137,12 @@ export async function txRoutes(app: FastifyInstance) {
           "withdraw",
         );
 
-        // Optional simulation
+        if (format === "assembled") {
+          return reply.send(await assembleRichResponse(
+            result, body.wallet_address, body.opportunity_id, body.amount, "withdraw", body.extra_data, body.simulate,
+          ));
+        }
+
         if (body.simulate) {
           const simulation = await simulateTransaction(
             result.instructions,
@@ -122,9 +194,9 @@ export async function txRoutes(app: FastifyInstance) {
     },
   );
 
-  // POST /wallet-balance — on-chain wallet token balance (cached 15s server-side)
+  // POST /tx/wallet-balance — on-chain wallet token balance (cached 15s server-side)
   app.post(
-    "/wallet-balance",
+    "/tx/wallet-balance",
     { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const body = WalletBalanceBody.parse(request.body);
@@ -139,9 +211,9 @@ export async function txRoutes(app: FastifyInstance) {
     },
   );
 
-  // POST /balance — fetch protocol-specific vault/position balance
+  // POST /tx/balance — fetch protocol-specific vault/position balance
   app.post(
-    "/balance",
+    "/tx/balance",
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const body = BalanceBody.parse(request.body);
@@ -169,9 +241,9 @@ export async function txRoutes(app: FastifyInstance) {
     },
   );
 
-  // POST /withdraw-state — check multi-step withdrawal state (e.g. Drift redeem period)
+  // POST /tx/withdraw-state — check multi-step withdrawal state (e.g. Drift redeem period)
   app.post(
-    "/withdraw-state",
+    "/tx/withdraw-state",
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const body = WithdrawStateBody.parse(request.body);

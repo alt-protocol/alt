@@ -304,13 +304,13 @@ export const api = {
   }) => apiPost<BuildTxApiResponse>("/api/manage/tx/build-withdraw", params),
 
   getBalance: (params: { opportunity_id: number; wallet_address: string }) =>
-    apiPost<{ balance: number | null }>("/api/manage/balance", params),
+    apiPost<{ balance: number | null }>("/api/manage/tx/balance", params),
 
   getWalletBalance: (params: { wallet_address: string; mint: string; fresh?: boolean }) =>
-    apiPost<{ balance: number }>("/api/manage/wallet-balance", params),
+    apiPost<{ balance: number }>("/api/manage/tx/wallet-balance", params),
 
   getWithdrawState: (params: { opportunity_id: number; wallet_address: string }) =>
-    apiPost<WithdrawState | null>("/api/manage/withdraw-state", params),
+    apiPost<WithdrawState | null>("/api/manage/tx/withdraw-state", params),
 
   getPositionStats: (params: { opportunity_id: number; wallet_address: string }) =>
     apiPost<{

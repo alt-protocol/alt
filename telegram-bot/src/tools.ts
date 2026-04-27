@@ -339,16 +339,20 @@ function makeRequestDeposit(session: SessionState) {
         }
       }
 
-      // Include verified opportunity name in summary
+      // Build deterministic summary from verified data — never trust AI summary alone
       const verifiedName = session.opportunities.get(opportunity_id)?.name
         ?? (opp as Record<string, unknown>)?.name as string
         ?? `#${opportunity_id}`;
+
+      const leverageStr = extra.leverage ? ` at ${extra.leverage}x leverage` : "";
+      const tokenStr = extra.deposit_token ? ` (${extra.deposit_token})` : "";
+      const deterministicSummary = `Deposit ${amount}${tokenStr} into ${verifiedName}${leverageStr}`;
 
       return {
         pending: true,
         action: "build_deposit_tx",
         params: { opportunity_id, amount, ...extra },
-        summary: `[${verifiedName}]\n${summary}`,
+        summary: `[${verifiedName}]\n${deterministicSummary}`,
         message: "ACTION PENDING — user must tap Confirm. Do NOT tell the user this is done or completed.",
       };
     },
@@ -386,16 +390,20 @@ function makeRequestWithdraw(session: SessionState) {
         return { error: `Opportunity ${opportunity_id} not found. Call search_yields to find the correct ID.` };
       }
 
-      // Include verified opportunity name in summary
+      // Build deterministic summary from verified data — never trust AI summary alone
       const verifiedName = session.opportunities.get(opportunity_id)?.name
         ?? (opp as Record<string, unknown>)?.name as string
         ?? `#${opportunity_id}`;
+
+      const closingStr = extra.is_closing_position ? " (close position)" : "";
+      const actionStr = extra.action && extra.action !== "close" ? ` [${extra.action}]` : "";
+      const deterministicSummary = `Withdraw ${amount} from ${verifiedName}${closingStr}${actionStr}`;
 
       return {
         pending: true,
         action: "build_withdraw_tx",
         params: { opportunity_id, amount, ...extra },
-        summary: `[${verifiedName}]\n${summary}`,
+        summary: `[${verifiedName}]\n${deterministicSummary}`,
         message: "ACTION PENDING — user must tap Confirm. Do NOT tell the user this is done or completed.",
       };
     },
@@ -546,14 +554,10 @@ const getSettings = tool({
             preferred_tokens: prefs.preferred_tokens,
             preferred_protocols: prefs.preferred_protocols,
             alerts_enabled: prefs.alerts_enabled,
-            apy_drop_pct: prefs.apy_drop_pct,
-            apy_spike_pct: prefs.apy_spike_pct,
-            depeg_threshold_bps: prefs.depeg_threshold_bps,
-            tvl_drop_pct: prefs.tvl_drop_pct,
-            min_new_opp_apy: prefs.min_new_opp_apy,
             quiet_hours_start: prefs.quiet_hours_start,
             quiet_hours_end: prefs.quiet_hours_end,
-            min_alert_interval_minutes: prefs.min_alert_interval_minutes,
+            digest_hour_utc: prefs.digest_hour_utc,
+            weekly_summary_enabled: prefs.weekly_summary_enabled,
           }
         : null,
     };
@@ -637,28 +641,24 @@ const updateWallet = tool({
 
 const updatePreferencesTool = tool({
   description:
-    "Update user alert and risk preferences. All fields optional — only set what the user wants to change.",
+    "Update user preferences. All fields optional — only set what the user wants to change. " +
+    "Alert thresholds are managed per-rule via the alert system, not here.",
   parameters: z.object({
     user_id: z.number().int().describe("The user's database ID"),
     risk_tolerance: z.enum(["conservative", "moderate", "aggressive"]).optional(),
     preferred_tokens: z.array(z.string()).optional().describe("Token symbols, e.g. ['USDC', 'SOL']"),
     preferred_protocols: z.array(z.string()).optional().describe("Protocol slugs, e.g. ['kamino', 'jupiter']"),
     alerts_enabled: z.boolean().optional().describe("Enable or disable all alerts"),
-    apy_drop_pct: z.number().min(1).max(100).optional().describe("Alert when APY drops by this % (default: 20)"),
-    apy_spike_pct: z.number().min(1).max(500).optional().describe("Alert when APY spikes by this % (default: 50)"),
-    depeg_threshold_bps: z.number().min(1).max(1000).optional().describe("Depeg alert threshold in bps (default: 50)"),
-    tvl_drop_pct: z.number().min(1).max(100).optional().describe("TVL drop alert threshold % (default: 30)"),
-    min_new_opp_apy: z.number().min(0).max(1000).optional().describe("Min APY for new opportunity alerts (default: 10)"),
     quiet_hours_start: z.number().int().min(0).max(23).optional().describe("Quiet hours start UTC hour"),
     quiet_hours_end: z.number().int().min(0).max(23).optional().describe("Quiet hours end UTC hour"),
-    min_alert_interval_minutes: z.number().int().min(5).max(1440).optional().describe("Min minutes between alerts"),
+    digest_hour_utc: z.number().int().min(0).max(23).optional().describe("Hour (UTC) to receive daily digest (default: 9)"),
+    weekly_summary_enabled: z.boolean().optional().describe("Enable weekly portfolio summary (Monday)"),
   }),
   execute: async ({ user_id, ...fields }) => {
     const updates: Record<string, unknown> = {};
-    const numericFields = ["apy_drop_pct", "apy_spike_pct", "depeg_threshold_bps", "tvl_drop_pct", "min_new_opp_apy"];
     for (const [key, value] of Object.entries(fields)) {
       if (value !== undefined) {
-        updates[key] = numericFields.includes(key) ? String(value) : value;
+        updates[key] = value;
       }
     }
 
@@ -718,7 +718,7 @@ const requestAction = tool({
     "Exact params per action:\n" +
     "- update_ai_config: {provider?, model_id?, api_key?, ollama_url?}\n" +
     "- update_wallet: {wallet_address}\n" +
-    "- update_preferences: {risk_tolerance?, alerts_enabled?, apy_drop_pct?, preferred_tokens?, ...}\n" +
+    "- update_preferences: {risk_tolerance?, alerts_enabled?, preferred_tokens?, digest_hour_utc?, ...}\n" +
     "- update_soul: {soul_notes}",
   parameters: z.object({
     action: z.enum(MUTATING_ACTIONS).describe("Which settings action to perform"),

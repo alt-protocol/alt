@@ -10,9 +10,9 @@ import { createMcpServer } from "./server.js";
  * AI agents connect via:
  *   POST https://your-app.railway.app/api/mcp
  *
- * Write tools (build_deposit_tx, build_withdraw_tx, submit_transaction, build_swap_tx)
- * require an API key via Authorization: Bearer <key> header.
- * Read tools (search_yields, get_portfolio, etc.) are open.
+ * Mutation tools (submit_transaction, swap with quote_only=false) require an API key
+ * via Authorization: Bearer <key> header. All other tools (including build_deposit_tx,
+ * build_withdraw_tx) are open — they return unsigned transactions, not mutations.
  */
 export async function mcpPlugin(app: FastifyInstance) {
   app.removeContentTypeParser("application/json");

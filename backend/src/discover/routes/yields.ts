@@ -1,21 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import {
-  sql,
-  eq,
-  and,
-  asc,
-  gte,
-} from "drizzle-orm";
-import { db } from "../db/connection.js";
-import { yieldOpportunities, yieldSnapshots, protocols } from "../db/schema.js";
 import { NotFoundError } from "../../shared/error-handler.js";
 import { numOrNull } from "../../shared/utils.js";
-import type { PegStabilityData } from "../../shared/types.js";
 import { YieldsQuery, YieldHistoryQuery } from "./schemas.js";
 import { discoverService } from "../service.js";
-import { getPegStatsMap } from "../services/peg-stats-cache.js";
-
-const PERIOD_DAYS: Record<string, number> = { "7d": 7, "30d": 30, "90d": 90 };
 
 export async function yieldsRoutes(app: FastifyInstance) {
   // -----------------------------------------------------------------------
@@ -36,51 +23,13 @@ export async function yieldsRoutes(app: FastifyInstance) {
     config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
     handler: async (request) => {
       const yieldId = Number(request.params.id);
+      const result = await discoverService.getOpportunityDetail(yieldId);
 
-      const oppRows = await db
-        .select({
-          opp: yieldOpportunities,
-          protocol: protocols,
-        })
-        .from(yieldOpportunities)
-        .leftJoin(protocols, eq(yieldOpportunities.protocol_id, protocols.id))
-        .where(eq(yieldOpportunities.id, yieldId))
-        .limit(1);
-
-      if (oppRows.length === 0) {
+      if (!result) {
         throw new NotFoundError("Yield opportunity not found");
       }
 
-      const { opp, protocol } = oppRows[0];
-
-      const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-      const snapshots = await db
-        .select()
-        .from(yieldSnapshots)
-        .where(
-          and(
-            eq(yieldSnapshots.opportunity_id, yieldId),
-            gte(yieldSnapshots.snapshot_at, since),
-          ),
-        )
-        .orderBy(asc(yieldSnapshots.snapshot_at));
-
-      const extra = opp.extra_data as Record<string, unknown> | null;
-
-      const pegMap = await getPegStatsMap();
-      let pegStability: PegStabilityData | null = null;
-      if (opp.category === "multiply") {
-        const collateral = extra?.collateral_symbol as string | undefined;
-        if (collateral) pegStability = pegMap.get(collateral) ?? null;
-      }
-      if (!pegStability && opp.tokens) {
-        for (const t of opp.tokens) {
-          if (pegMap.has(t)) {
-            pegStability = pegMap.get(t)!;
-            break;
-          }
-        }
-      }
+      const { opp, protocol, snapshots, extra, pegStability } = result;
 
       return {
         id: opp.id,
@@ -122,11 +71,7 @@ export async function yieldsRoutes(app: FastifyInstance) {
             }
           : null,
         peg_stability: pegStability,
-        recent_snapshots: snapshots.map((s) => ({
-          snapshot_at: s.snapshot_at,
-          apy: numOrNull(s.apy),
-          tvl_usd: numOrNull(s.tvl_usd),
-        })),
+        recent_snapshots: snapshots,
       };
     },
   });
@@ -140,51 +85,18 @@ export async function yieldsRoutes(app: FastifyInstance) {
       const yieldId = Number(request.params.id);
       const q = YieldHistoryQuery.parse(request.query);
 
-      // Verify opportunity exists
-      const exists = await db
-        .select({ id: yieldOpportunities.id })
-        .from(yieldOpportunities)
-        .where(eq(yieldOpportunities.id, yieldId))
-        .limit(1);
+      const result = await discoverService.getYieldHistoryPaginated(
+        yieldId,
+        q.period,
+        q.limit,
+        q.offset,
+      );
 
-      if (exists.length === 0) {
+      if (!result) {
         throw new NotFoundError("Yield opportunity not found");
       }
 
-      const days = PERIOD_DAYS[q.period] ?? 7;
-      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-
-      const whereClause = and(
-        eq(yieldSnapshots.opportunity_id, yieldId),
-        gte(yieldSnapshots.snapshot_at, since),
-      );
-
-      const [countResult, snapshots] = await Promise.all([
-        db
-          .select({ count: sql<number>`count(*)` })
-          .from(yieldSnapshots)
-          .where(whereClause),
-        db
-          .select()
-          .from(yieldSnapshots)
-          .where(whereClause)
-          .orderBy(asc(yieldSnapshots.snapshot_at))
-          .offset(q.offset)
-          .limit(q.limit),
-      ]);
-
-      return {
-        data: snapshots.map((s) => ({
-          snapshot_at: s.snapshot_at,
-          apy: numOrNull(s.apy),
-          tvl_usd: numOrNull(s.tvl_usd),
-        })),
-        meta: {
-          total: Number(countResult[0].count),
-          limit: q.limit,
-          offset: q.offset,
-        },
-      };
+      return result;
     },
   });
 }

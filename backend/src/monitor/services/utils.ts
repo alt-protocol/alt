@@ -297,6 +297,36 @@ export async function batchEarliestDeposits(
 }
 
 // ---------------------------------------------------------------------------
+// Batch net invested from events (sumDeposits - sumWithdrawals)
+// ---------------------------------------------------------------------------
+
+export async function batchEventNetInvested(
+  db: NodePgDatabase,
+  walletAddress: string,
+  protocolSlug: string,
+): Promise<Record<string, number>> {
+  const rows = await db.execute(sql`
+    SELECT
+      external_id,
+      SUM(CASE WHEN event_type IN ('deposit', 'repay') THEN COALESCE(amount_usd::numeric, 0) ELSE 0 END)
+      - SUM(CASE WHEN event_type IN ('withdraw', 'borrow') THEN COALESCE(amount_usd::numeric, 0) ELSE 0 END)
+      AS net_invested
+    FROM monitor.user_position_events
+    WHERE wallet_address = ${walletAddress}
+      AND protocol_slug = ${protocolSlug}
+    GROUP BY external_id
+  `);
+
+  const result: Record<string, number> = {};
+  for (const row of rows.rows) {
+    const extId = row.external_id as string;
+    const net = Number(row.net_invested ?? 0);
+    if (Number.isFinite(net) && net > 0) result[extId] = net;
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Load opportunity map via DiscoverService (cross-module read)
 // ---------------------------------------------------------------------------
 

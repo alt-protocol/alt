@@ -13,6 +13,9 @@ import { discoverPlugin } from "./discover/index.js";
 import { managePlugin } from "./manage/index.js";
 import { monitorPlugin } from "./monitor/index.js";
 import { mcpPlugin } from "./mcp/plugin.js";
+import { alertPlugin } from "./alert/index.js";
+import { authRoutes } from "./shared/auth-routes.js";
+import { getSkillContent } from "./shared/skill-content.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -128,6 +131,24 @@ export async function buildApp() {
 
   // MCP endpoint for AI agents (Streamable HTTP)
   await app.register(mcpPlugin, { prefix: "/api/mcp" });
+
+  // Alert module (detection + matching, no routes yet — Phase 2 adds delivery routes)
+  await app.register(alertPlugin, { prefix: "/api/alerts" });
+
+  // Agent auth (self-service API key registration)
+  await app.register(authRoutes, { prefix: "/api/auth" });
+
+  // Skill file — agent-readable markdown describing all API capabilities
+  app.get("/skill.md", async (_request, reply) => {
+    void reply.header("Content-Type", "text/markdown; charset=utf-8");
+    void reply.header("Cache-Control", "public, max-age=3600");
+    return getSkillContent();
+  });
+  app.get("/api/skill", async (_request, reply) => {
+    void reply.header("Content-Type", "text/markdown; charset=utf-8");
+    void reply.header("Cache-Control", "public, max-age=3600");
+    return getSkillContent();
+  });
 
   // Solana Actions spec: actions.json maps URL patterns to action endpoints
   app.get("/actions.json", async (_request, reply) => {

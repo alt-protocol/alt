@@ -2,7 +2,7 @@ import { InlineKeyboard } from "grammy";
 import type { CommandContext, Context } from "grammy";
 import { eq, and, sql, sum } from "drizzle-orm";
 import { db } from "../db/connection.js";
-import { users, userPreferences, usage, userMemories, conversations, pendingAlerts, alertCooldowns } from "../db/schema.js";
+import { users, userPreferences, usage, userMemories, conversations } from "../db/schema.js";
 import { encrypt } from "../crypto.js";
 import { config } from "../config.js";
 import { awaitingWallet } from "./state.js";
@@ -141,6 +141,7 @@ export async function handleSettings(ctx: CommandContext<Context>): Promise<void
       .text(`Risk: ${prefs?.risk_tolerance ?? "moderate"}`, "settings:risk")
       .text(`Alerts: ${alertsDisplay}`, `settings:alerts_toggle`)
       .row()
+      .text("Manage Alert Rules", "settings:manage_alerts")
       .text("Set API Key", "settings:apikey");
 
     const walletShort = user.wallet_address
@@ -155,7 +156,8 @@ export async function handleSettings(ctx: CommandContext<Context>): Promise<void
         `Model: <code>${modelDisplay}</code>\n` +
         `Risk: <code>${prefs?.risk_tolerance ?? "moderate"}</code>\n` +
         `Alerts: <code>${alertsDisplay}</code>\n` +
-        `APY drop alert: <code>${prefs?.apy_drop_pct ?? 20}%</code>`,
+        `Digest: <code>${prefs?.digest_hour_utc ?? 9}:00 UTC</code>\n` +
+        `Weekly summary: <code>${prefs?.weekly_summary_enabled !== false ? "on" : "off"}</code>`,
       { reply_markup: keyboard, parse_mode: "HTML" },
     );
     return;
@@ -377,8 +379,6 @@ export async function handleReset(ctx: CommandContext<Context>): Promise<void> {
     db.delete(conversations).where(eq(conversations.user_id, user.id)),
     db.delete(userMemories).where(eq(userMemories.user_id, user.id)),
     db.delete(userPreferences).where(eq(userPreferences.user_id, user.id)),
-    db.delete(pendingAlerts).where(eq(pendingAlerts.user_id, user.id)),
-    db.delete(alertCooldowns).where(eq(alertCooldowns.user_id, user.id)),
     db.delete(usage).where(eq(usage.user_id, user.id)),
     db.update(users).set({ soul_notes: null }).where(eq(users.id, user.id)),
   ]);

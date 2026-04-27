@@ -7,15 +7,15 @@ const base58Regex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 // ---------------------------------------------------------------------------
 
 export const SwapQuoteQuery = z.object({
-  inputMint: z.string().regex(base58Regex, "Invalid inputMint"),
-  outputMint: z.string().regex(base58Regex, "Invalid outputMint"),
+  input_mint: z.string().regex(base58Regex, "Invalid input_mint"),
+  output_mint: z.string().regex(base58Regex, "Invalid output_mint"),
   amount: z
     .string()
     .refine(
       (v) => !isNaN(Number(v)) && Number(v) > 0,
       "Amount must be a positive number",
     ),
-  slippageBps: z.coerce.number().int().min(1).max(500).default(50),
+  slippage_bps: z.coerce.number().int().min(1).max(500).default(50),
   taker: z.string().regex(base58Regex, "Invalid taker address"),
 });
 

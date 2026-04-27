@@ -110,4 +110,32 @@ export function registerMonitorTools(server: McpServer) {
     }),
   );
 
+  server.tool(
+    "sync_position",
+    "Sync a specific position after a deposit or withdrawal transaction. Call this after submitting a transaction to update portfolio tracking immediately.",
+    {
+      wallet_address: z.string().describe("Solana wallet address (base58)"),
+      opportunity_id: z.number().int().positive().describe("The yield opportunity ID that was transacted"),
+    },
+    withToolHandler("sync_position", async (args) => {
+      validateWallet(args.wallet_address);
+      await monitorService.syncPosition(args.wallet_address, args.opportunity_id);
+      return toolResult({ ok: true });
+    }),
+  );
+
+  server.tool(
+    "get_wallet_status",
+    "Check the background fetch status for a tracked wallet. Returns 'fetching', 'ready', or 'error'. Use after track_wallet to know when positions are loaded.",
+    {
+      wallet_address: z.string().describe("Solana wallet address (base58)"),
+    },
+    withToolHandler("get_wallet_status", async (args) => {
+      validateWallet(args.wallet_address);
+      const status = await monitorService.getWalletStatus(args.wallet_address);
+      if (!status) return toolResult({ status: "not_tracked", message: "Wallet is not tracked. Call track_wallet first." });
+      return toolResult(status);
+    }),
+  );
+
 }

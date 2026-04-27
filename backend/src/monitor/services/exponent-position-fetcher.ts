@@ -6,11 +6,14 @@
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { eq, and } from "drizzle-orm";
+import { db } from "../db/connection.js";
 import { userPositions, trackedWallets } from "../db/schema.js";
 import { postJson } from "../../shared/http.js";
 import { logger } from "../../shared/logger.js";
 import { safeFloat } from "../../shared/utils.js";
+import { classifyToken } from "../../shared/constants.js";
 import { discoverService } from "../../discover/service.js";
+import type { UnderlyingToken } from "../../shared/types.js";
 import {
   buildPositionDict,
   computeHeldDays,
@@ -60,7 +63,8 @@ async function getTokenAccountsByMint(
       decimals = Number(tokenAmount?.decimals ?? 6);
     }
     return total > 0 ? { amount: total, decimals } : null;
-  } catch {
+  } catch (err) {
+    logger.warn({ err, wallet: wallet.slice(0, 8), mint: mint.slice(0, 8) }, "Exponent RPC getTokenAccountsByMint failed");
     return null;
   }
 }
@@ -88,14 +92,18 @@ async function fetchPtPositions(
     if (!balance || balance.amount <= 0) continue;
 
     const symbol = (opp.extra?.token_symbol as string) ?? "UNKNOWN";
-    // For stablecoins, PT value ≈ amount * ptPriceInAsset (close to 1.0)
-    const usdValue = balance.amount; // stablecoin PT ≈ $1 at maturity
+    const ptPrice = safeFloat(opp.extra?.pt_price) ?? 1.0;
+    const usdValue = balance.amount * ptPrice;
 
     const earliest = earliestDeposits[key];
     const openedAt = earliest?.snapshot_at ?? now;
     const heldDays = computeHeldDays(openedAt, now);
     const initialUsd = earliest?.deposit_amount_usd ?? usdValue;
     const pnlUsd = usdValue - initialUsd;
+
+    const mintBase = opp.extra?.mint_base as string | undefined;
+    const ct = classifyToken(symbol);
+    const tokenType: UnderlyingToken["type"] = ct === "stable" ? "stablecoin" : (ct as UnderlyingToken["type"]);
 
     positions.push(
       buildPositionDict({
@@ -118,7 +126,16 @@ async function fetchPtPositions(
           mint_pt: ptMint,
           vault_address: opp.extra?.market_vault,
           type: "exponent_pt",
+          pt_price: ptPrice,
+          expiration_ts: opp.extra?.expiration_ts ?? null,
+          decimals: opp.extra?.decimals ?? null,
         },
+        underlying_tokens: [{
+          symbol,
+          mint: mintBase ?? null,
+          role: "underlying",
+          type: tokenType,
+        }],
       }),
     );
   }
@@ -153,7 +170,7 @@ export async function snapshotAllWallets(
       oppMap[key] = {
         id: entry.id,
         apy: entry.apy_current ?? null,
-        extra: (entry as unknown as Record<string, unknown>).extra_data as Record<string, unknown> ?? {},
+        extra: (entry.extra_data as Record<string, unknown>) ?? {},
       };
     }
   }
@@ -173,7 +190,8 @@ export async function snapshotAllWallets(
         earliestDeposits,
       );
 
-      // Detect closed positions
+      // Detect closed positions — skip if fresh fetch returned 0 but DB has open
+      // positions (likely RPC failure, not mass withdrawal)
       const freshIds = new Set(ptPositions.map((p) => p.external_id));
       const dbOpen = await database
         .select({ id: userPositions.id, external_id: userPositions.external_id })
@@ -187,20 +205,27 @@ export async function snapshotAllWallets(
         );
 
       const closedPositions: PositionDict[] = [];
-      for (const row of dbOpen) {
-        if (row.external_id && !freshIds.has(row.external_id)) {
-          closedPositions.push(
-            buildPositionDict({
-              wallet_address: wallet.wallet_address,
-              protocol_slug: "exponent",
-              product_type: "earn",
-              external_id: row.external_id,
-              snapshot_at: now,
-              is_closed: true,
-              closed_at: now,
-              deposit_amount_usd: 0,
-            }),
-          );
+      if (ptPositions.length === 0 && dbOpen.length > 0) {
+        logger.warn(
+          { wallet: wallet.wallet_address.slice(0, 8), dbOpen: dbOpen.length },
+          "Exponent: 0 fresh positions but DB has open ones — skipping close detection (possible RPC issue)",
+        );
+      } else {
+        for (const row of dbOpen) {
+          if (row.external_id && !freshIds.has(row.external_id)) {
+            closedPositions.push(
+              buildPositionDict({
+                wallet_address: wallet.wallet_address,
+                protocol_slug: "exponent",
+                product_type: "earn",
+                external_id: row.external_id,
+                snapshot_at: now,
+                is_closed: true,
+                closed_at: now,
+                deposit_amount_usd: 0,
+              }),
+            );
+          }
         }
       }
 
@@ -222,4 +247,44 @@ export async function snapshotAllWallets(
 
   logger.info({ totalSnapshots }, "Exponent position snapshot complete");
   return totalSnapshots;
+}
+
+// ---------------------------------------------------------------------------
+// Public API — on-demand fetch for a single wallet (used by portfolio routes)
+// ---------------------------------------------------------------------------
+
+export async function fetchWalletPositions(
+  walletAddress: string,
+): Promise<{
+  wallet: string;
+  positions: PositionDict[];
+  summary: { total_value_usd: number; total_pnl_usd: number; position_count: number };
+}> {
+  const now = new Date();
+
+  const rawOppMap = await loadOpportunityMap(discoverService);
+  const oppMap: Record<string, { id: number; apy: number | null; extra: Record<string, unknown> }> = {};
+  for (const [key, entry] of Object.entries(rawOppMap)) {
+    if (key.startsWith("exponent-")) {
+      oppMap[key] = {
+        id: entry.id,
+        apy: entry.apy_current ?? null,
+        extra: (entry.extra_data as Record<string, unknown>) ?? {},
+      };
+    }
+  }
+
+  const empty = { wallet: walletAddress, positions: [] as PositionDict[], summary: { total_value_usd: 0, total_pnl_usd: 0, position_count: 0 } };
+  if (Object.keys(oppMap).length === 0) return empty;
+
+  const earliestDeposits = await batchEarliestDeposits(db, walletAddress);
+  const positions = await fetchPtPositions(walletAddress, now, oppMap, earliestDeposits);
+
+  const summary = {
+    total_value_usd: positions.reduce((s, p) => s + (Number(p.deposit_amount_usd) || 0), 0),
+    total_pnl_usd: positions.reduce((s, p) => s + (Number(p.pnl_usd) || 0), 0),
+    position_count: positions.length,
+  };
+
+  return { wallet: walletAddress, positions, summary };
 }

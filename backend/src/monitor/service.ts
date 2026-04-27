@@ -33,6 +33,7 @@ export const monitorService = {
     walletAddress: string,
     protocol?: string,
     productType?: string,
+    assetClass?: string,
   ) {
     try {
       const latestSub = db
@@ -122,18 +123,29 @@ export const monitorService = {
         };
       });
 
-      const totalValue = positions.reduce(
+      // Filter by asset_class when requested (e.g., "stablecoin" hides volatile positions)
+      const filtered = assetClass
+        ? positions.filter((p) => {
+            const tokens = p.underlying_tokens as { type?: string }[] | null;
+            if (!tokens || tokens.length === 0) return true;
+            return tokens.some((t) =>
+              t.type === "stablecoin" || t.type === "yield_bearing_stable",
+            );
+          })
+        : positions;
+
+      const totalValue = filtered.reduce(
         (s, p) => s + (p.deposit_amount_usd ?? 0),
         0,
       );
-      const totalPnl = positions.reduce(
+      const totalPnl = filtered.reduce(
         (s, p) => s + (p.pnl_usd ?? 0),
         0,
       );
 
       return {
         wallet: walletAddress,
-        positions,
+        positions: filtered,
         summary: {
           total_value_usd: totalValue,
           total_pnl_usd: totalPnl,

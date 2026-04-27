@@ -119,7 +119,7 @@ describe("Module isolation", () => {
   it("shared/ only accesses manage/db/schema for auth (API keys)", () => {
     const files = getAllTsFiles(join(SRC_DIR, "shared"));
     const violations: string[] = [];
-    const allowed = ["auth.ts"]; // auth.ts needs manage/db/schema for apiKeys table
+    const allowed = ["auth.ts", "auth-routes.ts"]; // auth needs manage/db/schema for apiKeys table
 
     for (const file of files) {
       const fileName = file.split("/").pop()!;

@@ -3,16 +3,18 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { buildTransaction } from "../../manage/services/tx-builder.js";
 import { assembleTransaction } from "../../manage/services/tx-assembler.js";
 import { serializeResult } from "../../manage/services/instruction-serializer.js";
+import { generateSignOptions } from "../../manage/services/sign-options.js";
 import { guardWalletValid, guardProgramWhitelist } from "../../manage/services/guards.js";
 import { getSwapQuote, buildSwapInstructions } from "../../manage/services/jupiter-swap.js";
 import { getAdapter } from "../../manage/protocols/index.js";
+import { getMultiplyStats } from "../../manage/protocols/kamino.js";
+import { getJupiterMultiplyStats } from "../../manage/protocols/jupiter.js";
+import { fetchWalletBalance } from "../../manage/services/wallet-balance.js";
 import { discoverService } from "../../discover/service.js";
-import { APP_URL, FRONTEND_URL } from "../../shared/constants.js";
 import { monitorService } from "../../monitor/service.js";
 import { validateApiKey } from "../../shared/auth.js";
 import { logger } from "../../shared/logger.js";
 import { withToolHandler, toolResult, mcpError } from "./utils.js";
-import QRCode from "qrcode";
 import type { McpRequestContext } from "../server.js";
 
 const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -41,11 +43,7 @@ async function buildAndAssemble(
     setupTransactions = [];
     for (const setupIxs of result.setupInstructionSets) {
       if (setupIxs.length === 0) continue;
-      const setupAssembled = await assembleTransaction(
-        setupIxs,
-        walletAddress,
-        result.lookupTableAddresses,
-      );
+      const setupAssembled = await assembleTransaction(setupIxs, walletAddress, result.lookupTableAddresses);
       setupTransactions.push(setupAssembled.transaction);
     }
   }
@@ -54,18 +52,11 @@ async function buildAndAssemble(
   const oppName = opp?.name ?? `opportunity #${opportunityId}`;
   const protocol = opp?.protocol?.name ?? "unknown protocol";
   const apyStr = opp?.apy_current ? ` (~${opp.apy_current.toFixed(1)}% APY)` : "";
-  const summary =
-    action === "deposit"
-      ? `Deposit ${amount} into ${oppName} on ${protocol}${apyStr}`
-      : `Withdraw ${amount} from ${oppName} on ${protocol}`;
+  const summary = action === "deposit"
+    ? `Deposit ${amount} into ${oppName} on ${protocol}${apyStr}`
+    : `Withdraw ${amount} from ${oppName} on ${protocol}`;
 
-  const actionUrl = new URL(`${APP_URL}/api/manage/actions/${action}`);
-  actionUrl.searchParams.set("opportunity_id", String(opportunityId));
-  actionUrl.searchParams.set("amount", amount);
-  actionUrl.searchParams.set("wallet", walletAddress);
-  const actionApiUrl = actionUrl.toString();
-  const deeplinkUrl = `solana-action:${actionApiUrl}`;
-  const qr = await QRCode.toDataURL(deeplinkUrl, { width: 256, margin: 1 });
+  const sign = await generateSignOptions(action, opportunityId, amount, walletAddress, extraData);
 
   return {
     transaction: assembled.transaction,
@@ -73,12 +64,7 @@ async function buildAndAssemble(
     lastValidBlockHeight: assembled.lastValidBlockHeight,
     ...(setupTransactions?.length ? { setup_transactions: setupTransactions } : {}),
     summary,
-    sign: {
-      web: `${FRONTEND_URL}/sign?action=${encodeURIComponent(actionApiUrl)}`,
-      deeplink: deeplinkUrl,
-      qr,
-      action_api: actionApiUrl,
-    },
+    sign,
   };
 }
 
@@ -106,9 +92,6 @@ export function registerManageTools(server: McpServer, ctx?: McpRequestContext) 
       deposit_token: z.enum(["debt", "collateral"]).optional().describe("Which token to deposit for multiply positions. Leave empty for lending/vault/earn."),
     },
     withToolHandler("build_deposit_tx", async (args) => {
-      const authErr = await guardMcpAuth(ctx);
-      if (authErr) return authErr;
-
       logger.info({ agentId: ctx?.agentId, tool: "build_deposit_tx", wallet: args.wallet_address, opportunityId: args.opportunity_id, amount: args.amount }, "MCP: build deposit tx");
 
       const extraData: Record<string, unknown> = {};
@@ -138,9 +121,6 @@ export function registerManageTools(server: McpServer, ctx?: McpRequestContext) 
       position_id: z.string().optional().describe("Existing position ID — only needed for multiply close/adjust."),
     },
     withToolHandler("build_withdraw_tx", async (args) => {
-      const authErr = await guardMcpAuth(ctx);
-      if (authErr) return authErr;
-
       logger.info({ agentId: ctx?.agentId, tool: "build_withdraw_tx", wallet: args.wallet_address, opportunityId: args.opportunity_id, amount: args.amount }, "MCP: build withdraw tx");
 
       const extraData: Record<string, unknown> = {};
@@ -294,6 +274,69 @@ export function registerManageTools(server: McpServer, ctx?: McpRequestContext) 
         lastValidBlockHeight: assembled.lastValidBlockHeight,
         summary: `Swap ${args.amount} (${args.input_mint.slice(0, 8)}...) → ${args.output_mint.slice(0, 8)}...`,
       });
+    }),
+  );
+
+  server.tool(
+    "get_wallet_balance",
+    "Get the on-chain SPL token balance for a wallet and mint address.",
+    {
+      wallet_address: z.string().regex(BASE58_RE, "Invalid Solana address").describe("Solana wallet address"),
+      mint: z.string().regex(BASE58_RE, "Invalid Solana address").describe("SPL token mint address"),
+    },
+    withToolHandler("get_wallet_balance", async (args) => {
+      const balance = await fetchWalletBalance(args.wallet_address, args.mint);
+      return toolResult({ balance, wallet: args.wallet_address, mint: args.mint });
+    }),
+  );
+
+  server.tool(
+    "get_position_stats",
+    "Get on-chain multiply (leveraged) position stats including collateral, debt, and leverage ratio. Only works for multiply category opportunities.",
+    {
+      opportunity_id: z.number().int().positive().describe("The yield opportunity ID (must be a multiply category)"),
+      wallet_address: z.string().describe("Solana wallet address (base58)"),
+    },
+    withToolHandler("get_position_stats", async (args) => {
+      const opp = await discoverService.getOpportunityById(args.opportunity_id);
+      if (!opp?.extra_data || opp.category !== "multiply") {
+        return mcpError("Opportunity not found or not a multiply position");
+      }
+      const extra = opp.extra_data as Record<string, unknown>;
+      const stats = opp.protocol?.slug === "jupiter"
+        ? await getJupiterMultiplyStats(args.wallet_address, extra)
+        : await getMultiplyStats(args.wallet_address, extra);
+      return toolResult(stats);
+    }),
+  );
+
+  server.tool(
+    "get_price_impact",
+    "Estimate price impact for a deposit or withdrawal on a multiply position.",
+    {
+      opportunity_id: z.number().int().positive().describe("The yield opportunity ID (must be multiply category)"),
+      wallet_address: z.string().describe("Solana wallet address (base58)"),
+      amount: z.string().describe("Amount in human-readable format"),
+      direction: z.enum(["deposit", "withdraw"]).describe("Whether this is a deposit or withdraw"),
+    },
+    withToolHandler("get_price_impact", async (args) => {
+      const opp = await discoverService.getOpportunityById(args.opportunity_id);
+      if (!opp?.protocol?.slug || !opp.deposit_address || opp.category !== "multiply") {
+        return mcpError("Opportunity not found or not a multiply position");
+      }
+      const adapter = await getAdapter(opp.protocol.slug);
+      if (!adapter?.getPriceImpact) {
+        return mcpError(`Price impact not supported for ${opp.protocol.slug}`);
+      }
+      const result = await adapter.getPriceImpact({
+        walletAddress: args.wallet_address,
+        depositAddress: opp.deposit_address,
+        category: opp.category,
+        amount: args.amount,
+        direction: args.direction,
+        extraData: { ...(opp.extra_data ?? {}), },
+      });
+      return toolResult(result);
     }),
   );
 }

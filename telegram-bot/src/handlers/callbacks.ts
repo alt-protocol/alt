@@ -7,6 +7,7 @@ import { executeMutatingTool } from "../tools.js";
 import { InputFile } from "grammy";
 import { generateSignOptions, buildExtraParams } from "../blinks.js";
 import { saveConversationTurn } from "../memory/conversation-store.js";
+import { apiGet, apiPost } from "../api-client.js";
 import { config } from "../config.js";
 import { pendingActions, lastActionResult, awaitingModel, awaitingApiKey } from "./state.js";
 import { pollForPosition } from "../services/tx-poller.js";
@@ -91,6 +92,71 @@ export async function handleAlertsToggle(
     await ctx.editMessageText(`Alerts ${newValue ? "enabled" : "disabled"}.`);
   }
   await ctx.answerCallbackQuery();
+}
+
+// ---------------------------------------------------------------------------
+// Manage alert subscriptions
+// ---------------------------------------------------------------------------
+
+interface AlertRule {
+  id: number;
+  slug: string;
+  name: string;
+  tier: string;
+  enabled: boolean;
+  threshold: string | null;
+  threshold_unit: string | null;
+}
+
+export async function handleManageAlerts(
+  ctx: CallbackQueryContext<Context>,
+): Promise<void> {
+  const telegramId = BigInt(ctx.from!.id);
+  const [user] = await db.select({ id: users.id }).from(users).where(eq(users.telegram_id, telegramId)).limit(1);
+  if (!user) { await ctx.answerCallbackQuery(); return; }
+
+  try {
+    const resp = (await apiGet(`/api/alerts/subscriptions/${user.id}`)) as { rules: AlertRule[] };
+    const keyboard = new InlineKeyboard();
+
+    for (const rule of resp.rules) {
+      const status = rule.enabled ? "on" : "off";
+      const thresholdStr = rule.threshold ? ` (${rule.threshold}${rule.threshold_unit === "bps" ? "bps" : "%"})` : "";
+      keyboard.text(
+        `${status === "on" ? "+" : "-"} ${rule.name}${thresholdStr}`,
+        `alert:toggle:${rule.id}:${rule.enabled ? "off" : "on"}`,
+      ).row();
+    }
+    keyboard.text("Back", "settings:back");
+
+    await ctx.editMessageText("Manage alert subscriptions:\n+ = enabled, - = disabled", { reply_markup: keyboard });
+  } catch {
+    await ctx.editMessageText("Failed to load alert settings. Try again later.");
+  }
+  await ctx.answerCallbackQuery();
+}
+
+export async function handleAlertToggleRule(
+  ctx: CallbackQueryContext<Context>,
+): Promise<void> {
+  const match = ctx.callbackQuery.data.match(/^alert:toggle:(\d+):(on|off)$/);
+  if (!match) { await ctx.answerCallbackQuery(); return; }
+
+  const ruleId = Number(match[1]);
+  const enabled = match[2] === "on";
+
+  const telegramId = BigInt(ctx.from!.id);
+  const [user] = await db.select({ id: users.id }).from(users).where(eq(users.telegram_id, telegramId)).limit(1);
+  if (!user) { await ctx.answerCallbackQuery(); return; }
+
+  try {
+    await apiPost(`/api/alerts/subscriptions/${user.id}/toggle`, { rule_id: ruleId, enabled });
+    // Refresh the list
+    await handleManageAlerts(ctx);
+  } catch {
+    await ctx.editMessageText("Failed to update alert setting.");
+    await ctx.answerCallbackQuery();
+  }
 }
 
 // ---------------------------------------------------------------------------

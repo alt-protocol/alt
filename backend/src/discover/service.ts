@@ -13,7 +13,13 @@ import {
   arrayOverlaps,
 } from "drizzle-orm";
 import { db } from "./db/connection.js";
-import { yieldOpportunities, yieldSnapshots, protocols } from "./db/schema.js";
+import {
+  yieldOpportunities,
+  yieldSnapshots,
+  protocols,
+  stablecoinPegStats,
+  stablecoinPriceSnapshots,
+} from "./db/schema.js";
 import type {
   DiscoverService,
   OpportunityDetail,
@@ -29,7 +35,7 @@ import { numOrNull } from "../shared/utils.js";
 import { getPegStatsMap } from "./services/peg-stats-cache.js";
 import { getShieldWarningsMap } from "./services/shield-warnings-cache.js";
 
-export const discoverService: DiscoverService = {
+export const discoverService = {
   async getOpportunityById(id: number): Promise<OpportunityDetail | null> {
     const rows = await db
       .select({
@@ -308,6 +314,7 @@ export const discoverService: DiscoverService = {
         apy_current: yieldOpportunities.apy_current,
         tvl_usd: yieldOpportunities.tvl_usd,
         tokens: yieldOpportunities.tokens,
+        extra_data: yieldOpportunities.extra_data,
       })
       .from(yieldOpportunities);
 
@@ -318,10 +325,221 @@ export const discoverService: DiscoverService = {
         apy_current: numOrNull(row.apy_current),
         tvl_usd: numOrNull(row.tvl_usd),
         first_token: row.tokens.length > 0 ? row.tokens[0] : null,
+        extra_data: row.extra_data as Record<string, unknown> | null,
       };
       if (row.deposit_address) result[row.deposit_address] = entry;
       if (row.external_id) result[row.external_id] = entry;
     }
     return result;
   },
-};
+
+  // ---------------------------------------------------------------------------
+  // Route-facing methods (not part of cross-module DiscoverService interface)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Full detail for a single opportunity, including protocol join, recent
+   * 7-day snapshots, and peg stability data.
+   */
+  async getOpportunityDetail(id: number) {
+    const oppRows = await db
+      .select({
+        opp: yieldOpportunities,
+        protocol: protocols,
+      })
+      .from(yieldOpportunities)
+      .leftJoin(protocols, eq(yieldOpportunities.protocol_id, protocols.id))
+      .where(eq(yieldOpportunities.id, id))
+      .limit(1);
+
+    if (oppRows.length === 0) return null;
+
+    const { opp, protocol } = oppRows[0];
+
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const snapshots = await db
+      .select()
+      .from(yieldSnapshots)
+      .where(
+        and(
+          eq(yieldSnapshots.opportunity_id, id),
+          gte(yieldSnapshots.snapshot_at, since),
+        ),
+      )
+      .orderBy(asc(yieldSnapshots.snapshot_at));
+
+    const extra = opp.extra_data as Record<string, unknown> | null;
+
+    const pegMap = await getPegStatsMap();
+    let pegStability: PegStabilityData | null = null;
+    if (opp.category === "multiply") {
+      const collateral = extra?.collateral_symbol as string | undefined;
+      if (collateral) pegStability = pegMap.get(collateral) ?? null;
+    }
+    if (!pegStability && opp.tokens) {
+      for (const t of opp.tokens) {
+        if (pegMap.has(t)) {
+          pegStability = pegMap.get(t)!;
+          break;
+        }
+      }
+    }
+
+    return {
+      opp,
+      protocol,
+      snapshots: snapshots.map((s) => ({
+        snapshot_at: s.snapshot_at,
+        apy: numOrNull(s.apy),
+        tvl_usd: numOrNull(s.tvl_usd),
+      })),
+      extra,
+      pegStability,
+    };
+  },
+
+  /**
+   * Paginated yield history for a single opportunity (with total count).
+   */
+  async getYieldHistoryPaginated(
+    opportunityId: number,
+    period: "7d" | "30d" | "90d",
+    limit: number,
+    offset: number,
+  ) {
+    const exists = await db
+      .select({ id: yieldOpportunities.id })
+      .from(yieldOpportunities)
+      .where(eq(yieldOpportunities.id, opportunityId))
+      .limit(1);
+
+    if (exists.length === 0) return null;
+
+    const days = { "7d": 7, "30d": 30, "90d": 90 }[period] ?? 7;
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const whereClause = and(
+      eq(yieldSnapshots.opportunity_id, opportunityId),
+      gte(yieldSnapshots.snapshot_at, since),
+    );
+
+    const [countResult, snapshots] = await Promise.all([
+      db
+        .select({ count: sql<number>`count(*)` })
+        .from(yieldSnapshots)
+        .where(whereClause),
+      db
+        .select()
+        .from(yieldSnapshots)
+        .where(whereClause)
+        .orderBy(asc(yieldSnapshots.snapshot_at))
+        .offset(offset)
+        .limit(limit),
+    ]);
+
+    return {
+      data: snapshots.map((s) => ({
+        snapshot_at: s.snapshot_at,
+        apy: numOrNull(s.apy),
+        tvl_usd: numOrNull(s.tvl_usd),
+      })),
+      meta: {
+        total: Number(countResult[0].count),
+        limit,
+        offset,
+      },
+    };
+  },
+
+  /**
+   * All stablecoin peg stats, ordered by symbol.
+   */
+  async getPegStats() {
+    const rows = await db
+      .select()
+      .from(stablecoinPegStats)
+      .orderBy(asc(stablecoinPegStats.symbol));
+
+    return rows.map((r) => ({
+      mint: r.mint,
+      symbol: r.symbol,
+      price_current: numOrNull(r.price_current),
+      peg_type: r.peg_type,
+      peg_target: numOrNull(r.peg_target),
+      peg_adherence_7d: numOrNull(r.peg_adherence_7d),
+      max_deviation_7d: numOrNull(r.max_deviation_7d),
+      min_price_7d: numOrNull(r.min_price_7d),
+      max_price_7d: numOrNull(r.max_price_7d),
+      volatility_7d: numOrNull(r.volatility_7d),
+      snapshot_count_7d: r.snapshot_count_7d ?? 0,
+      peg_adherence_30d: numOrNull(r.peg_adherence_30d),
+      max_deviation_30d: numOrNull(r.max_deviation_30d),
+      min_price_30d: numOrNull(r.min_price_30d),
+      max_price_30d: numOrNull(r.max_price_30d),
+      volatility_30d: numOrNull(r.volatility_30d),
+      snapshot_count_30d: r.snapshot_count_30d ?? 0,
+      liquidity_usd: numOrNull(r.liquidity_usd),
+      updated_at: r.updated_at,
+    }));
+  },
+
+  /**
+   * Price history for a specific stablecoin, with optional downsampling for
+   * longer periods. Returns null if the symbol is not tracked.
+   */
+  async getStablecoinPriceHistory(symbol: string, period: "7d" | "30d") {
+    const days = { "7d": 7, "30d": 30 }[period] ?? 7;
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const exists = await db
+      .select({
+        mint: stablecoinPegStats.mint,
+        peg_target: stablecoinPegStats.peg_target,
+      })
+      .from(stablecoinPegStats)
+      .where(eq(stablecoinPegStats.symbol, symbol.toUpperCase()))
+      .limit(1);
+
+    if (exists.length === 0) return null;
+
+    const mint = exists[0].mint;
+    let snapshots;
+    if (days > 7) {
+      snapshots = await db.execute(sql`
+        SELECT DISTINCT ON (date_trunc('hour', snapshot_at))
+          price_usd::text AS price_usd,
+          snapshot_at
+        FROM ${stablecoinPriceSnapshots}
+        WHERE mint = ${mint}
+          AND snapshot_at >= ${since}
+        ORDER BY date_trunc('hour', snapshot_at), snapshot_at DESC
+      `);
+    } else {
+      snapshots = await db.execute(sql`
+        SELECT price_usd::text AS price_usd, snapshot_at
+        FROM ${stablecoinPriceSnapshots}
+        WHERE mint = ${mint}
+          AND snapshot_at >= ${since}
+        ORDER BY snapshot_at ASC
+      `);
+    }
+
+    const rows = (
+      snapshots as unknown as {
+        rows: { price_usd: string; snapshot_at: Date }[];
+      }
+    ).rows;
+
+    return {
+      data: rows.map((r) => ({
+        snapshot_at: r.snapshot_at,
+        price_usd: numOrNull(r.price_usd),
+      })),
+      meta: {
+        total: rows.length,
+        symbol: symbol.toUpperCase(),
+        peg_target: numOrNull(exists[0].peg_target),
+      },
+    };
+  },
+} satisfies DiscoverService & Record<string, (...args: never[]) => unknown>;

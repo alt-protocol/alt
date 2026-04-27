@@ -94,6 +94,10 @@ export const WithdrawStateBody = z.object({
     .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "Invalid Solana wallet address"),
 });
 
+export const FormatQuery = z.object({
+  format: z.enum(["instructions", "assembled"]).default("instructions"),
+});
+
 export const PriceImpactBody = z.object({
   opportunity_id: z.number().int().positive(),
   wallet_address: z

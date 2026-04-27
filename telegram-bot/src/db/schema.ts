@@ -42,7 +42,7 @@ export const users = telegramSchema.table(
 );
 
 // ---------------------------------------------------------------------------
-// user_preferences — Alert thresholds + risk config
+// user_preferences — Risk config + alert delivery settings
 // ---------------------------------------------------------------------------
 export const userPreferences = telegramSchema.table(
   "user_preferences",
@@ -57,32 +57,12 @@ export const userPreferences = telegramSchema.table(
     ),
     preferred_tokens: text("preferred_tokens").array(),
     preferred_protocols: text("preferred_protocols").array(),
-    // Alert thresholds (relative percentages)
-    apy_drop_pct: numeric("apy_drop_pct", { precision: 6, scale: 2 }).default(
-      "20",
-    ),
-    apy_spike_pct: numeric("apy_spike_pct", {
-      precision: 6,
-      scale: 2,
-    }).default("50"),
-    depeg_threshold_bps: numeric("depeg_threshold_bps", {
-      precision: 6,
-      scale: 2,
-    }).default("50"),
-    tvl_drop_pct: numeric("tvl_drop_pct", { precision: 6, scale: 2 }).default(
-      "30",
-    ),
-    min_new_opp_apy: numeric("min_new_opp_apy", {
-      precision: 6,
-      scale: 2,
-    }).default("10"),
-    // Alert delivery
+    // Alert delivery settings (thresholds moved to alert.user_subscriptions)
     alerts_enabled: boolean("alerts_enabled").default(true).notNull(),
     quiet_hours_start: integer("quiet_hours_start"), // UTC hour 0-23
     quiet_hours_end: integer("quiet_hours_end"),
-    min_alert_interval_minutes: integer("min_alert_interval_minutes").default(
-      60,
-    ),
+    digest_hour_utc: integer("digest_hour_utc").default(9), // when to send daily digest
+    weekly_summary_enabled: boolean("weekly_summary_enabled").default(true),
   },
 );
 
@@ -122,53 +102,6 @@ export const conversations = telegramSchema.table(
     created_at: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("idx_tg_conv_user_created").on(t.user_id, t.created_at)],
-);
-
-// ---------------------------------------------------------------------------
-// pending_alerts — Queue written by backend alert engine, read by bot
-// ---------------------------------------------------------------------------
-export const pendingAlerts = telegramSchema.table(
-  "pending_alerts",
-  {
-    id: serial("id").primaryKey(),
-    user_id: integer("user_id")
-      .references(() => users.id, { onDelete: "cascade" })
-      .notNull(),
-    alert_type: varchar("alert_type", { length: 50 }).notNull(), // apy_drop, apy_spike, depeg, new_opportunity, position_event
-    severity: varchar("severity", { length: 20 }).notNull(), // info, warning, critical
-    title: varchar("title", { length: 200 }).notNull(),
-    body: text("body").notNull(),
-    metadata: jsonb("metadata"),
-    created_at: timestamp("created_at").defaultNow().notNull(),
-    delivered_at: timestamp("delivered_at"),
-    dismissed_at: timestamp("dismissed_at"),
-  },
-  (t) => [
-    index("idx_tg_alerts_user_delivered").on(t.user_id, t.delivered_at),
-  ],
-);
-
-// ---------------------------------------------------------------------------
-// alert_cooldowns — Prevent re-alerting same condition
-// ---------------------------------------------------------------------------
-export const alertCooldowns = telegramSchema.table(
-  "alert_cooldowns",
-  {
-    id: serial("id").primaryKey(),
-    user_id: integer("user_id")
-      .references(() => users.id, { onDelete: "cascade" })
-      .notNull(),
-    alert_type: varchar("alert_type", { length: 50 }).notNull(),
-    entity_key: varchar("entity_key", { length: 255 }).notNull(), // e.g. opportunity_id
-    last_alerted: timestamp("last_alerted").notNull(),
-  },
-  (t) => [
-    uniqueIndex("idx_tg_cooldowns_unique").on(
-      t.user_id,
-      t.alert_type,
-      t.entity_key,
-    ),
-  ],
 );
 
 // ---------------------------------------------------------------------------

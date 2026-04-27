@@ -45,6 +45,7 @@ export interface OpportunityMapEntry {
   apy_current: number | null;
   tvl_usd: number | null;
   first_token: string | null;
+  extra_data: Record<string, unknown> | null;
 }
 
 export interface ShieldWarning {

@@ -1,9 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { getSwapQuote, buildSwapInstructions } from "../services/jupiter-swap.js";
 import { serializeResult } from "../services/instruction-serializer.js";
+import { assembleTransaction } from "../services/tx-assembler.js";
 import { guardWalletValid, guardProgramWhitelist, guardPriceImpact } from "../services/guards.js";
 import { logger } from "../../shared/logger.js";
 import { SwapQuoteQuery, BuildSwapBody } from "./swap-schemas.js";
+import { FormatQuery } from "./schemas.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -16,10 +18,10 @@ export async function swapRoutes(app: FastifyInstance) {
       const query = SwapQuoteQuery.parse(request.query);
 
       const quote = await getSwapQuote({
-        inputMint: query.inputMint,
-        outputMint: query.outputMint,
+        inputMint: query.input_mint,
+        outputMint: query.output_mint,
         amount: query.amount,
-        slippageBps: query.slippageBps,
+        slippageBps: query.slippage_bps,
         taker: query.taker,
       });
 
@@ -33,6 +35,7 @@ export async function swapRoutes(app: FastifyInstance) {
     { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const body = BuildSwapBody.parse(request.body);
+      const { format } = FormatQuery.parse(request.query);
       guardWalletValid(body.wallet_address);
 
       const result = await buildSwapInstructions({
@@ -68,6 +71,21 @@ export async function swapRoutes(app: FastifyInstance) {
         },
         "Swap transaction built",
       );
+
+      if (format === "assembled") {
+        const assembled = await assembleTransaction(
+          serialized.instructions,
+          body.wallet_address,
+          serialized.lookupTableAddresses,
+        );
+        return reply.send({
+          transaction: assembled.transaction,
+          blockhash: assembled.blockhash,
+          lastValidBlockHeight: assembled.lastValidBlockHeight,
+          summary: `Swap ${body.amount} (${body.input_mint.slice(0, 8)}...) → ${body.output_mint.slice(0, 8)}...`,
+          metadata: serialized.metadata,
+        });
+      }
 
       return reply.send(serialized);
     },

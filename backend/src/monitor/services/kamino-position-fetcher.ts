@@ -124,197 +124,7 @@ async function fetchObligationTransactions(
   return byObligation;
 }
 
-function findLifecycleStart(
-  txs: Record<string, unknown>[],
-): Record<string, unknown>[] {
-  let resetIdx: number | null = null;
-  let running = 0;
-  let seenDeposit = false;
-
-  for (let i = 0; i < txs.length; i++) {
-    const displayName = (
-      (txs[i].transactionDisplayName as string) ?? ""
-    ).toLowerCase();
-    const usdVal = safeFloat(txs[i].liquidityUsdValue) ?? 0;
-    const category = TX_TYPE_MAP[displayName];
-
-    if (category === "deposit") {
-      running += usdVal;
-      if (usdVal > 0) seenDeposit = true;
-    } else if (category === "withdraw") {
-      running -= usdVal;
-    }
-
-    if (seenDeposit && running < 0.01 && i < txs.length - 1) {
-      resetIdx = i + 1;
-      running = 0;
-      seenDeposit = false;
-    }
-  }
-
-  return resetIdx !== null ? txs.slice(resetIdx) : txs;
-}
-
-interface CashFlows {
-  sumDeposit: number;
-  sumWithdraw: number;
-  sumBorrow: number;
-  sumRepay: number;
-  cashFlows: [Date, number][];
-  tokenSymbol: string | null;
-  openedAt: Date | null;
-}
-
-function accumulateCashFlows(
-  txs: Record<string, unknown>[],
-): CashFlows {
-  let sumDeposit = 0,
-    sumWithdraw = 0,
-    sumBorrow = 0,
-    sumRepay = 0;
-  const cashFlows: [Date, number][] = [];
-  let tokenSymbol: string | null = null;
-  let openedAt: Date | null = null;
-
-  for (const tx of txs) {
-    const displayName = (
-      (tx.transactionDisplayName as string) ?? ""
-    ).toLowerCase();
-    const usdVal = safeFloat(tx.liquidityUsdValue) ?? 0;
-    const txTime = parseTimestamp(tx.createdOn);
-    const category = TX_TYPE_MAP[displayName];
-
-    if (category === "deposit") {
-      sumDeposit += usdVal;
-      if (txTime && usdVal > 0) cashFlows.push([txTime, usdVal]);
-    } else if (category === "withdraw") {
-      sumWithdraw += usdVal;
-      if (txTime && usdVal > 0) cashFlows.push([txTime, -usdVal]);
-    } else if (category === "borrow") {
-      sumBorrow += usdVal;
-      if (txTime && usdVal > 0) cashFlows.push([txTime, -usdVal]);
-    } else if (category === "repay") {
-      sumRepay += usdVal;
-      if (txTime && usdVal > 0) cashFlows.push([txTime, usdVal]);
-    }
-
-    if (category === "deposit" && openedAt === null && txTime) {
-      openedAt = txTime;
-    }
-    if (tokenSymbol === null && tx.liquidityToken) {
-      tokenSymbol = tx.liquidityToken as string;
-    }
-  }
-
-  return {
-    sumDeposit,
-    sumWithdraw,
-    sumBorrow,
-    sumRepay,
-    cashFlows,
-    tokenSymbol,
-    openedAt,
-  };
-}
-
-interface DietzResult {
-  initialDepositUsd: number | null;
-  pnlUsd: number | null;
-  pnlPct: number | null;
-  openedAt: Date | null;
-  heldDays: number | null;
-  tokenSymbol: string | null;
-  isClosed: boolean;
-  closedAt: Date | null;
-  closeValueUsd: number | null;
-}
-
-function computeModifiedDietz(
-  cf: CashFlows,
-  currentNetValue: number,
-  now: Date,
-): DietzResult {
-  const netEquity =
-    cf.sumDeposit - cf.sumWithdraw - cf.sumBorrow + cf.sumRepay;
-  const initialDepositUsd = netEquity > 0 ? netEquity : cf.sumDeposit;
-  const isClosed = currentNetValue < 0.01;
-
-  let closedAt: Date | null = null;
-  let closeValueUsd: number | null = null;
-  if (isClosed) {
-    closeValueUsd = cf.sumWithdraw + cf.sumRepay - cf.sumBorrow;
-    // Derive close date from last cash flow entry
-    if (cf.cashFlows.length > 0) {
-      closedAt = cf.cashFlows[cf.cashFlows.length - 1][0];
-    }
-  }
-
-  const endTime = isClosed && closedAt ? closedAt : now;
-  const heldDays = computeHeldDays(cf.openedAt, endTime);
-  const T = heldDays;
-
-  let pnlUsd: number | null = null;
-  let pnlPct: number | null = null;
-
-  if (T && T > 0 && cf.cashFlows.length > 0 && cf.openedAt) {
-    const totalNetCf = cf.cashFlows.reduce((s, [, c]) => s + c, 0);
-    let weightedCapital = 0;
-
-    for (const [cfTime, cfAmount] of cf.cashFlows) {
-      const daysFromStart =
-        (cfTime.getTime() - cf.openedAt.getTime()) / 86_400_000;
-      const wi = Math.max(0, Math.min(1, (T - daysFromStart) / T));
-      weightedCapital += cfAmount * wi;
-    }
-
-    const vEnd = isClosed ? 0 : currentNetValue;
-    pnlUsd = vEnd - totalNetCf;
-
-    if (weightedCapital > 0) {
-      pnlPct = (pnlUsd / weightedCapital) * 100;
-    }
-  }
-
-  return {
-    initialDepositUsd:
-      initialDepositUsd ? Math.round(initialDepositUsd * 100) / 100 : null,
-    pnlUsd: pnlUsd !== null ? Math.round(pnlUsd * 100) / 100 : null,
-    pnlPct:
-      pnlPct !== null ? Math.round(pnlPct * 10000) / 10000 : null,
-    openedAt: cf.openedAt,
-    heldDays,
-    tokenSymbol: cf.tokenSymbol,
-    isClosed,
-    closedAt: isClosed ? closedAt : null,
-    closeValueUsd:
-      isClosed && closeValueUsd !== null
-        ? Math.round(closeValueUsd * 100) / 100
-        : null,
-  };
-}
-
-function computeObligationPnl(
-  txs: Record<string, unknown>[],
-  currentNetValue: number,
-  now: Date,
-): DietzResult {
-  const filtered = findLifecycleStart(txs);
-  const cf = accumulateCashFlows(filtered);
-  const result = computeModifiedDietz(cf, currentNetValue, now);
-
-  // Refine closed_at from tx timestamp if Dietz only had cash flow dates
-  if (result.isClosed && !result.closedAt) {
-    for (let i = filtered.length - 1; i >= 0; i--) {
-      const t = parseTimestamp(filtered[i].createdOn);
-      if (t) {
-        result.closedAt = t;
-        break;
-      }
-    }
-  }
-
-  return result;
-}
+// (Dietz/metadata extraction removed — obligations use Kamino PnL API directly)
 
 function obligationTxsToEvents(
   txs: Record<string, unknown>[],
@@ -422,8 +232,8 @@ async function fetchEarnPositions(
         string,
         unknown
       >;
-      depositAmountUsd = safeFloat(last.totalValueUsd ?? last.totalValue);
-      depositAmount = safeFloat(last.tokenAmount);
+      depositAmountUsd = safeFloat(last.usdAmount);
+      depositAmount = safeFloat(last.sharesAmount);
     }
 
     if (depositAmountUsd === null) {
@@ -435,36 +245,21 @@ async function fetchEarnPositions(
       }
     }
 
-    // Fetch PnL
-    const pnlData = await kGet(
-      `/kvaults/${vaultAddress}/users/${wallet}/pnl`,
-    );
+    // PnL from Kamino kvault PnL API (source of truth)
+    const pnlResp = await kGet(`/kvaults/${vaultAddress}/users/${wallet}/pnl`);
     let pnlUsd: number | null = null;
     let pnlPct: number | null = null;
     let costBasisUsd: number | null = null;
 
-    if (pnlData && typeof pnlData === "object") {
-      const p = pnlData as Record<string, unknown>;
+    if (pnlResp && typeof pnlResp === "object") {
+      const p = pnlResp as Record<string, unknown>;
       const totalPnl = p.totalPnl as Record<string, unknown> | undefined;
-      pnlUsd = totalPnl
-        ? safeFloat(totalPnl.usd)
-        : safeFloat(p.pnlUsd);
-      const totalCostBasis = p.totalCostBasis as
-        | Record<string, unknown>
-        | undefined;
-      costBasisUsd = totalCostBasis
-        ? safeFloat(totalCostBasis.usd)
-        : safeFloat(p.costBasisUsd);
+      const totalCostBasis = p.totalCostBasis as Record<string, unknown> | undefined;
+      pnlUsd = totalPnl ? safeFloat(totalPnl.usd) : null;
+      costBasisUsd = totalCostBasis ? safeFloat(totalCostBasis.usd) : null;
       if (costBasisUsd && costBasisUsd > 0 && pnlUsd !== null) {
         pnlPct = (pnlUsd / costBasisUsd) * 100;
       }
-    }
-
-    if (pnlUsd === null) {
-      logger.info(
-        { wallet: wallet.slice(0, 8), vault: vaultAddress.slice(0, 8), hasResponse: !!pnlData },
-        "Kamino earn vault: PnL null after parsing",
-      );
     }
 
     const entry = oppMap[vaultAddress];
@@ -679,47 +474,57 @@ async function fetchObligationPositions(
         opportunityId = oppMap[collateralReserves[0]]?.id ?? null;
       }
 
-      // PnL from tx history
-      const txsForObligation =
-        obligationTxs[obligationAddress] ?? [];
-      const currentNet = netValue ?? 0;
-
-      let pnlData: DietzResult | null = null;
+      // Store events from tx history
+      const txsForObligation = obligationTxs[obligationAddress] ?? [];
       if (txsForObligation.length > 0) {
-        pnlData = computeObligationPnl(
-          txsForObligation,
-          currentNet,
-          now,
-        );
         allObligationEvents.push(
-          ...obligationTxsToEvents(
-            txsForObligation,
-            wallet,
-            obligationAddress,
-            productType,
-          ),
-        );
-      } else {
-        logger.info(
-          { wallet: wallet.slice(0, 8), obligation: obligationAddress.slice(0, 8), productType },
-          "No tx history for obligation — PnL will be null",
+          ...obligationTxsToEvents(txsForObligation, wallet, obligationAddress, productType),
         );
       }
 
-      let pnlUsd = pnlData?.pnlUsd ?? null;
-      let pnlPct = pnlData?.pnlPct ?? null;
-      let initialDepositUsd = pnlData?.initialDepositUsd ?? null;
-      let openedAt: Date | null = pnlData?.openedAt ?? earliestSnapshots[obligationAddress] ?? null;
-      let heldDays = pnlData?.heldDays ?? computeHeldDays(openedAt, now);
-      const isClosed = pnlData?.isClosed ?? false;
-      const closedAt = pnlData?.closedAt ?? null;
-      const closeValueUsd = pnlData?.closeValueUsd ?? null;
-      let tokenSymbol = pnlData?.tokenSymbol ?? null;
+      // PnL from Kamino obligation PnL API (source of truth)
+      const pnlResp = await kGet(
+        `/v2/kamino-market/${marketPk}/obligations/${obligationAddress}/pnl`,
+      );
+      let pnlUsd: number | null = null;
+      let pnlPct: number | null = null;
+      let initialDepositUsd: number | null = null;
+
+      if (pnlResp && typeof pnlResp === "object") {
+        const p = pnlResp as Record<string, unknown>;
+        const invested = p.invested as Record<string, unknown> | undefined;
+        pnlUsd = safeFloat(p.usd);
+        initialDepositUsd = invested ? safeFloat(invested.usd) : null;
+        if (pnlUsd !== null && initialDepositUsd && initialDepositUsd > 0) {
+          pnlPct = (pnlUsd / initialDepositUsd) * 100;
+        }
+      }
+
+      // Extract metadata from tx history
+      let openedAt: Date | null = null;
+      let tokenSymbol: string | null = null;
+      for (const tx of txsForObligation) {
+        const cat = TX_TYPE_MAP[((tx.transactionDisplayName as string) ?? "").toLowerCase()];
+        const txTime = parseTimestamp(tx.createdOn);
+        if (cat === "deposit" && !openedAt && txTime) openedAt = txTime;
+        if (!tokenSymbol && tx.liquidityToken) tokenSymbol = tx.liquidityToken as string;
+      }
+      openedAt = openedAt ?? earliestSnapshots[obligationAddress] ?? null;
+      let heldDays = computeHeldDays(openedAt, now);
+      const isClosed = (netValue ?? 0) < 0.01;
+      let closedAt: Date | null = null;
+      let closeValueUsd: number | null = null;
+      if (isClosed && txsForObligation.length > 0) {
+        for (let i = txsForObligation.length - 1; i >= 0; i--) {
+          const t = parseTimestamp(txsForObligation[i].createdOn);
+          if (t) { closedAt = t; break; }
+        }
+      }
 
       // Detect recycled obligations
       const currentCollateralSym =
         collateralInfo.length > 0 ? collateralInfo[0].symbol : null;
-      const txTokenSym = pnlData?.tokenSymbol ?? null;
+      const txTokenSym = tokenSymbol;
       const isRecycled =
         !isClosed &&
         productType !== "multiply" &&
@@ -858,7 +663,6 @@ export async function fetchWalletPositions(
 }> {
   const now = new Date();
   const oppMap = await loadOpportunityMap(discoverService);
-
   const earnPositions = await fetchEarnPositions(walletAddress, now, oppMap);
   const { positions: obligationPositions } =
     await fetchObligationPositions(walletAddress, now, null, oppMap);

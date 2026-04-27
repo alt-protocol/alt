@@ -109,6 +109,7 @@ export const PortfolioAnalyticsOut = z.object({
 export const PositionsQuery = z.object({
   protocol: z.string().optional(),
   product_type: z.string().optional(),
+  asset_class: z.string().optional(),
 });
 
 export const PositionHistoryQuery = z.object({
@@ -122,4 +123,9 @@ export const EventsQuery = z.object({
   protocol: z.string().optional(),
   product_type: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+export const SyncBody = z.object({
+  opportunity_id: z.number().int().positive(),
+  metadata: z.record(z.unknown()).optional(),
 });
