@@ -6,13 +6,15 @@ import { db } from "../db/connection.js";
 import { users, usage } from "../db/schema.js";
 import type { CoreMessage } from "ai";
 import { encrypt } from "../crypto.js";
-import { chat } from "../ai.js";
+import { chat, verifyPendingAction } from "../ai.js";
+import { createTools } from "../tools.js";
 import { loadUserContext } from "../memory/memory-manager.js";
 import { composeSystemPrompt } from "../memory/prompt-composer.js";
 import { saveToolCalls } from "../memory/conversation-store.js";
 import { extractMemories, saveMemories } from "../memory/memory-extractor.js";
 import { saveConversationTurn } from "../memory/conversation-store.js";
 import { config } from "../config.js";
+import { getOrCreateSession } from "./session.js";
 import {
   awaitingWallet,
   awaitingModel,
@@ -122,6 +124,9 @@ export async function handleMessage(
   // 3. Load context (memories + conversation summaries)
   const context = await loadUserContext(user.id);
 
+  // 3b. Session state — tracks verified tool data, resets on 30min gap
+  const session = getOrCreateSession(ctx.from!.id);
+
   // 4. Split messages: recent (<30min) as CoreMessage[], older as system prompt summary
   const now = new Date();
   const SESSION_GAP_MS = 30 * 60 * 1000;
@@ -129,9 +134,10 @@ export async function handleMessage(
   const recentMessages = context.messages.filter((m) => m.created_at >= recentCutoff);
   const olderMessages = context.messages.filter((m) => m.created_at < recentCutoff);
 
-  // Build system prompt summary from OLDER messages only
+  // Build system prompt summary from OLDER messages (skip if new task/session)
   let conversationSummary = "";
-  if (olderMessages.length > 0) {
+  const isNewSession = session.validOpportunityIds.size === 0 && session.lastSearchTimestamp === null;
+  if (olderMessages.length > 0 && !isNewSession) {
     conversationSummary = "## Previous Conversations\n";
     for (const m of olderMessages) {
       const preview = m.content.length > 100 ? m.content.slice(0, 97) + "..." : m.content;
@@ -154,7 +160,7 @@ export async function handleMessage(
       content: m.content,
     }));
 
-  // 5. Compose system prompt from SOUL + context + older conversation summary
+  // 5. Compose system prompt from SOUL + context + session state + older summary
   const systemPrompt = composeSystemPrompt(
     SOUL,
     {
@@ -166,12 +172,14 @@ export async function handleMessage(
     context,
     lastActionResult.get(ctx.from!.id) ?? null,
     conversationSummary,
+    session,
   );
 
   // 6. Send "typing" indicator
   await ctx.replyWithChatAction("typing");
 
-  // 7. Call AI (recent history as messages + current message)
+  // 7. Call AI with session-bound tools
+  const tools = createTools(session);
   try {
     const result = await chat(
       systemPrompt,
@@ -182,6 +190,7 @@ export async function handleMessage(
         model_id: user.model_id,
         ollama_url: user.ollama_url,
       },
+      tools,
     );
 
     // 8. Save conversation turn (with sliding window enforcement)
@@ -234,11 +243,21 @@ export async function handleMessage(
         expiresAt: Date.now() + config.actionExpiryMs,
       });
 
+      // Reflection: cheap AI verification that tx matches user intent
+      let confirmText = result.text;
+      const isTxAction = result.pendingAction.action.startsWith("build_");
+      if (isTxAction) {
+        const check = await verifyPendingAction(userMessage, result.pendingAction, session);
+        if (!check.verified && check.warning) {
+          confirmText += `\n\nWarning: ${check.warning}`;
+        }
+      }
+
       const keyboard = new InlineKeyboard()
         .text("Confirm", "confirm_action")
         .text("Cancel", "cancel_action");
 
-      await ctx.reply(result.text, { reply_markup: keyboard });
+      await ctx.reply(confirmText, { reply_markup: keyboard });
     } else if (result.text.length <= config.telegramMaxMessageLength) {
       await ctx.reply(result.text);
     } else {

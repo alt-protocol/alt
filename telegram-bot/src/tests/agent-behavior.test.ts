@@ -11,6 +11,8 @@ import "dotenv/config";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { chat } from "../ai.js";
+import { createTools } from "../tools.js";
+import { getOrCreateSession } from "../handlers/session.js";
 
 const SOUL = readFileSync(join(process.cwd(), "SOUL.md"), "utf-8");
 
@@ -69,10 +71,13 @@ async function runTests() {
 
   for (const t of tests) {
     try {
+      const session = getOrCreateSession(999);
+      const tools = createTools(session);
       const result = await chat(
         makePrompt(),
         [{ role: "user", content: t.message }],
         { api_provider: "anthropic", api_key: null, model_id: null, ollama_url: null },
+        tools,
       );
 
       const toolNames = result.toolCalls.map((tc) => tc.toolName);

@@ -1,4 +1,5 @@
 import type { UserContext } from "./memory-manager.js";
+import type { SessionState } from "../handlers/session.js";
 import { config } from "../config.js";
 
 interface UserInfo {
@@ -13,13 +14,14 @@ interface RecentAction {
   timestamp: number;
 }
 
-/** Compose full system prompt from SOUL + user context + conversation summary. */
+/** Compose full system prompt from SOUL + user context + session state + conversation summary. */
 export function composeSystemPrompt(
   soul: string,
   user: UserInfo,
   context: UserContext,
   recentAction?: RecentAction | null,
   conversationSummary?: string,
+  session?: SessionState | null,
 ): string {
   let prompt = soul + "\n\n";
 
@@ -58,6 +60,16 @@ export function composeSystemPrompt(
   if (recentAction && Date.now() - recentAction.timestamp < 10 * 60 * 1000) {
     const agoMin = Math.round((Date.now() - recentAction.timestamp) / 60_000);
     prompt += `\n## Recent Action\nLast confirmed action (${agoMin}m ago): ${recentAction.summary}\n`;
+  }
+
+  // Session state: tell AI which IDs are valid
+  if (session && session.validOpportunityIds.size > 0) {
+    prompt += "\n## Current Session (Verified Data)\n";
+    prompt += `- Valid opportunity IDs from last search: [${[...session.validOpportunityIds].join(", ")}]\n`;
+    prompt += "- ONLY use these IDs for request_deposit/request_withdraw. Call search_yields for new ones.\n";
+    if (session.lastSwapQuote) {
+      prompt += `- Last verified swap quote: ${session.lastSwapQuote.summary}\n`;
+    }
   }
 
   // Conversation summary (1-liners with timestamps)

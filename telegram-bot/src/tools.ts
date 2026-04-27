@@ -6,50 +6,70 @@ import { users, userPreferences, usage } from "./db/schema.js";
 import { encrypt } from "./crypto.js";
 import { config } from "./config.js";
 import { apiGet, apiPost } from "./api-client.js";
+import type { SessionState } from "./handlers/session.js";
 
 // ---------------------------------------------------------------------------
 // Discover tools
 // ---------------------------------------------------------------------------
 
-const searchYields = tool({
-  description:
-    "Search Solana yield opportunities with filters. Returns APY, TVL, protocol, and token data.",
-  parameters: z.object({
-    category: z
-      .enum(["earn", "lending", "vault", "multiply", "insurance-fund"])
-      .optional()
-      .describe("Filter by yield category"),
-    tokens: z
-      .string()
-      .optional()
-      .describe("Comma-separated token symbols, e.g. 'USDC,USDT'"),
-    sort: z
-      .enum(["apy_desc", "apy_asc", "tvl_desc", "tvl_asc"])
-      .optional()
-      .describe("Sort order (default: apy_desc)"),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(50)
-      .optional()
-      .describe("Max results (default: 10, max: 50)"),
-  }),
-  execute: async (params) => {
-    const qs = new URLSearchParams();
-    if (params.category) qs.set("category", params.category);
-    if (params.tokens) qs.set("tokens", params.tokens);
-    qs.set("asset_class", "stablecoin");
-    if (params.sort) qs.set("sort", params.sort);
-    if (params.limit) qs.set("limit", String(params.limit));
-    const result = await apiGet(`/api/discover/yields?${qs}`);
-    // Annotate for AI: make opportunity IDs unambiguous
-    return {
-      ...result as Record<string, unknown>,
-      _instruction: "Each item has a numeric `id` field. Use that exact `id` as `opportunity_id` in build_deposit_tx / build_withdraw_tx. NEVER use the item's position in the list.",
-    };
-  },
-});
+function makeSearchYields(session: SessionState) {
+  return tool({
+    description:
+      "Search Solana yield opportunities with filters. Returns APY, TVL, protocol, and token data.",
+    parameters: z.object({
+      category: z
+        .enum(["earn", "lending", "vault", "multiply", "insurance-fund"])
+        .optional()
+        .describe("Filter by yield category"),
+      tokens: z
+        .string()
+        .optional()
+        .describe("Comma-separated token symbols, e.g. 'USDC,USDT'"),
+      sort: z
+        .enum(["apy_desc", "apy_asc", "tvl_desc", "tvl_asc"])
+        .optional()
+        .describe("Sort order (default: apy_desc)"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .optional()
+        .describe("Max results (default: 10, max: 50)"),
+    }),
+    execute: async (params) => {
+      const qs = new URLSearchParams();
+      if (params.category) qs.set("category", params.category);
+      if (params.tokens) qs.set("tokens", params.tokens);
+      qs.set("asset_class", "stablecoin");
+      if (params.sort) qs.set("sort", params.sort);
+      if (params.limit) qs.set("limit", String(params.limit));
+      const result = await apiGet(`/api/discover/yields?${qs}`) as Record<string, unknown>;
+
+      // Store verified results in session
+      const opportunities = (result.opportunities ?? result.data ?? []) as Array<Record<string, unknown>>;
+      session.validOpportunityIds = new Set(
+        opportunities.filter((o) => typeof o.id === "number").map((o) => o.id as number),
+      );
+      session.lastSearchTimestamp = Date.now();
+      for (const o of opportunities) {
+        if (typeof o.id === "number") {
+          session.opportunities.set(o.id, {
+            name: (o.name as string) ?? `#${o.id}`,
+            maxLeverage: (o.max_leverage as number) ?? null,
+            category: (o.category as string) ?? "unknown",
+            tokens: [(o.token_symbol as string) ?? "unknown"],
+          });
+        }
+      }
+
+      return {
+        ...result,
+        _instruction: "Each item has a numeric `id` field. Use that exact `id` as `opportunity_id` in request_deposit / request_withdraw. NEVER use the item's position in the list.",
+      };
+    },
+  });
+}
 
 const getYieldDetails = tool({
   description:
@@ -225,21 +245,33 @@ const buildSwapTx = tool({
   },
 });
 
-const getSwapQuote = tool({
-  description: "Get a Jupiter swap quote with routing, fees, and price impact.",
-  parameters: z.object({
-    inputMint: z.string().describe("Input token mint address"),
-    outputMint: z.string().describe("Output token mint address"),
-    amount: z.string().describe("Amount in smallest units"),
-    taker: z.string().describe("Wallet address of the swapper"),
-    slippageBps: z.number().int().optional().describe("Slippage in basis points"),
-  }),
-  execute: async ({ inputMint, outputMint, amount, taker, slippageBps }) => {
-    const qs = new URLSearchParams({ inputMint, outputMint, amount, taker });
-    if (slippageBps) qs.set("slippageBps", String(slippageBps));
-    return apiGet(`/api/manage/swap/quote?${qs}`);
-  },
-});
+function makeGetSwapQuote(session: SessionState) {
+  return tool({
+    description: "Get a Jupiter swap quote with routing, fees, and price impact. Call this BEFORE request_swap.",
+    parameters: z.object({
+      inputMint: z.string().describe("Input token mint address"),
+      outputMint: z.string().describe("Output token mint address"),
+      amount: z.string().describe("Amount in smallest units"),
+      taker: z.string().describe("Wallet address of the swapper"),
+      slippageBps: z.number().int().optional().describe("Slippage in basis points"),
+    }),
+    execute: async ({ inputMint, outputMint, amount, taker, slippageBps }) => {
+      const qs = new URLSearchParams({ input_mint: inputMint, output_mint: outputMint, amount, taker });
+      if (slippageBps) qs.set("slippage_bps", String(slippageBps));
+      const result = await apiGet(`/api/manage/swap/quote?${qs}`);
+
+      // Store verified swap quote in session
+      session.lastSwapQuote = {
+        inputMint,
+        outputMint,
+        summary: `${inputMint.slice(0, 6)}→${outputMint.slice(0, 6)} amt=${amount}`,
+        timestamp: Date.now(),
+      };
+
+      return result;
+    },
+  });
+}
 
 const getBalance = tool({
   description: "Get the current deposited balance for a specific yield opportunity.",
@@ -248,7 +280,7 @@ const getBalance = tool({
     wallet_address: z.string().describe("Solana wallet address"),
   }),
   execute: async (params) => {
-    return apiPost("/api/manage/balance", params);
+    return apiPost("/api/manage/tx/balance", params);
   },
 });
 
@@ -259,7 +291,7 @@ const getWithdrawState = tool({
     wallet_address: z.string().describe("Solana wallet address"),
   }),
   execute: async (params) => {
-    return apiPost("/api/manage/withdraw-state", params);
+    return apiPost("/api/manage/tx/withdraw-state", params);
   },
 });
 
@@ -267,91 +299,150 @@ const getWithdrawState = tool({
 // Transaction request tools (explicit schemas — AI sees every field)
 // ---------------------------------------------------------------------------
 
-const requestDeposit = tool({
-  description:
-    "Request a deposit/open transaction that requires user confirmation. " +
-    "For multiply positions, leverage is REQUIRED.",
-  parameters: z.object({
-    opportunity_id: z.number().int().positive().describe("The numeric `id` from search_yields results"),
-    amount: z.string().describe("Amount to deposit (human-readable, e.g. '100.5')"),
-    summary: z.string().describe("Clear summary of what will happen if confirmed"),
-    leverage: z.number().min(1.1).optional().describe("Leverage for multiply open/adjust (e.g. 3.0). REQUIRED for multiply."),
-    slippage_bps: z.number().int().min(1).max(1000).optional().describe("Slippage in basis points"),
-    action: z.enum(["open", "adjust", "add_collateral", "borrow_more"]).optional().describe("Multiply action (default: open)"),
-    position_id: z.string().optional().describe("Position ID for Jupiter multiply adjust/manage"),
-    deposit_token: z.enum(["debt", "collateral"]).optional().describe("Which token to deposit for multiply"),
-  }),
-  execute: async ({ opportunity_id, amount, summary, ...extra }) => {
-    // Validate opportunity exists before packaging pending action
-    const opp = await apiGet(`/api/discover/yields/${opportunity_id}`) as Record<string, unknown> | null;
-    if (opp && "error" in opp) {
-      return { error: `Opportunity ${opportunity_id} not found. Call search_yields to find the correct ID.` };
-    }
-    // Validate leverage against max_leverage for multiply
-    if (extra.leverage != null && opp && "max_leverage" in opp && opp.max_leverage != null) {
-      const maxLev = opp.max_leverage as number;
-      if (extra.leverage > maxLev) {
-        return { error: `Leverage ${extra.leverage} exceeds max ${maxLev} for this opportunity. Use a value between 1.1 and ${maxLev}.` };
+function makeRequestDeposit(session: SessionState) {
+  return tool({
+    description:
+      "Request a deposit/open transaction that requires user confirmation. " +
+      "For multiply positions, leverage is REQUIRED. " +
+      "You MUST call search_yields first — only IDs from the last search are accepted.",
+    parameters: z.object({
+      opportunity_id: z.number().int().positive().describe("The numeric `id` from search_yields results"),
+      amount: z.string().describe("Amount to deposit (human-readable, e.g. '100.5')"),
+      summary: z.string().describe("Clear summary of what will happen if confirmed"),
+      leverage: z.number().min(1.1).optional().describe("Leverage for multiply open/adjust (e.g. 3.0). REQUIRED for multiply."),
+      slippage_bps: z.number().int().min(1).max(1000).optional().describe("Slippage in basis points"),
+      action: z.enum(["open", "adjust", "add_collateral", "borrow_more"]).optional().describe("Multiply action (default: open)"),
+      position_id: z.string().optional().describe("Position ID for Jupiter multiply adjust/manage"),
+      deposit_token: z.enum(["debt", "collateral"]).optional().describe("Which token to deposit for multiply"),
+    }),
+    execute: async ({ opportunity_id, amount, summary, ...extra }) => {
+      // Hard gate: reject IDs not from the last search_yields call
+      if (session.validOpportunityIds.size > 0 && !session.validOpportunityIds.has(opportunity_id)) {
+        return {
+          error: `Opportunity ${opportunity_id} was not in your recent search results. `
+            + `Call search_yields first to find valid opportunities. `
+            + `Valid IDs: [${[...session.validOpportunityIds].join(", ")}]`,
+        };
       }
-    }
-    return {
-      pending: true,
-      action: "build_deposit_tx",
-      params: { opportunity_id, amount, ...extra },
-      summary,
-      message: "ACTION PENDING — user must tap Confirm. Do NOT tell the user this is done or completed.",
-    };
-  },
-});
 
-const requestWithdraw = tool({
-  description:
-    "Request a withdrawal/close transaction that requires user confirmation. " +
-    "For multiply close, set is_closing_position=true.",
-  parameters: z.object({
-    opportunity_id: z.number().int().positive().describe("The numeric `id` from search_yields results"),
-    amount: z.string().describe("Amount to withdraw. Use '0' for full multiply close."),
-    summary: z.string().describe("Clear summary of what will happen if confirmed"),
-    slippage_bps: z.number().int().min(1).max(1000).optional().describe("Slippage in basis points"),
-    action: z.enum(["close", "adjust", "withdraw_collateral", "repay_debt"]).optional().describe("Multiply action (default: close)"),
-    position_id: z.string().optional().describe("Position ID for Jupiter multiply close/adjust"),
-    is_closing_position: z.boolean().optional().describe("Set true to fully close a multiply position"),
-  }),
-  execute: async ({ opportunity_id, amount, summary, ...extra }) => {
-    // Validate opportunity exists before packaging pending action
-    const opp = await apiGet(`/api/discover/yields/${opportunity_id}`);
-    if (opp && typeof opp === "object" && "error" in opp) {
-      return { error: `Opportunity ${opportunity_id} not found. Call search_yields to find the correct ID.` };
-    }
-    return {
-      pending: true,
-      action: "build_withdraw_tx",
-      params: { opportunity_id, amount, ...extra },
-      summary,
-      message: "ACTION PENDING — user must tap Confirm. Do NOT tell the user this is done or completed.",
-    };
-  },
-});
+      // Validate opportunity exists at backend
+      const opp = await apiGet(`/api/discover/yields/${opportunity_id}`) as Record<string, unknown> | null;
+      if (opp && "error" in opp) {
+        return { error: `Opportunity ${opportunity_id} not found. Call search_yields to find the correct ID.` };
+      }
 
-const requestSwap = tool({
-  description: "Request a token swap transaction that requires user confirmation.",
-  parameters: z.object({
-    input_mint: z.string().describe("Input token mint address"),
-    output_mint: z.string().describe("Output token mint address"),
-    amount: z.string().describe("Amount in smallest units (lamports/micro-units)"),
-    summary: z.string().describe("Clear summary of what will happen if confirmed"),
-    slippage_bps: z.number().int().min(1).max(500).optional().describe("Slippage in basis points (default: 50)"),
-  }),
-  execute: async ({ summary, ...params }) => {
-    return {
-      pending: true,
-      action: "build_swap_tx",
-      params,
-      summary,
-      message: "ACTION PENDING — user must tap Confirm. Do NOT tell the user this is done or completed.",
-    };
-  },
-});
+      // Validate leverage against max_leverage for multiply
+      if (extra.leverage != null && opp && "max_leverage" in opp && opp.max_leverage != null) {
+        const maxLev = opp.max_leverage as number;
+        if (extra.leverage > maxLev) {
+          return { error: `Leverage ${extra.leverage} exceeds max ${maxLev} for this opportunity. Use a value between 1.1 and ${maxLev}.` };
+        }
+      }
+
+      // Include verified opportunity name in summary
+      const verifiedName = session.opportunities.get(opportunity_id)?.name
+        ?? (opp as Record<string, unknown>)?.name as string
+        ?? `#${opportunity_id}`;
+
+      return {
+        pending: true,
+        action: "build_deposit_tx",
+        params: { opportunity_id, amount, ...extra },
+        summary: `[${verifiedName}]\n${summary}`,
+        message: "ACTION PENDING — user must tap Confirm. Do NOT tell the user this is done or completed.",
+      };
+    },
+  });
+}
+
+function makeRequestWithdraw(session: SessionState) {
+  return tool({
+    description:
+      "Request a withdrawal/close transaction that requires user confirmation. " +
+      "For multiply close, set is_closing_position=true. " +
+      "You MUST call search_yields or get_portfolio first — only known IDs are accepted.",
+    parameters: z.object({
+      opportunity_id: z.number().int().positive().describe("The numeric `id` from search_yields results"),
+      amount: z.string().describe("Amount to withdraw. Use '0' for full multiply close."),
+      summary: z.string().describe("Clear summary of what will happen if confirmed"),
+      slippage_bps: z.number().int().min(1).max(1000).optional().describe("Slippage in basis points"),
+      action: z.enum(["close", "adjust", "withdraw_collateral", "repay_debt"]).optional().describe("Multiply action (default: close)"),
+      position_id: z.string().optional().describe("Position ID for Jupiter multiply close/adjust"),
+      is_closing_position: z.boolean().optional().describe("Set true to fully close a multiply position"),
+    }),
+    execute: async ({ opportunity_id, amount, summary, ...extra }) => {
+      // Hard gate: reject IDs not from recent tool calls
+      if (session.validOpportunityIds.size > 0 && !session.validOpportunityIds.has(opportunity_id)) {
+        return {
+          error: `Opportunity ${opportunity_id} was not in your recent search results. `
+            + `Call search_yields first to find valid opportunities. `
+            + `Valid IDs: [${[...session.validOpportunityIds].join(", ")}]`,
+        };
+      }
+
+      // Validate opportunity exists at backend
+      const opp = await apiGet(`/api/discover/yields/${opportunity_id}`);
+      if (opp && typeof opp === "object" && "error" in opp) {
+        return { error: `Opportunity ${opportunity_id} not found. Call search_yields to find the correct ID.` };
+      }
+
+      // Include verified opportunity name in summary
+      const verifiedName = session.opportunities.get(opportunity_id)?.name
+        ?? (opp as Record<string, unknown>)?.name as string
+        ?? `#${opportunity_id}`;
+
+      return {
+        pending: true,
+        action: "build_withdraw_tx",
+        params: { opportunity_id, amount, ...extra },
+        summary: `[${verifiedName}]\n${summary}`,
+        message: "ACTION PENDING — user must tap Confirm. Do NOT tell the user this is done or completed.",
+      };
+    },
+  });
+}
+
+function makeRequestSwap(session: SessionState) {
+  const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+  return tool({
+    description:
+      "Request a token swap transaction that requires user confirmation. " +
+      "You MUST call get_swap_quote first to verify the route and price impact.",
+    parameters: z.object({
+      input_mint: z.string().describe("Input token mint address"),
+      output_mint: z.string().describe("Output token mint address"),
+      amount: z.string().describe("Amount in smallest units (lamports/micro-units)"),
+      summary: z.string().describe("Clear summary of what will happen if confirmed"),
+      slippage_bps: z.number().int().min(1).max(500).optional().describe("Slippage in basis points (default: 50)"),
+    }),
+    execute: async ({ summary, ...params }) => {
+      // Validate mint addresses are valid base58
+      if (!BASE58.test(params.input_mint)) {
+        return { error: `Invalid input_mint address: "${params.input_mint}". Must be a base58 Solana address.` };
+      }
+      if (!BASE58.test(params.output_mint)) {
+        return { error: `Invalid output_mint address: "${params.output_mint}". Must be a base58 Solana address.` };
+      }
+
+      // Require get_swap_quote first to validate route exists
+      if (!session.lastSwapQuote
+        || session.lastSwapQuote.inputMint !== params.input_mint
+        || session.lastSwapQuote.outputMint !== params.output_mint) {
+        return {
+          error: "Call get_swap_quote first to verify the swap route and price impact before requesting a swap.",
+        };
+      }
+
+      return {
+        pending: true,
+        action: "build_swap_tx",
+        params,
+        summary,
+        message: "ACTION PENDING — user must tap Confirm. Do NOT tell the user this is done or completed.",
+      };
+    },
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Usage tool (reads from DB directly)
@@ -743,23 +834,28 @@ export async function executeMutatingTool(
 // Exports: read-only tools for AI + mutating tools behind confirmation
 // ---------------------------------------------------------------------------
 
-/** Tools the AI can call freely (read-only + mutation requests). */
-export const aiTools = {
-  // Discover
-  search_yields: searchYields,
-  // Monitor
-  get_portfolio: getPortfolio,
-  get_position_history: getPositionHistory,
-  // Manage (read-only queries)
-  get_swap_quote: getSwapQuote,
-  get_balance: getBalance,
-  // Settings
-  get_settings: getSettings,
-  get_usage: getUsage,
-  // Transaction requests
-  request_deposit: requestDeposit,
-  request_withdraw: requestWithdraw,
-  request_swap: requestSwap,
-  // Settings mutation gateway
-  request_action: requestAction,
-};
+/** Create session-bound AI tools. Session-aware tools validate IDs and store verified data. */
+export function createTools(session: SessionState) {
+  return {
+    // Discover (session-aware: stores verified IDs)
+    search_yields: makeSearchYields(session),
+    // Monitor (stateless)
+    get_portfolio: getPortfolio,
+    get_position_history: getPositionHistory,
+    // Manage (session-aware: validates before request)
+    get_swap_quote: makeGetSwapQuote(session),
+    get_balance: getBalance,
+    // Settings (stateless)
+    get_settings: getSettings,
+    get_usage: getUsage,
+    // Transaction requests (session-aware: hard gate on IDs)
+    request_deposit: makeRequestDeposit(session),
+    request_withdraw: makeRequestWithdraw(session),
+    request_swap: makeRequestSwap(session),
+    // Settings mutation gateway (stateless)
+    request_action: requestAction,
+  };
+}
+
+/** Type of the tools object returned by createTools. */
+export type AiTools = ReturnType<typeof createTools>;

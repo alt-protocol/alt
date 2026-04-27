@@ -1,6 +1,8 @@
 import { generateText, type CoreMessage } from "ai";
+import { createAnthropic } from "@ai-sdk/anthropic";
 import { getModel, type UserProviderConfig } from "./providers.js";
-import { aiTools } from "./tools.js";
+import type { AiTools } from "./tools.js";
+import type { SessionState } from "./handlers/session.js";
 import { config } from "./config.js";
 
 export interface PendingAction {
@@ -22,16 +24,17 @@ export interface ChatResult {
   toolCalls: ToolCallSummary[];
 }
 
-/** Run a full AI chat turn with read-only tools + request_action gateway. */
+/** Run a full AI chat turn with session-bound tools. */
 export async function chat(
   systemPrompt: string,
   messages: CoreMessage[],
   userConfig: UserProviderConfig,
+  tools: AiTools,
 ): Promise<ChatResult> {
   const result = await generateText({
     model: getModel(userConfig),
     system: systemPrompt,
-    tools: aiTools,
+    tools,
     messages,
     maxSteps: config.aiMaxSteps,
     maxTokens: config.aiMaxTokens,
@@ -85,4 +88,55 @@ export async function chat(
     pendingAction,
     toolCalls,
   };
+}
+
+/** Cheap Haiku call to verify a pending transaction matches the user's intent. */
+export async function verifyPendingAction(
+  userMessage: string,
+  pendingAction: PendingAction,
+  session: SessionState,
+): Promise<{ verified: boolean; warning?: string }> {
+  const apiKey = process.env.PLATFORM_ANTHROPIC_KEY;
+  if (!apiKey) return { verified: true };
+
+  const oppId = pendingAction.params.opportunity_id as number | undefined;
+  const verified = oppId ? session.opportunities.get(oppId) : null;
+
+  try {
+    const model = createAnthropic({ apiKey })("claude-haiku-4-5-20251001");
+    const result = await generateText({
+      model,
+      system:
+        "You verify DeFi transactions match user intent. " +
+        'Reply ONLY with JSON: {"match": true} or {"match": false, "reason": "brief reason"}. ' +
+        "Check: correct protocol/token pair, correct action type (deposit vs withdraw), reasonable amount.",
+      messages: [{
+        role: "user",
+        content: [
+          `User said: "${userMessage}"`,
+          "",
+          "Transaction:",
+          `- Action: ${pendingAction.action}`,
+          `- Opportunity: ${verified?.name ?? "unknown"} (${verified?.category ?? "unknown"})`,
+          `- Amount: ${pendingAction.params.amount ?? "N/A"}`,
+          `- Leverage: ${pendingAction.params.leverage ?? "none"}`,
+          "",
+          "Does this match what the user asked for?",
+        ].join("\n"),
+      }],
+      maxTokens: 100,
+      abortSignal: AbortSignal.timeout(5000),
+    });
+
+    const parsed = JSON.parse(result.text);
+    if (parsed.match === false) {
+      console.warn(`[reflection] Mismatch detected: ${parsed.reason}`);
+      return { verified: false, warning: parsed.reason };
+    }
+    return { verified: true };
+  } catch (err) {
+    // Fail open — don't block transactions if reflection fails
+    console.error("[reflection] Verification failed:", err);
+    return { verified: true };
+  }
 }
