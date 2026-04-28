@@ -48,6 +48,8 @@ if (WEBHOOK_URL) {
     secret_token: SECRET,
   });
 
+  await bot.init();
+
   // --- Deduplication: LRU set of recently processed update IDs ---
   const processedUpdates = new Set<number>();
   const MAX_DEDUP_SIZE = 10_000;
