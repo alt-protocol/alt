@@ -2,7 +2,10 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   async redirects() {
-    return [{ source: '/', destination: '/dashboard', permanent: false }];
+    return [
+      { source: '/', destination: '/discover', permanent: false },
+      { source: '/dashboard', destination: '/discover', permanent: true },
+    ];
   },
   experimental: {
     optimizePackageImports: [
@@ -11,6 +14,7 @@ const nextConfig: NextConfig = {
     ],
   },
   turbopack: {
+    root: __dirname,
     resolveAlias: {
       // klend-sdk imports `fs` in a server-only helper (parseKeypairFile).
       // We never call that path in the browser, so stub it out.

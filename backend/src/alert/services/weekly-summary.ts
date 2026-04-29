@@ -1,4 +1,4 @@
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../db/connection.js";
 import { yieldOpportunities } from "../../discover/db/schema.js";
 import { userPositions } from "../../monitor/db/schema.js";
@@ -91,16 +91,16 @@ export async function buildWeeklySummary(
     );
 
   // Get opportunity names
-  const oppIds = positions
-    .map((p) => p.opportunity_id)
-    .filter((id): id is number => id !== null);
+  const oppIds = [...new Set(
+    positions.map((p) => p.opportunity_id).filter((id): id is number => id !== null),
+  )];
 
   const opps =
     oppIds.length > 0
       ? await db
           .select({ id: yieldOpportunities.id, name: yieldOpportunities.name })
           .from(yieldOpportunities)
-          .where(sql`${yieldOpportunities.id} = ANY(${oppIds})`)
+          .where(inArray(yieldOpportunities.id, oppIds))
       : [];
   const oppMap = new Map(opps.map((o) => [o.id, o.name]));
 

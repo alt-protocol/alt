@@ -16,6 +16,7 @@ import { mcpPlugin } from "./mcp/plugin.js";
 import { alertPlugin } from "./alert/index.js";
 import { authRoutes } from "./shared/auth-routes.js";
 import { getSkillContent } from "./shared/skill-content.js";
+import { agentPlugin } from "./agent/index.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -134,6 +135,9 @@ export async function buildApp() {
 
   // Alert module (detection + matching, no routes yet — Phase 2 adds delivery routes)
   await app.register(alertPlugin, { prefix: "/api/alerts" });
+
+  // Agent-optimized endpoints (strict defaults, self-documenting responses)
+  await app.register(agentPlugin, { prefix: "/api/agent" });
 
   // Agent auth (self-service API key registration)
   await app.register(authRoutes, { prefix: "/api/auth" });

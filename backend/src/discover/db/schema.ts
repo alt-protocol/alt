@@ -146,6 +146,13 @@ export const stablecoinPegStats = discoverSchema.table(
     price_current: numeric("price_current", { precision: 20, scale: 10 }),
     peg_type: varchar("peg_type", { length: 20 }).notNull(),
     peg_target: numeric("peg_target", { precision: 20, scale: 10 }),
+    // 1-day peg metrics
+    max_deviation_1d: numeric("max_deviation_1d", { precision: 10, scale: 6 }),
+    min_price_1d: numeric("min_price_1d", { precision: 20, scale: 10 }),
+    max_price_1d: numeric("max_price_1d", { precision: 20, scale: 10 }),
+    peg_adherence_1d: numeric("peg_adherence_1d", { precision: 6, scale: 2 }),
+    volatility_1d: numeric("volatility_1d", { precision: 10, scale: 6 }),
+    snapshot_count_1d: integer("snapshot_count_1d").default(0),
     // 7-day peg metrics (fixed-peg only, NULL for yield-bearing)
     max_deviation_7d: numeric("max_deviation_7d", { precision: 10, scale: 6 }),
     min_price_7d: numeric("min_price_7d", { precision: 20, scale: 10 }),

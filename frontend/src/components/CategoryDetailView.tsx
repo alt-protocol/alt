@@ -91,7 +91,7 @@ export default function CategoryDetailView({ yield_: y, id }: Props) {
   return (
     <>
       <Link
-        href="/dashboard"
+        href="/discover"
         className="text-foreground-muted font-sans text-[0.75rem] uppercase tracking-[0.05em] hover:text-foreground transition-colors inline-block mb-6"
       >
         &larr; Discover

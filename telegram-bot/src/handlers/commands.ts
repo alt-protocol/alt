@@ -5,6 +5,9 @@ import { db } from "../db/connection.js";
 import { users, userPreferences, usage, userMemories, conversations } from "../db/schema.js";
 import { encrypt } from "../crypto.js";
 import { config } from "../config.js";
+import { apiGet, apiPost } from "../api-client.js";
+import { generateRecommendation } from "../services/alert-poller.js";
+import type { PortfolioSummaryResponse } from "../services/alert-poller.js";
 import { awaitingWallet } from "./state.js";
 
 // ---------------------------------------------------------------------------
@@ -384,4 +387,78 @@ export async function handleReset(ctx: CommandContext<Context>): Promise<void> {
   ]);
 
   await ctx.reply("All data cleared. I'm treating you as a new user now. Wallet and API key are preserved.");
+}
+
+// ---------------------------------------------------------------------------
+// /test_alerts — Test all 3 alert tiers (dev only)
+// ---------------------------------------------------------------------------
+export async function handleTestAlerts(ctx: CommandContext<Context>): Promise<void> {
+  const telegramId = BigInt(ctx.from!.id);
+  const chatId = ctx.chat.id;
+
+  const [user] = await db
+    .select()
+    .from(users)
+    .where(eq(users.telegram_id, telegramId))
+    .limit(1);
+
+  if (!user) {
+    await ctx.reply("Please run /start first.");
+    return;
+  }
+
+  if (!user.wallet_address) {
+    await ctx.reply("No wallet linked. Use /connect first.");
+    return;
+  }
+
+  await ctx.reply("Running alert tests...\n\n1/3 Queuing critical alert\n2/3 Daily portfolio summary\n3/3 Weekly portfolio review");
+
+  // 1. Critical alert — insert via backend, bot poller delivers in ≤60s
+  try {
+    const result = (await apiPost("/api/alerts/test/critical", {
+      user_id: user.id,
+      chat_id: String(chatId),
+    })) as { success?: boolean; error?: string };
+
+    if (result.error) {
+      await ctx.reply(`Critical test failed: ${result.error}`);
+    }
+  } catch {
+    await ctx.reply("Critical test failed — is the backend running?");
+  }
+
+  // 2. Daily portfolio summary — real data
+  try {
+    const daily = (await apiGet(`/api/alerts/daily/${user.wallet_address}`)) as PortfolioSummaryResponse;
+    if (daily.template) {
+      await ctx.reply(`--- DAILY PREVIEW ---\n\n${daily.template}`);
+    } else {
+      await ctx.reply("Daily summary: no portfolio data.");
+    }
+  } catch {
+    await ctx.reply("Daily summary test failed — is the backend running?");
+  }
+
+  // 3. Weekly portfolio review — real data + AI recommendation
+  try {
+    const weekly = (await apiGet(`/api/alerts/weekly/${user.wallet_address}`)) as PortfolioSummaryResponse;
+    if (weekly.template) {
+      const recommendation = await generateRecommendation(weekly);
+      const message = recommendation
+        ? `${weekly.template}\n\n${recommendation}`
+        : weekly.template;
+      await ctx.reply(`--- WEEKLY PREVIEW ---\n\n${message}`);
+    } else {
+      await ctx.reply("Weekly summary: no portfolio data.");
+    }
+  } catch {
+    await ctx.reply("Weekly summary test failed — is the backend running?");
+  }
+
+  await ctx.reply(
+    "Test complete.\n\n" +
+    "- Critical alert: queued — arrives via poller within 60s\n" +
+    "- Daily + weekly: previewed above (real portfolio data)",
+  );
 }

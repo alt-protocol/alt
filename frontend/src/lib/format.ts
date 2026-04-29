@@ -146,3 +146,71 @@ const SHIELD_LABELS: Record<string, string> = {
 export function fmtShieldWarning(type: string): string {
   return SHIELD_LABELS[type] ?? type;
 }
+
+/** Compute a spread percentage from min/max price. Returns null if data insufficient. */
+export function spreadPct(min: number | null | undefined, max: number | null | undefined): number | null {
+  if (bad(min) || bad(max) || min! <= 0) return null;
+  return (max! - min!) / min! * 100;
+}
+
+/** Color class for a volatility spread percentage. */
+export function volatilityColor(pct: number | null): string {
+  if (pct == null) return "text-foreground-muted";
+  if (pct < 0.1) return "text-neon";
+  if (pct <= 0.5) return "text-yellow-400";
+  return "text-red-400";
+}
+
+export interface RiskLevel {
+  label: string;
+  colorClass: string;
+  reasons: string[];
+}
+
+/** Compute a 1-word risk assessment from yield opportunity fields. */
+export function computeRiskLevel(opts: {
+  tokenWarnings?: { type: string; severity: string; message: string }[] | null;
+  spreadPct: number | null;
+  lockPeriodDays: number;
+  pegLiquidityUsd?: number | null;
+}): RiskLevel {
+  const reasons: string[] = [];
+  let level: "Low" | "Medium" | "High" = "Low";
+
+  // Token warnings
+  if (opts.tokenWarnings && opts.tokenWarnings.length > 0) {
+    const hasWarning = opts.tokenWarnings.some(w => w.severity === "warning");
+    for (const w of opts.tokenWarnings) {
+      reasons.push(SHIELD_LABELS[w.type] ?? w.type);
+    }
+    if (hasWarning) level = "High";
+    else level = "Medium";
+  }
+
+  // Spread
+  if (opts.spreadPct != null) {
+    if (opts.spreadPct > 0.5) {
+      level = "High";
+      reasons.push(`${opts.spreadPct.toFixed(2)}% price spread`);
+    } else if (opts.spreadPct > 0.2) {
+      if (level !== "High") level = "Medium";
+      reasons.push(`${opts.spreadPct.toFixed(2)}% price spread`);
+    }
+  }
+
+  // Lock period
+  if (opts.lockPeriodDays > 7) {
+    if (level !== "High") level = "Medium";
+    reasons.push(`${opts.lockPeriodDays}d lock`);
+  } else if (opts.lockPeriodDays > 0) {
+    reasons.push(`${opts.lockPeriodDays}d lock`);
+  }
+
+  // DEX liquidity in tooltip
+  if (opts.pegLiquidityUsd != null) {
+    reasons.push(`${fmtTvl(opts.pegLiquidityUsd)} DEX liquidity`);
+  }
+
+  const colorClass = level === "High" ? "text-red-400" : level === "Medium" ? "text-yellow-400" : "text-neon";
+  return { label: level, colorClass, reasons };
+}

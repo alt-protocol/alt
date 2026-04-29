@@ -1,4 +1,4 @@
-import { eq, and, gte, sql } from "drizzle-orm";
+import { eq, and, sql, or, gte, isNull } from "drizzle-orm";
 import { db } from "../db/connection.js";
 import { deliveries } from "../db/schema.js";
 
@@ -18,6 +18,9 @@ export async function canDeliver(
 
   const cutoff = new Date(Date.now() - cooldownHours * 60 * 60 * 1000);
 
+  // Count both delivered (within cooldown window) AND pending (not yet delivered) records.
+  // Pending records have delivered_at=NULL and must also be counted to prevent
+  // duplicate deliveries within the same engine run.
   const [result] = await db
     .select({
       count: sql<number>`count(*)::int`,
@@ -28,7 +31,10 @@ export async function canDeliver(
         eq(deliveries.user_id, userId),
         eq(deliveries.rule_id, ruleId),
         eq(deliveries.entity_key, entityKey),
-        gte(deliveries.delivered_at, cutoff),
+        or(
+          gte(deliveries.delivered_at, cutoff),
+          isNull(deliveries.delivered_at),
+        ),
       ),
     );
 

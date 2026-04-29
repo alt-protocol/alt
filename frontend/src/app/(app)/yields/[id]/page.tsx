@@ -41,7 +41,7 @@ export default function YieldDetailPage() {
       {detailQuery.isError && (
         <div className="text-center py-24">
           <p className="text-foreground-muted font-sans text-sm">Opportunity not found.</p>
-          <Link href="/dashboard" className="mt-3 inline-block text-neon font-sans text-[0.8rem] uppercase tracking-[0.05em] hover:underline">
+          <Link href="/discover" className="mt-3 inline-block text-neon font-sans text-[0.8rem] uppercase tracking-[0.05em] hover:underline">
             Back to Discover
           </Link>
         </div>

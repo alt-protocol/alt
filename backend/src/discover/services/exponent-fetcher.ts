@@ -14,6 +14,7 @@ import {
   deactivateStale,
   getProtocol,
   tokenType,
+  batchSnapshotAvg,
 } from "./utils.js";
 
 const EXPONENT_API = "https://api.exponent.finance/markets";
@@ -88,6 +89,8 @@ export async function fetchExponentYields(): Promise<number> {
   const lpIds = new Set<string>();
   let count = 0;
 
+  const avgs = await batchSnapshotAvg(db, protocol.id, "earn");
+
   for (const m of data) {
     if (m.marketStatus !== "active") continue;
     if (m.maturityDateUnixTs <= nowSec) continue;
@@ -120,6 +123,7 @@ export async function fetchExponentYields(): Promise<number> {
     const ptApy = safeFloat(m.impliedApy);
     const ptExtId = `exponent-pt-${m.vaultAddress}`;
     ptIds.add(ptExtId);
+    const ptAvgs = avgs[ptExtId] ?? { "7d": null, "30d": null };
     await upsertOpportunity(db, {
       protocolId: protocol.id,
       protocolName: protocol.name,
@@ -128,6 +132,8 @@ export async function fetchExponentYields(): Promise<number> {
       category: "earn",
       tokens: [symbol],
       apyCurrent: ptApy !== null ? ptApy * 100 : null,
+      apy7dAvg: ptAvgs["7d"],
+      apy30dAvg: ptAvgs["30d"],
       tvlUsd: safeFloat(m.totalMarketSize),
       depositAddress: m.vaultAddress,
       riskTier: "low",
@@ -151,6 +157,7 @@ export async function fetchExponentYields(): Promise<number> {
       const lpApy = safeFloat(m.annualizedLpFeesPct);
       const lpExtId = `exponent-lp-${m.vaultAddress}`;
       lpIds.add(lpExtId);
+      const lpAvgs = avgs[lpExtId] ?? { "7d": null, "30d": null };
       await upsertOpportunity(db, {
         protocolId: protocol.id,
         protocolName: protocol.name,
@@ -159,6 +166,8 @@ export async function fetchExponentYields(): Promise<number> {
         category: "earn",
         tokens: [symbol],
         apyCurrent: lpApy !== null && lpApy > 0 ? lpApy * 100 : null,
+        apy7dAvg: lpAvgs["7d"],
+        apy30dAvg: lpAvgs["30d"],
         tvlUsd: safeFloat(m.totalMarketSize),
         depositAddress: m.vaultAddress,
         riskTier: "medium",

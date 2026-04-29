@@ -155,7 +155,7 @@ export function useYieldFilters(optionsData: YieldOpportunity[]) {
     if (sf !== "apy") params.set("sort", sf);
     if (sd !== "desc") params.set("dir", sd);
     const qs = params.toString();
-    router.replace(qs ? `?${qs}` : "/dashboard", { scroll: false });
+    router.replace(qs ? `?${qs}` : "/discover", { scroll: false });
   }
 
   function updateFilters(f: Filters) {

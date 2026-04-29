@@ -18,6 +18,7 @@ vi.mock("../services/utils.js", () => ({
   upsertOpportunity: (...args: any[]) => mockUpsert(...args),
   deactivateStale: (...args: any[]) => mockDeactivate(...args),
   getProtocol: (...args: any[]) => mockGetProtocol(...args),
+  batchSnapshotAvg: vi.fn().mockResolvedValue({}),
   safeFloat: (v: unknown) => (v != null ? Number(v) : null),
   tokenType: (symbol: string) => {
     const upper = symbol.toUpperCase();
@@ -59,7 +60,7 @@ function makeMarket(overrides: Record<string, unknown> = {}) {
 describe("fetchExponentYields", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetProtocol.mockResolvedValue({ id: 5, name: "Exponent Finance" });
+    mockGetProtocol.mockResolvedValue({ id: 5, name: "Exponent" });
   });
 
   it("returns 0 if protocol not seeded", async () => {

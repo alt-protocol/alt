@@ -129,7 +129,7 @@ export const discoverService = {
       )!,
     );
 
-    if (params.asset_class) {
+    if (params.asset_class && params.asset_class !== "all") {
       conditions.push(eq(yieldOpportunities.asset_class, params.asset_class));
       if (params.asset_class === "stablecoin") {
         conditions.push(sql`${yieldOpportunities.apy_current} > 0`);
@@ -151,10 +151,12 @@ export const discoverService = {
         orderBy = sql`${yieldOpportunities.apy_current} DESC NULLS LAST`;
     }
 
-    const [pegMap, shieldMap] = await Promise.all([
+    const [pegMap, shieldMap, protocolRows] = await Promise.all([
       getPegStatsMap(),
       getShieldWarningsMap(),
+      db.select({ id: protocols.id, logo_url: protocols.logo_url }).from(protocols),
     ]);
+    const logoMap = new Map(protocolRows.map((p) => [p.id, p.logo_url]));
 
     const rows = await db
       .select({
@@ -207,6 +209,7 @@ export const discoverService = {
         lock_period_days: o.lock_period_days ?? 0,
         risk_tier: o.risk_tier,
         protocol_name: o.protocol_name,
+        protocol_logo_url: logoMap.get(o.protocol_id) ?? null,
         is_active: o.is_active,
         max_leverage: numOrNull(o.max_leverage),
         utilization_pct: numOrNull(o.utilization_pct),
@@ -466,6 +469,9 @@ export const discoverService = {
       price_current: numOrNull(r.price_current),
       peg_type: r.peg_type,
       peg_target: numOrNull(r.peg_target),
+      min_price_1d: numOrNull(r.min_price_1d),
+      max_price_1d: numOrNull(r.max_price_1d),
+      snapshot_count_1d: r.snapshot_count_1d ?? 0,
       peg_adherence_7d: numOrNull(r.peg_adherence_7d),
       max_deviation_7d: numOrNull(r.max_deviation_7d),
       min_price_7d: numOrNull(r.min_price_7d),

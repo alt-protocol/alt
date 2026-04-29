@@ -34,6 +34,9 @@ export interface PegStability {
   max_deviation_30d: number | null;
   volatility_7d: number | null;
   volatility_30d: number | null;
+  min_price_1d: number | null;
+  max_price_1d: number | null;
+  snapshot_count_1d: number;
   min_price_7d: number | null;
   max_price_7d: number | null;
   min_price_30d: number | null;
@@ -64,6 +67,7 @@ export interface YieldOpportunity {
   lock_period_days: number;
   risk_tier: string | null;
   protocol_name: string | null;
+  protocol_logo_url: string | null;
   is_active: boolean;
   max_leverage: number | null;
   utilization_pct: number | null;
@@ -72,6 +76,13 @@ export interface YieldOpportunity {
   depeg: number | null;
   underlying_tokens: UnderlyingToken[] | null;
   protocol_url: string | null;
+  multiply_info: {
+    collateral_symbol: string | null;
+    debt_symbol: string | null;
+    debt_available_usd: number | null;
+    borrow_apy_current_pct: number | null;
+    collateral_yield_current_pct: number | null;
+  } | null;
   updated_at: string | null;
   peg_stability: PegStability | null;
   token_warnings: ShieldWarning[] | null;

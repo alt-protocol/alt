@@ -27,6 +27,10 @@ export async function detectDepegEvents(): Promise<AlertCondition[]> {
     // Only check fixed-peg stablecoins (not yield-bearing)
     if (s.peg_type !== "fixed") continue;
 
+    // Skip non-USD stablecoins — e.g., EURC peg_target ≈ $1.08 (EUR/USD rate)
+    // Forex fluctuations always look like depegs when measured in USD
+    if (Math.abs(target - 1.0) > 0.02) continue;
+
     const deviationBps = Math.abs((price - target) / target) * 10000;
 
     // Only report if deviation is at least 10 bps (filter noise)

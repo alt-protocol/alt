@@ -152,16 +152,23 @@ export async function actionsRoutes(app: FastifyInstance) {
         ? ` Current APY: ${opp.apy_current.toFixed(1)}%`
         : "";
 
-      // Build descriptive title/description including transaction params
-      const amountStr = query.amount ? `${query.amount} ` : "";
+      // Resolve token symbol from deposit_token role + opportunity data
+      const extra = opp.extra_data as Record<string, unknown> | null;
+      let tokenSymbol = opp.tokens?.[0] ?? "";
+      if (query.deposit_token === "collateral") {
+        tokenSymbol = (extra?.collateral_symbol as string) ?? opp.tokens?.[0] ?? "";
+      } else if (query.deposit_token === "debt") {
+        tokenSymbol = (extra?.debt_symbol as string) ?? opp.tokens?.[1] ?? "";
+      }
+
+      const amountStr = query.amount ? `${query.amount} ${tokenSymbol} ` : "";
       const leverageStr = query.leverage ? ` at ${query.leverage}x leverage` : "";
-      const tokenStr = query.deposit_token ? ` (${query.deposit_token})` : "";
 
       return {
         type: "action",
         icon: ICON_URL,
         title: `Deposit ${amountStr}into ${opp.name}${leverageStr}`,
-        description: `Deposit ${amountStr}${tokenStr}into ${opp.name} on ${opp.protocol?.name ?? "Solana"}.${leverageStr}.${apyStr}`,
+        description: `Deposit ${amountStr}into ${opp.name} on ${opp.protocol?.name ?? "Solana"}.${leverageStr}${apyStr}`,
         label: "Deposit",
         links: {
           actions: [

@@ -344,8 +344,19 @@ function makeRequestDeposit(session: SessionState) {
         ?? (opp as Record<string, unknown>)?.name as string
         ?? `#${opportunity_id}`;
 
+      // Resolve token symbol from deposit_token role
+      const oppData = opp as Record<string, unknown> | null;
+      const oppTokens = (oppData?.tokens as string[]) ?? [];
+      const oppExtra = (oppData?.extra_data as Record<string, unknown>) ?? {};
+      let tokenSymbol = oppTokens[0] ?? "";
+      if (extra.deposit_token === "collateral") {
+        tokenSymbol = (oppExtra.collateral_symbol as string) ?? oppTokens[0] ?? "";
+      } else if (extra.deposit_token === "debt") {
+        tokenSymbol = (oppExtra.debt_symbol as string) ?? oppTokens[1] ?? "";
+      }
+
       const leverageStr = extra.leverage ? ` at ${extra.leverage}x leverage` : "";
-      const tokenStr = extra.deposit_token ? ` (${extra.deposit_token})` : "";
+      const tokenStr = tokenSymbol ? ` ${tokenSymbol}` : "";
       const deterministicSummary = `Deposit ${amount}${tokenStr} into ${verifiedName}${leverageStr}`;
 
       return {

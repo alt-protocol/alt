@@ -5,7 +5,7 @@
  *
  * Position types:
  *   - Earn: share balances + underlying amounts + PnL from earnings API
- *   - Multiply: stub (REST API not yet available)
+ *   - Multiply: vault positions via Jupiter Portfolio REST API
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { eq, and } from "drizzle-orm";
@@ -30,6 +30,7 @@ import {
 } from "./utils.js";
 
 const JUPITER_LEND_API = "https://api.jup.ag/lend/v1";
+const JUPITER_PORTFOLIO_API = "https://api.jup.ag/portfolio/v1";
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const ATA_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe8bXo";
 
@@ -377,6 +378,187 @@ async function fetchEarnPositions(
 }
 
 // ---------------------------------------------------------------------------
+// Multiply positions via Portfolio API
+// ---------------------------------------------------------------------------
+
+const BORROW_LINK_RE = /\/borrow\/(\d+)\/nfts\/(\d+)/;
+
+interface PortfolioPosition {
+  type: string;
+  fetcherId: string;
+  value: number;
+  netApy: number;
+  tags?: string[];
+  data: {
+    suppliedAssets: { data: { address: string; amount: number; price: number; yields?: { apr: number; apy: number }[] }; value: number }[];
+    borrowedAssets: { data: { address: string; amount: number; price: number }; value: number }[];
+    suppliedValue: number;
+    borrowedValue: number;
+    value: number;
+    healthRatio: number;
+    ref: string;
+    sourceRefs: { name: string; address: string }[];
+    link: string;
+  };
+}
+
+async function fetchMultiplyPositions(
+  wallet: string,
+  now: Date,
+  oppMap: Record<string, OpportunityMapEntry>,
+  headers: Record<string, string>,
+  earliestDeposits: Record<string, { snapshot_at: Date; deposit_amount_usd: number }>,
+  heliusUrl: string,
+): Promise<PositionDict[]> {
+  let portfolioData: unknown;
+  try {
+    portfolioData = await getWithRetry(
+      `${JUPITER_PORTFOLIO_API}/positions/${wallet}`,
+      { headers },
+    );
+  } catch (err) {
+    logger.warn({ err, wallet: wallet.slice(0, 8) }, "Jupiter Portfolio API failed — skipping multiply");
+    return [];
+  }
+
+  const responseObj = portfolioData as Record<string, unknown>;
+  const elements = responseObj?.elements;
+  if (!Array.isArray(elements)) return [];
+
+  const borrowPositions = (elements as PortfolioPosition[]).filter(
+    (p) => p.fetcherId === "jupiter-exchange-borrow",
+  );
+  if (borrowPositions.length === 0) return [];
+
+  const results: PositionDict[] = [];
+
+  for (const pos of borrowPositions) {
+    try {
+      const linkMatch = pos.data.link?.match(BORROW_LINK_RE);
+      if (!linkMatch) {
+        logger.warn({ link: pos.data.link, wallet: wallet.slice(0, 8) }, "Jupiter multiply: cannot parse vault/nft from link");
+        continue;
+      }
+      const vaultId = Number(linkMatch[1]);
+      const nftId = Number(linkMatch[2]);
+      const externalId = `juplend-mult-${vaultId}-${nftId}`;
+
+      const suppliedValue = pos.data.suppliedValue ?? 0;
+      const borrowedValue = pos.data.borrowedValue ?? 0;
+      const netValue = pos.data.value ?? suppliedValue - borrowedValue;
+
+      if (netValue < 0.01) continue;
+
+      const leverage = suppliedValue > 0 ? suppliedValue / Math.max(0.01, netValue) : 1;
+      const ltv = suppliedValue > 0 ? borrowedValue / suppliedValue : 0;
+      const healthFactor = pos.data.healthRatio ?? 0;
+
+      // Map to discover opportunity
+      const vaultAddress = pos.data.sourceRefs?.find((r) => r.name === "Vault")?.address ?? "";
+      const entry =
+        oppMap[`juplend-mult-${vaultId}`] ??
+        (vaultAddress ? oppMap[vaultAddress] : null) ??
+        null;
+
+      const apy = pos.netApy != null ? pos.netApy * 100 : (entry?.apy_current ?? null);
+
+      // Token info from portfolio response
+      const supplyAsset = pos.data.suppliedAssets?.[0];
+      const borrowAsset = pos.data.borrowedAssets?.[0];
+      const supplyMint = supplyAsset?.data.address ?? "";
+      const borrowMint = borrowAsset?.data.address ?? "";
+      const nftMint = pos.data.sourceRefs?.find((r) => r.name === "NFT Mint")?.address ?? "";
+
+      // Token symbol from opportunity extra_data
+      const extra = entry?.extra_data ?? {};
+      const supplySymbol = (entry?.first_token as string) ?? "";
+      const borrowSymbol = typeof extra.borrow_token_symbol === "string" ? extra.borrow_token_symbol : "";
+      const tokenSymbol = supplySymbol;
+
+      // PnL: snapshot-based
+      let pnlUsd: number | null = null;
+      let pnlPct: number | null = null;
+      let initialDepositUsd: number | null = null;
+      const earliest = earliestDeposits[externalId];
+      if (earliest && earliest.deposit_amount_usd > 0) {
+        pnlUsd = netValue - earliest.deposit_amount_usd;
+        initialDepositUsd = earliest.deposit_amount_usd;
+        if (initialDepositUsd > 0) {
+          pnlPct = (pnlUsd / initialDepositUsd) * 100;
+        }
+      }
+
+      let openedAt: Date | null = null;
+      if (heliusUrl && nftMint) {
+        openedAt = await firstDepositTs(wallet, nftMint, heliusUrl);
+      }
+      if (!openedAt) openedAt = earliest?.snapshot_at ?? null;
+
+      // Underlying tokens
+      const underlyingTokens: UnderlyingToken[] = [];
+      if (supplyMint) {
+        const sym = supplySymbol || classifyToken(supplyMint);
+        underlyingTokens.push({
+          symbol: sym,
+          mint: supplyMint,
+          role: "collateral",
+          type: classifyToken(sym) === "stable" ? "stablecoin" : classifyToken(sym),
+        } as UnderlyingToken);
+      }
+      if (borrowMint && borrowedValue > 0) {
+        const sym = borrowSymbol || classifyToken(borrowMint);
+        underlyingTokens.push({
+          symbol: sym,
+          mint: borrowMint,
+          role: "debt",
+          type: classifyToken(sym) === "stable" ? "stablecoin" : classifyToken(sym),
+        } as UnderlyingToken);
+      }
+
+      results.push(
+        buildPositionDict({
+          wallet_address: wallet,
+          protocol_slug: "jupiter",
+          product_type: "multiply",
+          external_id: externalId,
+          snapshot_at: now,
+          opportunity_id: entry?.id ?? null,
+          deposit_amount: supplyAsset?.data.amount ?? 0,
+          deposit_amount_usd: netValue,
+          pnl_usd: pnlUsd,
+          pnl_pct: pnlPct,
+          initial_deposit_usd: initialDepositUsd,
+          opened_at: openedAt,
+          held_days: computeHeldDays(openedAt, now),
+          apy,
+          token_symbol: tokenSymbol,
+          underlying_tokens: underlyingTokens.length > 0 ? underlyingTokens : null,
+          extra_data: {
+            vault_id: vaultId,
+            nft_id: nftId,
+            leverage: Math.round(leverage * 100) / 100,
+            ltv: Math.round(ltv * 10000) / 10000,
+            health_factor: Math.round(healthFactor * 10000) / 10000,
+            total_deposit_usd: Math.round(suppliedValue * 100) / 100,
+            total_borrow_usd: Math.round(borrowedValue * 100) / 100,
+            supply_token_mint: supplyMint,
+            borrow_token_mint: borrowMint,
+            nft_mint: nftMint,
+            vault_address: vaultAddress,
+            tags: pos.tags ?? [],
+            source: "portfolio_api",
+          },
+        }),
+      );
+    } catch (err) {
+      logger.warn({ err, wallet: wallet.slice(0, 8) }, "Jupiter multiply: failed to process position");
+    }
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -392,32 +574,31 @@ export async function fetchWalletPositions(
   const headers = buildHeaders();
   const heliusUrl = process.env.HELIUS_RPC_URL ?? "";
   const oppMap = await loadOpportunityMap(discoverService);
+  const earliestDeposits = await batchEarliestDeposits(database, walletAddress);
 
-  const earnPositions = await fetchEarnPositions(
-    walletAddress,
-    database,
-    now,
-    heliusUrl,
-    oppMap,
-    headers,
-  );
+  const [earnPositions, multiplyPositions] = await Promise.all([
+    fetchEarnPositions(walletAddress, database, now, heliusUrl, oppMap, headers),
+    fetchMultiplyPositions(walletAddress, now, oppMap, headers, earliestDeposits, heliusUrl),
+  ]);
 
-  const totalValue = earnPositions.reduce(
+  const allPositions = [...earnPositions, ...multiplyPositions];
+
+  const totalValue = allPositions.reduce(
     (s, p) => s + (p.deposit_amount_usd ?? 0),
     0,
   );
-  const totalPnl = earnPositions.reduce(
+  const totalPnl = allPositions.reduce(
     (s, p) => s + (p.pnl_usd ?? 0),
     0,
   );
 
   return {
     wallet: walletAddress,
-    positions: earnPositions,
+    positions: allPositions,
     summary: {
       total_value_usd: totalValue,
       total_pnl_usd: totalPnl,
-      position_count: earnPositions.length,
+      position_count: allPositions.length,
     },
   };
 }
@@ -442,17 +623,15 @@ export async function snapshotAllWallets(
 
   for (const wallet of wallets) {
     try {
-      const earnPositions = await fetchEarnPositions(
-        wallet.wallet_address,
-        database,
-        now,
-        heliusUrl,
-        oppMap,
-        headers,
-      );
+      const earliestDeposits = await batchEarliestDeposits(database, wallet.wallet_address);
+      const [earnPositions, multiplyPositions] = await Promise.all([
+        fetchEarnPositions(wallet.wallet_address, database, now, heliusUrl, oppMap, headers),
+        fetchMultiplyPositions(wallet.wallet_address, now, oppMap, headers, earliestDeposits, heliusUrl),
+      ]);
+      const allPositions = [...earnPositions, ...multiplyPositions];
 
       // Detect closed positions: DB says open but not in fresh fetch
-      const freshExternalIds = new Set(earnPositions.map((p) => p.external_id));
+      const freshExternalIds = new Set(allPositions.map((p) => p.external_id));
       const dbOpenJupiter = await database
         .select({ id: userPositions.id, external_id: userPositions.external_id, product_type: userPositions.product_type })
         .from(userPositions)
@@ -492,7 +671,7 @@ export async function snapshotAllWallets(
 
       totalSnapshots += await storePositionRows(
         database,
-        [...earnPositions, ...closedPositions],
+        [...allPositions, ...closedPositions],
         now,
       );
 
@@ -504,7 +683,8 @@ export async function snapshotAllWallets(
       logger.info(
         {
           wallet: wallet.wallet_address.slice(0, 8),
-          count: earnPositions.length,
+          earn: earnPositions.length,
+          multiply: multiplyPositions.length,
         },
         "Jupiter wallet snapshotted",
       );

@@ -1,5 +1,5 @@
 import { db } from "../db/connection.js";
-import { events, digestQueue, deliveries } from "../db/schema.js";
+import { events, deliveries } from "../db/schema.js";
 import { logger } from "../../shared/logger.js";
 import { detectApyChanges } from "./detectors/apy.js";
 import { detectDepegEvents } from "./detectors/depeg.js";
@@ -113,14 +113,16 @@ export async function runAlertEngine(): Promise<void> {
       });
       criticalCount++;
     } else {
-      // Daily tier → buffer in digest queue
-      await db.insert(digestQueue).values({
+      // Daily tier → log for cooldown tracking only (daily summary is portfolio-centric now)
+      await db.insert(deliveries).values({
         user_id: match.userId,
+        chat_id: match.chatId,
         event_id: event.id,
         rule_id: match.rule.id,
-        title: match.condition.title,
-        body: match.condition.body,
-        metadata: match.condition.metadata,
+        entity_key: match.condition.entityKey,
+        delivery_type: "digest",
+        message_text: `${match.condition.title}\n${match.condition.body}`,
+        delivered_at: new Date(),
       });
       digestCount++;
     }

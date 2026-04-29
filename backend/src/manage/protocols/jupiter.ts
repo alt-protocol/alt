@@ -128,6 +128,7 @@ function parseMultiplyParams(extra: Record<string, unknown> | undefined) {
     leverage: extra.leverage != null ? Number(extra.leverage) : undefined,
     slippageBps: Number(extra.slippageBps ?? 100),
     isClosingPosition: extra.isClosingPosition === true,
+    depositToken: (extra.deposit_token as string) ?? "collateral",
   };
 }
 
@@ -284,22 +285,41 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
   const signer = new sdk.PublicKey(params.walletAddress);
   const debtMintPk = new sdk.PublicKey(mp.borrowMint);
 
-  // Estimate borrow amount from leverage without a separate price quote call.
-  // deposit * (leverage - 1) gives the debt portion in collateral terms.
-  // Adjust by decimals ratio (e.g. 6-decimal supply / 6-decimal borrow = 1:1 for stables).
-  const userDepositLamports = Math.round(parseFloat(params.amount) * 10 ** supplyDecimals);
-  const decimalAdjust = 10 ** (supplyDecimals - borrowDecimals);
-  const estimatedBorrow = Math.round(userDepositLamports * (mp.leverage - 1) / decimalAdjust);
-  const borrowAmount = new sdk.BN(estimatedBorrow);
+  // Determine amounts based on which token the user is depositing.
+  let borrowAmount: InstanceType<typeof sdk.BN>;
+  let swapInputAmount: string;
+  let userSupplyLamports: number;
+
+  if (mp.depositToken === "debt") {
+    // User deposits borrow token (e.g. USDC into JUICED/USDC).
+    // Amount is in borrow terms — no price conversion needed.
+    const userBorrowLamports = Math.round(parseFloat(params.amount) * 10 ** borrowDecimals);
+    const flashBorrow = Math.round(userBorrowLamports * (mp.leverage - 1));
+    borrowAmount = new sdk.BN(flashBorrow);
+    // Swap both user's deposit AND flash-borrowed amount → supply token
+    swapInputAmount = String(userBorrowLamports + flashBorrow);
+    userSupplyLamports = 0; // user provides no supply token
+  } else {
+    // User deposits supply/collateral token (e.g. JUICED).
+    // Need a price quote to estimate the correct borrow in borrow-token terms.
+    userSupplyLamports = Math.round(parseFloat(params.amount) * 10 ** supplyDecimals);
+    const depositQuote = await getSwapQuote(
+      mp.supplyMint, mp.borrowMint, String(userSupplyLamports), mp.slippageBps,
+    );
+    const estimatedBorrow = Math.round(Number(depositQuote.outAmount) * (mp.leverage - 1));
+    borrowAmount = new sdk.BN(estimatedBorrow);
+    // Only swap the flash-borrowed borrow token → supply token
+    swapInputAmount = borrowAmount.toString();
+  }
 
   logger.info(
-    { wallet: params.walletAddress.slice(0, 8), vaultId: mp.vaultId, leverage: mp.leverage, borrowAmount: borrowAmount.toString() },
+    { wallet: params.walletAddress.slice(0, 8), vaultId: mp.vaultId, leverage: mp.leverage, depositToken: mp.depositToken, borrowAmount: borrowAmount.toString() },
     "Building Jupiter multiply open",
   );
 
   // All external calls in one parallel batch: swap build + flash loan ixs
   const [swapResult, flashBorrowIx, flashPaybackIx] = await Promise.all([
-    getMultiplySwap(mp.borrowMint, mp.supplyMint, borrowAmount.toString(), mp.slippageBps, params.walletAddress),
+    getMultiplySwap(mp.borrowMint, mp.supplyMint, swapInputAmount, mp.slippageBps, params.walletAddress),
     sdk.getFlashBorrowIx({ connection, signer, asset: debtMintPk, amount: borrowAmount }),
     sdk.getFlashPaybackIx({ connection, signer, asset: debtMintPk, amount: borrowAmount }),
   ]);
@@ -307,7 +327,8 @@ async function buildMultiplyOpen(params: BuildTxParams): Promise<BuildTxResultWi
   // Price impact guard
   const impact = guardPriceImpact(swapResult.priceImpactPct);
 
-  const supplyAmount = new sdk.BN(userDepositLamports).add(new sdk.BN(swapResult.outAmount));
+  // Collateral = user's supply tokens (0 for debt deposit) + swap output
+  const supplyAmount = new sdk.BN(userSupplyLamports).add(new sdk.BN(swapResult.outAmount));
   const { ixs: operateIxs, addressLookupTableAccounts, nftId } = await sdk.getOperateIx({
     vaultId: mp.vaultId, positionId: 0, colAmount: supplyAmount, debtAmount: borrowAmount, connection, signer,
   });

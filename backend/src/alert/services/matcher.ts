@@ -79,34 +79,43 @@ export async function matchConditionsToUsers(
 
   if (users.length === 0) return [];
 
-  // 3. Load user positions → Map<wallet, Set<opportunityId>>
+  // 3. Load user positions → Map<wallet, Set<opportunityId>> + Map<wallet, Set<tokenSymbol>>
   const wallets = users
     .map((u) => u.wallet_address)
     .filter((w): w is string => w !== null);
 
   const positionMap = new Map<string, Set<number>>();
+  const tokenMap = new Map<string, Set<string>>();
   if (wallets.length > 0) {
     // Get latest non-closed positions for all wallets
     const positions = await db
       .select({
         wallet_address: userPositions.wallet_address,
         opportunity_id: userPositions.opportunity_id,
+        token_symbol: userPositions.token_symbol,
       })
       .from(userPositions)
-      .where(
-        and(
-          eq(userPositions.is_closed, false),
-        ),
-      );
+      .where(eq(userPositions.is_closed, false));
 
     for (const p of positions) {
-      if (!p.opportunity_id) continue;
-      let set = positionMap.get(p.wallet_address);
-      if (!set) {
-        set = new Set();
-        positionMap.set(p.wallet_address, set);
+      // Track opportunity IDs per wallet
+      if (p.opportunity_id) {
+        let set = positionMap.get(p.wallet_address);
+        if (!set) {
+          set = new Set();
+          positionMap.set(p.wallet_address, set);
+        }
+        set.add(p.opportunity_id);
       }
-      set.add(p.opportunity_id);
+      // Track token symbols per wallet (for depeg matching)
+      if (p.token_symbol) {
+        let set = tokenMap.get(p.wallet_address);
+        if (!set) {
+          set = new Set();
+          tokenMap.set(p.wallet_address, set);
+        }
+        set.add(p.token_symbol);
+      }
     }
   }
 
@@ -146,7 +155,7 @@ export async function matchConditionsToUsers(
       if (condition.detectedValue < threshold) continue;
 
       // Check if user is affected by this condition
-      if (!isUserAffected(user.wallet_address, condition, positionMap)) continue;
+      if (!isUserAffected(user.wallet_address, condition, positionMap, tokenMap)) continue;
 
       matches.push({
         userId: user.id,
@@ -178,12 +187,17 @@ function isUserAffected(
   walletAddress: string | null,
   condition: AlertCondition,
   positionMap: Map<string, Set<number>>,
+  tokenMap: Map<string, Set<string>>,
 ): boolean {
   // New opportunities are broadcast to all alert-enabled users
   if (condition.ruleSlug === "new_opportunity") return true;
 
-  // Depeg: all users with any position (stablecoin risk is broad)
-  if (condition.ruleSlug === "depeg") return walletAddress !== null;
+  // Depeg: only alert if user holds a position involving that token
+  if (condition.ruleSlug === "depeg") {
+    if (!walletAddress) return false;
+    const symbol = condition.entityKey.split(":")[1]; // "token:USDC" → "USDC"
+    return tokenMap.get(walletAddress)?.has(symbol) ?? false;
+  }
 
   // Position-specific: user must hold the opportunity
   if (condition.entityKey.startsWith("opp:")) {

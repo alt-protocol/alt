@@ -6,7 +6,6 @@ import { fmtCategory } from "@/lib/format";
 import { useClickOutside } from "@/lib/hooks/useClickOutside";
 import type { Filters } from "@/lib/hooks/useYieldFilters";
 import { getCategorySlugs } from "@/lib/categories";
-const QUICK_TOKENS = ["USDC"];
 
 const inputClass = "w-full bg-surface text-foreground rounded-sm px-3 py-2 text-[0.8rem] font-sans outline-none focus:bg-surface-high transition-colors placeholder:text-foreground-muted";
 
@@ -52,20 +51,7 @@ export default function FilterPanel({
   return (
     <div className="px-5 py-3 flex items-center justify-between gap-3">
       <div className="flex items-center gap-5">
-        <h2 className="font-display text-sm uppercase tracking-[0.03em] shrink-0">Yield Marketplace</h2>
-        {QUICK_TOKENS.map((t) => (
-          <button
-            key={t}
-            onClick={() => updateFilters({ ...filters, token: filters.token === t ? "" : t })}
-            className={`text-[0.7rem] font-sans rounded-sm px-3 py-1 transition-colors ${
-              filters.token === t
-                ? "bg-white text-[#243600] font-semibold"
-                : "border border-outline-ghost text-foreground-muted hover:text-foreground hover:border-foreground-muted"
-            }`}
-          >
-            {t}
-          </button>
-        ))}
+        <h2 className="font-display text-sm uppercase tracking-[0.03em] shrink-0">Stablecoin Opportunities</h2>
       </div>
 
       {/* Filter chips + filter button */}

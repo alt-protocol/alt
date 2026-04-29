@@ -169,9 +169,11 @@ async function recomputeStats(
     const currentPrice = prices.get(cfg.mint);
     const liq = liquidity.get(cfg.mint);
 
+    const s1 = await computeWindowStats(cfg, 1);
     const s7 = await computeWindowStats(cfg, 7);
     const s30 = await computeWindowStats(cfg, 30);
 
+    const cnt1 = s1.cnt;
     const cnt7 = s7.cnt;
     const cnt30 = s30.cnt;
 
@@ -181,6 +183,13 @@ async function recomputeStats(
       price_current: currentPrice != null ? String(currentPrice) : null,
       peg_type: cfg.pegType,
       peg_target: cfg.pegTarget != null ? String(cfg.pegTarget) : null,
+      // 1d
+      snapshot_count_1d: cnt1,
+      min_price_1d: s1.min_p,
+      max_price_1d: s1.max_p,
+      max_deviation_1d: cnt1 >= MIN_SNAPSHOTS_FOR_STATS ? s1.max_dev : null,
+      peg_adherence_1d: cnt1 >= MIN_SNAPSHOTS_FOR_STATS ? s1.adherence : null,
+      volatility_1d: cnt1 >= MIN_SNAPSHOTS_FOR_STATS ? s1.volatility : null,
       // 7d
       snapshot_count_7d: cnt7,
       min_price_7d: s7.min_p,

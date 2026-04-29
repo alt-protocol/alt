@@ -3,6 +3,8 @@ import { generateText } from "ai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { apiGet, apiPost } from "../api-client.js";
 
+const DEV_MODE = !process.env.WEBHOOK_URL;
+
 interface PendingAlert {
   id: number;
   user_id: number;
@@ -10,15 +12,19 @@ interface PendingAlert {
   message_text: string;
 }
 
-interface DigestReadyUser {
+interface SummaryUser {
   user_id: number;
   chat_id: string;
-  item_count: number;
+  wallet_address: string;
 }
 
-interface DigestResponse {
-  grouped: Record<string, Array<{ title: string; body: string }>>;
-  total: number;
+export interface PortfolioSummaryResponse {
+  template: string;
+  positions: Array<{ name: string; depositUsd: number; apy: number; pnlUsd: number; apy30dAvg: number | null }>;
+  totalValueUsd: number;
+  weightedApy: number;
+  projectedAnnualYield: number;
+  riskFlags: string[];
 }
 
 /**
@@ -26,9 +32,13 @@ interface DigestResponse {
  */
 export function startAlertPoller(bot: Bot<Context>) {
   startCriticalPoller(bot);
-  startDigestPoller(bot);
+  startDailyPoller(bot);
   startWeeklyPoller(bot);
-  console.log("[alert-poller] Started (critical: 60s, digest: hourly, weekly: daily check)");
+  console.log(
+    DEV_MODE
+      ? "[alert-poller] Started DEV MODE (critical: 60s, daily: 60s, weekly: 60s no day gate)"
+      : "[alert-poller] Started (critical: 60s, daily: hourly, weekly: 6h Monday only)",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -61,90 +71,76 @@ function startCriticalPoller(bot: Bot<Context>) {
 }
 
 // ---------------------------------------------------------------------------
-// Loop 2: Daily digest (check every hour)
+// Loop 2: Daily portfolio summary (once per 24h)
 // ---------------------------------------------------------------------------
-function startDigestPoller(bot: Bot<Context>) {
+function startDailyPoller(bot: Bot<Context>) {
+  const interval = DEV_MODE ? 60_000 : 60 * 60 * 1000;
+  const lastDelivery = new Map<number, number>();
+
   setInterval(async () => {
     try {
-      const resp = (await apiGet("/api/alerts/digest-ready")) as {
-        users: DigestReadyUser[];
-      };
-
+      const resp = (await apiGet("/api/alerts/summary/users")) as { users: SummaryUser[] };
       if (!resp.users || resp.users.length === 0) return;
 
       for (const user of resp.users) {
         try {
           const chatId = Number(user.chat_id);
-          if (!chatId) continue;
+          if (!chatId || !user.wallet_address) continue;
 
-          // Fetch digest items
-          const digest = (await apiGet(`/api/alerts/digest/${user.user_id}`)) as DigestResponse;
-          if (digest.total === 0) continue;
+          // 24h cooldown between daily summaries per user
+          const lastSent = lastDelivery.get(user.user_id) ?? 0;
+          if (Date.now() - lastSent < 24 * 60 * 60 * 1000) continue;
 
-          // Format digest message
-          const message = formatDigest(digest);
+          const summary = (await apiGet(`/api/alerts/daily/${user.wallet_address}`)) as PortfolioSummaryResponse;
+          if (!summary.template) continue;
 
-          await bot.api.sendMessage(chatId, message);
-          await apiPost(`/api/alerts/digest/${user.user_id}/delivered`, {});
+          await bot.api.sendMessage(chatId, summary.template);
+          lastDelivery.set(user.user_id, Date.now());
         } catch (err) {
-          console.error(`[alert-poller] Failed to deliver digest for user ${user.user_id}:`, err);
+          console.error(`[alert-poller] Daily summary failed for user ${user.user_id}:`, err);
         }
       }
     } catch {
       // Silently fail
     }
-  }, 60 * 60 * 1000); // Every hour
+  }, interval);
 }
 
 // ---------------------------------------------------------------------------
-// Formatters
+// Loop 3: Weekly portfolio review (Monday, with AI recommendation)
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Loop 3: Weekly summary (check daily, deliver on Monday)
-// ---------------------------------------------------------------------------
-
-interface WeeklyUser {
-  user_id: number;
-  chat_id: string;
-  wallet_address: string;
-}
-
-interface WeeklySummaryResponse {
-  template: string;
-  positions: Array<{ name: string; depositUsd: number; apy: number; pnlUsd: number }>;
-  totalValueUsd: number;
-  weightedApy: number;
-  projectedAnnualYield: number;
-}
-
 function startWeeklyPoller(bot: Bot<Context>) {
-  // Check every 6 hours. Only runs on Monday.
+  const interval = DEV_MODE ? 60_000 : 6 * 60 * 60 * 1000;
+  const deliveredWallets = new Set<string>();
+
   setInterval(async () => {
-    const day = new Date().getUTCDay();
-    const hour = new Date().getUTCHours();
-    // Monday = 1, deliver around 9 UTC
-    if (day !== 1 || hour < 8 || hour > 10) return;
+    if (!DEV_MODE) {
+      const day = new Date().getUTCDay();
+      const hour = new Date().getUTCHours();
+      if (day !== 1 || hour < 8 || hour > 10) return;
+    }
 
     try {
-      const resp = (await apiGet("/api/alerts/weekly/users")) as { users: WeeklyUser[] };
+      const resp = (await apiGet("/api/alerts/summary/users")) as { users: SummaryUser[] };
       if (!resp.users || resp.users.length === 0) return;
 
       for (const user of resp.users) {
         try {
-          const chatId = Number(user.chat_id);
-          if (!chatId) continue;
+          if (DEV_MODE && deliveredWallets.has(user.wallet_address)) continue;
 
-          const summary = (await apiGet(`/api/alerts/weekly/${user.wallet_address}`)) as WeeklySummaryResponse;
+          const chatId = Number(user.chat_id);
+          if (!chatId || !user.wallet_address) continue;
+
+          const summary = (await apiGet(`/api/alerts/weekly/${user.wallet_address}`)) as PortfolioSummaryResponse;
           if (!summary.template) continue;
 
-          // Generate Haiku recommendation from structured data
           const recommendation = await generateRecommendation(summary);
           const message = recommendation
             ? `${summary.template}\n\n${recommendation}`
             : summary.template;
 
           await bot.api.sendMessage(chatId, message);
+          if (DEV_MODE) deliveredWallets.add(user.wallet_address);
         } catch (err) {
           console.error(`[alert-poller] Weekly summary failed for user ${user.user_id}:`, err);
         }
@@ -152,11 +148,11 @@ function startWeeklyPoller(bot: Bot<Context>) {
     } catch {
       // Silently fail
     }
-  }, 6 * 60 * 60 * 1000); // Every 6 hours
+  }, interval);
 }
 
 /** Generate 1-2 personalized recommendation sentences using Haiku. */
-async function generateRecommendation(summary: WeeklySummaryResponse): Promise<string | null> {
+export async function generateRecommendation(summary: PortfolioSummaryResponse): Promise<string | null> {
   const apiKey = process.env.PLATFORM_ANTHROPIC_KEY;
   if (!apiKey || summary.positions.length === 0) return null;
 
@@ -184,27 +180,4 @@ async function generateRecommendation(summary: WeeklySummaryResponse): Promise<s
     console.error("[alert-poller] Haiku recommendation failed:", err);
     return null;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Formatters
-// ---------------------------------------------------------------------------
-
-function formatDigest(digest: DigestResponse): string {
-  const lines: string[] = ["Your daily DeFi update:"];
-
-  for (const [category, items] of Object.entries(digest.grouped)) {
-    lines.push("");
-    lines.push(category);
-    for (const item of items) {
-      lines.push(`- ${item.body}`);
-    }
-  }
-
-  if (digest.total === 0) {
-    lines.push("");
-    lines.push("No notable changes today.");
-  }
-
-  return lines.join("\n");
 }

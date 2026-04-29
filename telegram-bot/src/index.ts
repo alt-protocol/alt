@@ -23,14 +23,18 @@ process.on("unhandledRejection", (err) => {
 console.log("Starting Akashi Telegram Bot...");
 
 // Register commands with Telegram
-await bot.api.setMyCommands([
+const commands = [
   { command: "start", description: "Register with Akashi" },
   { command: "connect", description: "Link your Solana wallet" },
   { command: "settings", description: "View/update settings" },
   { command: "usage", description: "View token usage and costs" },
   { command: "soul", description: "Customize bot personality" },
   { command: "reset", description: "Clear all data and start fresh" },
-]);
+];
+if (!process.env.WEBHOOK_URL) {
+  commands.push({ command: "test_alerts", description: "Test all alert tiers (dev)" });
+}
+await bot.api.setMyCommands(commands);
 
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 

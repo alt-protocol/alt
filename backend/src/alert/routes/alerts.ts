@@ -1,23 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import { z } from "zod";
 import { eq, and, isNull, sql } from "drizzle-orm";
 import { db } from "../db/connection.js";
-import { deliveries, digestQueue, rules, userSubscriptions } from "../db/schema.js";
-import { getWeeklySummaryUsers, buildWeeklySummary, formatWeeklySummaryTemplate } from "../services/weekly-summary.js";
-import { pgSchema, serial, integer, bigint, boolean } from "drizzle-orm/pg-core";
-
-// Cross-schema read for telegram user preferences
-const tgSchema = pgSchema("telegram");
-const tgUsers = tgSchema.table("users", {
-  id: serial("id").primaryKey(),
-  chat_id: bigint("chat_id", { mode: "bigint" }).notNull(),
-});
-const tgPrefs = tgSchema.table("user_preferences", {
-  id: serial("id").primaryKey(),
-  user_id: integer("user_id").notNull(),
-  alerts_enabled: boolean("alerts_enabled").notNull(),
-  digest_hour_utc: integer("digest_hour_utc"),
-});
+import { deliveries, events, rules, userSubscriptions } from "../db/schema.js";
+import { getSummaryUsers, buildPortfolioSummary, formatDailyTemplate, formatWeeklyTemplate } from "../services/portfolio-summary.js";
 
 export async function alertRoutes(app: FastifyInstance) {
   // GET /pending — Bot polls for undelivered critical alerts
@@ -27,7 +12,7 @@ export async function alertRoutes(app: FastifyInstance) {
     const tier = request.query.tier ?? "critical";
     const limit = Math.min(Number(request.query.limit) || 20, 50);
 
-    const pending = await db
+    const rows = await db
       .select({
         id: deliveries.id,
         user_id: deliveries.user_id,
@@ -47,7 +32,8 @@ export async function alertRoutes(app: FastifyInstance) {
       )
       .limit(limit);
 
-    return { alerts: pending };
+    // Convert BigInt chat_id to string for JSON serialization
+    return { alerts: rows.map((r) => ({ ...r, chat_id: String(r.chat_id) })) };
   });
 
   // POST /:id/delivered — Bot marks an alert as delivered
@@ -75,99 +61,11 @@ export async function alertRoutes(app: FastifyInstance) {
     return { success: true };
   });
 
-  // GET /digest-ready — Users whose digest_hour_utc matches current UTC hour and have queued items
-  app.get("/digest-ready", async () => {
-    const currentHour = new Date().getUTCHours();
+  // Digest endpoints removed — daily summary is now portfolio-centric (GET /daily/:walletAddress)
 
-    const ready = await db
-      .select({
-        user_id: digestQueue.user_id,
-        item_count: sql<number>`count(*)::int`,
-      })
-      .from(digestQueue)
-      .innerJoin(tgPrefs, eq(tgPrefs.user_id, digestQueue.user_id))
-      .where(eq(tgPrefs.digest_hour_utc, currentHour))
-      .groupBy(digestQueue.user_id);
-
-    // Get chat_ids for ready users
-    const userIds = ready.map((r) => r.user_id);
-    if (userIds.length === 0) return { users: [] };
-
-    const users = await db
-      .select({ id: tgUsers.id, chat_id: tgUsers.chat_id })
-      .from(tgUsers)
-      .where(sql`${tgUsers.id} = ANY(${userIds})`);
-
-    const chatMap = new Map(users.map((u) => [u.id, u.chat_id]));
-
-    return {
-      users: ready.map((r) => ({
-        user_id: r.user_id,
-        chat_id: String(chatMap.get(r.user_id) ?? 0),
-        item_count: r.item_count,
-      })),
-    };
-  });
-
-  // GET /digest/:userId — Fetch all digest items for a user, grouped by rule
-  app.get<{ Params: { userId: string } }>("/digest/:userId", async (request, reply) => {
-    const userId = Number(request.params.userId);
-    if (!userId) return reply.status(400).send({ error: "Invalid user ID" });
-
-    const items = await db
-      .select({
-        id: digestQueue.id,
-        rule_id: digestQueue.rule_id,
-        title: digestQueue.title,
-        body: digestQueue.body,
-        metadata: digestQueue.metadata,
-        created_at: digestQueue.created_at,
-      })
-      .from(digestQueue)
-      .where(eq(digestQueue.user_id, userId))
-      .orderBy(digestQueue.created_at);
-
-    // Get rule names for grouping
-    const ruleIds = [...new Set(items.map((i) => i.rule_id))];
-    const ruleRows = ruleIds.length > 0
-      ? await db.select({ id: rules.id, name: rules.name, slug: rules.slug }).from(rules).where(sql`${rules.id} = ANY(${ruleIds})`)
-      : [];
-    const ruleMap = new Map(ruleRows.map((r) => [r.id, r]));
-
-    // Group items by rule
-    const grouped: Record<string, Array<{ title: string; body: string; metadata: unknown }>> = {};
-    for (const item of items) {
-      const rule = ruleMap.get(item.rule_id);
-      const key = rule?.name ?? "Other";
-      if (!grouped[key]) grouped[key] = [];
-      grouped[key].push({ title: item.title, body: item.body, metadata: item.metadata });
-    }
-
-    return { items, grouped, total: items.length };
-  });
-
-  // POST /digest/:userId/delivered — Clear digest queue and record delivery
-  app.post<{ Params: { userId: string } }>("/digest/:userId/delivered", async (request, reply) => {
-    const userId = Number(request.params.userId);
-    if (!userId) return reply.status(400).send({ error: "Invalid user ID" });
-
-    // Get items before clearing
-    const items = await db
-      .select({ id: digestQueue.id, rule_id: digestQueue.rule_id })
-      .from(digestQueue)
-      .where(eq(digestQueue.user_id, userId));
-
-    if (items.length === 0) return { success: true, cleared: 0 };
-
-    // Clear the queue
-    await db.delete(digestQueue).where(eq(digestQueue.user_id, userId));
-
-    return { success: true, cleared: items.length };
-  });
-
-  // GET /weekly/users — Users eligible for weekly summary
-  app.get("/weekly/users", async () => {
-    const users = await getWeeklySummaryUsers();
+  // GET /summary/users — Users eligible for daily/weekly summaries
+  app.get("/summary/users", async () => {
+    const users = await getSummaryUsers();
     return {
       users: users.map((u) => ({
         user_id: u.userId,
@@ -177,13 +75,24 @@ export async function alertRoutes(app: FastifyInstance) {
     };
   });
 
-  // GET /weekly/:walletAddress — Build weekly summary data for a wallet
+  // GET /daily/:walletAddress — Daily portfolio snapshot
+  app.get<{ Params: { walletAddress: string } }>("/daily/:walletAddress", async (request, reply) => {
+    const { walletAddress } = request.params;
+    if (!walletAddress) return reply.status(400).send({ error: "Wallet address required" });
+
+    const data = await buildPortfolioSummary(walletAddress);
+    const template = formatDailyTemplate(data);
+
+    return { ...data, template };
+  });
+
+  // GET /weekly/:walletAddress — Weekly portfolio review
   app.get<{ Params: { walletAddress: string } }>("/weekly/:walletAddress", async (request, reply) => {
     const { walletAddress } = request.params;
     if (!walletAddress) return reply.status(400).send({ error: "Wallet address required" });
 
-    const data = await buildWeeklySummary(walletAddress);
-    const template = formatWeeklySummaryTemplate(data);
+    const data = await buildPortfolioSummary(walletAddress);
+    const template = formatWeeklyTemplate(data);
 
     return { ...data, template };
   });
@@ -240,5 +149,109 @@ export async function alertRoutes(app: FastifyInstance) {
       });
 
     return { success: true, rule_id, enabled };
+  });
+
+  // -------------------------------------------------------------------------
+  // Test endpoints (dev only)
+  // -------------------------------------------------------------------------
+
+  if (process.env.NODE_ENV === "production") return;
+
+  // POST /test/critical — Insert a fake critical alert for bot to deliver
+  app.post<{
+    Body: { user_id: number; chat_id: string };
+  }>("/test/critical", async (request, reply) => {
+    const { user_id, chat_id } = request.body as { user_id: number; chat_id: string };
+    if (!user_id || !chat_id) return reply.status(400).send({ error: "user_id and chat_id required" });
+
+    // Find the depeg rule for a realistic test
+    const [depegRule] = await db.select({ id: rules.id }).from(rules).where(eq(rules.slug, "depeg")).limit(1);
+    if (!depegRule) return reply.status(500).send({ error: "Depeg rule not seeded" });
+
+    const entityKey = `test:${Date.now()}`;
+    const title = "[TEST] Stablecoin Depeg Alert";
+    const body = "USDC price deviation: $0.985 (-150 bps from peg). This is a test alert.";
+
+    const [event] = await db
+      .insert(events)
+      .values({
+        rule_id: depegRule.id,
+        entity_key: entityKey,
+        tier: "critical",
+        title,
+        body,
+        metadata: { test: true },
+        detected_value: "150",
+      })
+      .returning({ id: events.id });
+
+    const [delivery] = await db
+      .insert(deliveries)
+      .values({
+        user_id,
+        chat_id: BigInt(chat_id),
+        event_id: event.id,
+        rule_id: depegRule.id,
+        entity_key: entityKey,
+        delivery_type: "immediate",
+        message_text: `${title}\n${body}`,
+        delivered_at: null,
+      })
+      .returning({ id: deliveries.id });
+
+    return { success: true, delivery_id: delivery.id, message: "Critical alert queued. Bot will deliver within 60s." };
+  });
+
+  // POST /test/run — Seed a test critical alert + trigger daily/weekly via real data
+  app.post("/test/run", async () => {
+    const users = await getSummaryUsers();
+    if (users.length === 0) {
+      return { error: "No alert-enabled users found. Run /start in Telegram first." };
+    }
+
+    const allRules = await db.select({ id: rules.id, slug: rules.slug }).from(rules);
+    const depegRuleId = allRules.find((r) => r.slug === "depeg")?.id;
+
+    let criticalCount = 0;
+
+    for (const user of users) {
+      if (depegRuleId) {
+        const entityKey = `test:${Date.now()}:critical`;
+        const title = "[TEST] Stablecoin Depeg Alert";
+        const body = "USDC price deviation: $0.985 (-150 bps from peg). This is a test alert.";
+
+        const [event] = await db
+          .insert(events)
+          .values({
+            rule_id: depegRuleId,
+            entity_key: entityKey,
+            tier: "critical",
+            title,
+            body,
+            metadata: { test: true },
+            detected_value: "150",
+          })
+          .returning({ id: events.id });
+
+        await db.insert(deliveries).values({
+          user_id: user.userId,
+          chat_id: user.chatId,
+          event_id: event.id,
+          rule_id: depegRuleId,
+          entity_key: entityKey,
+          delivery_type: "immediate",
+          message_text: `${title}\n${body}`,
+          delivered_at: null,
+        });
+        criticalCount++;
+      }
+    }
+
+    return {
+      success: true,
+      users_seeded: users.length,
+      critical_count: criticalCount,
+      message: "Critical alert seeded. Daily + weekly summaries use real portfolio data — bot delivers within ~60s.",
+    };
   });
 }

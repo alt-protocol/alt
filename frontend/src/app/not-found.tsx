@@ -9,7 +9,7 @@ export default function NotFound() {
           This page does not exist.
         </p>
         <Link
-          href="/dashboard"
+          href="/discover"
           className="bg-white text-surface font-sans text-sm uppercase tracking-[0.05em] px-6 py-2 rounded-sm hover:opacity-90 transition-opacity"
         >
           Go to Dashboard

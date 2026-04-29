@@ -8,6 +8,10 @@ export interface PegStabilityData {
   max_deviation_7d: number | null;
   peg_adherence_30d: number | null;
   max_deviation_30d: number | null;
+  // 1d
+  min_price_1d: number | null;
+  max_price_1d: number | null;
+  snapshot_count_1d: number;
   // All stables
   volatility_7d: number | null;
   volatility_30d: number | null;

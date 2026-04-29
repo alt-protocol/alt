@@ -34,7 +34,7 @@ const SEED_PROTOCOLS = [
   },
   {
     slug: "exponent",
-    name: "Exponent Finance",
+    name: "Exponent",
     description:
       "Fixed-yield tokenization protocol on Solana (Pendle-equivalent).",
     website_url: "https://exponent.finance",

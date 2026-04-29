@@ -28,6 +28,27 @@ type SignAndSendFeature = {
 
 const SETUP_TX_WARMUP_MS = 2000;
 
+/** Replace the blockhash in a serialized transaction with a fresh one.
+ *  Prevents "BlockhashNotFound" when backend and wallet use different RPCs. */
+async function refreshBlockhash(txBytes: Uint8Array): Promise<Uint8Array> {
+  const {
+    getTransactionDecoder, getTransactionEncoder,
+    getCompiledTransactionMessageDecoder, getCompiledTransactionMessageEncoder,
+  } = await import("@solana/kit");
+  const { getRpc } = await import("@/lib/rpc");
+
+  const { value: bh } = await getRpc().getLatestBlockhash().send();
+
+  const tx = getTransactionDecoder().decode(txBytes);
+  const msg = getCompiledTransactionMessageDecoder().decode(tx.messageBytes);
+  const updatedMsg = { ...msg, lifetimeToken: bh.blockhash as string };
+  const newMsgBytes = getCompiledTransactionMessageEncoder().encode(updatedMsg);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const encoded = getTransactionEncoder().encode({ ...tx, messageBytes: newMsgBytes as any });
+  return new Uint8Array(encoded);
+}
+
 export default function SignContent() {
   const searchParams = useSearchParams();
   // Reconstruct action URL if it was truncated during copy-paste.
@@ -122,8 +143,9 @@ export default function SignContent() {
         for (let i = 0; i < setupTxs.length; i++) {
           setStatusDetail(`Step ${i + 1} of ${setupTxs.length + 1}`);
           const setupBytes = Uint8Array.from(atob(setupTxs[i]), (c) => c.charCodeAt(0));
+          const freshSetup = await refreshBlockhash(setupBytes);
           await feature.signAndSendTransaction({
-            transaction: new Uint8Array(setupBytes),
+            transaction: freshSetup,
             account: selectedAccount,
             chain: "solana:mainnet",
           });
@@ -133,11 +155,12 @@ export default function SignContent() {
         setStatusDetail(`Step ${setupTxs.length + 1} of ${setupTxs.length + 1}`);
       }
 
-      // Decode base64 to bytes and sign main transaction
+      // Decode base64 to bytes, refresh blockhash, and sign main transaction
       const txBytes = Uint8Array.from(atob(txBase64), (c) => c.charCodeAt(0));
+      const freshTxBytes = await refreshBlockhash(txBytes);
 
       const [result] = await feature.signAndSendTransaction({
-        transaction: new Uint8Array(txBytes),
+        transaction: freshTxBytes,
         account: selectedAccount,
         chain: "solana:mainnet",
       });
