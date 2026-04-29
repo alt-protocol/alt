@@ -3,7 +3,7 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { useSelectedWalletAccount } from "@solana/react";
 import { api } from "@/lib/api";
 import type { UserPositionOut, PortfolioAnalytics } from "@/lib/api";
-import { fmtDate } from "@/lib/format";
+
 import { queryKeys } from "@/lib/queryKeys";
 
 export interface ChartPoint {
@@ -36,11 +36,11 @@ const EMPTY_STABLECOIN: PortfolioAnalytics["stablecoin"] = {
 export function usePortfolioData() {
   const [selectedAccount] = useSelectedWalletAccount();
   const walletAddress = selectedAccount?.address ?? null;
-  const [activeTab, setActiveTab] = useState<"positions" | "history">("positions");
   const [activeType, setActiveType] = useState("all");
+  const [filterMode, setFilterMode] = useState<"strategy" | "protocol">("strategy");
   const [chartPeriod, setChartPeriod] = useState<"7d" | "30d" | "90d">("7d");
   const queryClient = useQueryClient();
-  // Track wallet on mount, then invalidate status to pick up "fetching" state
+
   useEffect(() => {
     if (!walletAddress) return;
     api.trackWallet(walletAddress).then(() => {
@@ -72,12 +72,6 @@ export function usePortfolioData() {
     enabled: !!walletAddress,
   });
 
-  const eventsQuery = useQuery({
-    queryKey: queryKeys.positions.events(walletAddress!),
-    queryFn: () => api.getPositionEvents(walletAddress!),
-    enabled: !!walletAddress && activeTab === "history",
-  });
-
   const analyticsQuery = useQuery({
     queryKey: queryKeys.wallet.analytics(walletAddress!),
     queryFn: () => api.getPortfolioAnalytics(walletAddress!),
@@ -95,7 +89,7 @@ export function usePortfolioData() {
       analyticsQuery.refetch();
     }
     prevFetchStatus.current = status;
-  }, [statusQuery.data?.fetch_status]);
+  }, [statusQuery.data?.fetch_status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const positions = (positionsQuery.data ?? []).filter((p) => !p.is_closed);
 
@@ -108,7 +102,21 @@ export function usePortfolioData() {
     return result;
   }, [positions]);
 
-  const visiblePositions = activeType === "all" ? positions : (byType[activeType] ?? []);
+  const byProtocol = useMemo(() => {
+    const result: Record<string, UserPositionOut[]> = {};
+    for (const p of positions) {
+      const slug = p.protocol_slug ?? "unknown";
+      if (!result[slug]) result[slug] = [];
+      result[slug].push(p);
+    }
+    return result;
+  }, [positions]);
+
+  const visiblePositions = useMemo(() => {
+    if (activeType === "all") return positions;
+    if (filterMode === "protocol") return byProtocol[activeType] ?? [];
+    return byType[activeType] ?? [];
+  }, [activeType, filterMode, positions, byType, byProtocol]);
 
   const summary = analyticsQuery.data?.summary ?? EMPTY_SUMMARY;
   const stableSummary = analyticsQuery.data?.stablecoin ?? EMPTY_STABLECOIN;
@@ -117,7 +125,7 @@ export function usePortfolioData() {
   const chartData: ChartPoint[] = useMemo(() => {
     if (!historyQuery.data) return [];
     return historyQuery.data.map((pt) => ({
-      date: fmtDate(pt.snapshot_at).split(" · ")[0],
+      date: new Date(pt.snapshot_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
       value: pt.deposit_amount_usd,
       pnl: pt.pnl_usd,
     }));
@@ -132,18 +140,17 @@ export function usePortfolioData() {
 
   return {
     walletAddress,
-    activeTab,
-    setActiveTab,
     activeType,
     setActiveType,
+    filterMode,
+    setFilterMode,
     chartPeriod,
     setChartPeriod,
     positionsQuery,
     historyQuery,
-    eventsQuery,
-    analyticsQuery,
     positions,
     byType,
+    byProtocol,
     visiblePositions,
     summary,
     stableSummary,

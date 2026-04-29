@@ -49,7 +49,7 @@ function RiskBadge({ y }: { y: YieldOpportunity }) {
     <span className="relative group/risk inline-block">
       <span className={`text-[0.75rem] font-medium ${risk.colorClass} cursor-help border-b border-dashed border-current`}>{risk.label}</span>
       <div className="invisible group-hover/risk:visible opacity-0 group-hover/risk:opacity-100 transition-opacity absolute right-0 bottom-full mb-2 z-[100] pointer-events-none bg-[#1a1a1a] border border-outline-ghost rounded-sm px-3 py-2.5 shadow-lg min-w-[180px]">
-        <div className="text-[0.6rem] uppercase tracking-[0.05em] text-foreground-muted mb-1.5 font-medium">Risk factors</div>
+        <div className="text-[0.6rem] uppercase tracking-[0.05em] text-foreground-muted mb-1.5 font-medium">Details</div>
         {risk.reasons.map((r, i) => (
           <div key={i} className="text-[0.7rem] text-foreground leading-relaxed">• {r}</div>
         ))}
@@ -61,15 +61,15 @@ function RiskBadge({ y }: { y: YieldOpportunity }) {
 function RiskHeader() {
   return (
     <span className="relative group/rh inline-block cursor-help">
-      <span className="border-b border-dashed border-foreground-muted">Risk</span>
+      <span className="border-b border-dashed border-foreground-muted">Token Info</span>
       <div className="invisible group-hover/rh:visible opacity-0 group-hover/rh:opacity-100 transition-opacity absolute right-0 top-full mt-2 z-[100] pointer-events-none bg-[#1a1a1a] border border-outline-ghost rounded-sm px-3 py-2.5 shadow-lg min-w-[220px] normal-case tracking-normal font-normal">
         <div className="text-[0.7rem] text-foreground leading-relaxed whitespace-normal">
-          Based on token warnings, peg spread, lock periods, and DEX liquidity.
+          Token-level signals based on warnings, peg spread, lock periods, and DEX liquidity. Not a complete risk assessment.
         </div>
         <div className="mt-1.5 space-y-0.5 text-[0.65rem] text-foreground-muted leading-relaxed whitespace-normal">
-          <div><span className="text-red-400 font-medium">High</span> — severe warnings or &gt;0.5% spread</div>
-          <div><span className="text-yellow-400 font-medium">Medium</span> — any warnings or &gt;0.2% spread</div>
-          <div><span className="text-neon font-medium">Low</span> — no issues detected</div>
+          <div><span className="text-red-400 font-medium">Review</span> — notable flags, check details</div>
+          <div><span className="text-yellow-400 font-medium">Note</span> — minor flags worth knowing</div>
+          <div><span className="text-neon font-medium">Clear</span> — no issues detected</div>
         </div>
       </div>
     </span>
@@ -136,7 +136,7 @@ const COLUMNS: ColDef[] = [
     renderCell: (y) => <span className="text-foreground-muted tabular-nums">{fmtTvl(y.peg_stability?.liquidity_usd)}</span>,
   },
   {
-    key: "risk", label: "Risk", align: "right",
+    key: "risk", label: "Token Info", align: "right",
     renderHeader: () => <RiskHeader />,
     renderCell: (y) => <RiskBadge y={y} />,
   },
@@ -199,7 +199,7 @@ export default function YieldTable({ yields, sortField, sortDir, toggleSort, vis
                   </span>
                 </div>
                 <div className="flex justify-between items-baseline">
-                  <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Risk</span>
+                  <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Token Info</span>
                   <span className={`text-[0.8rem] font-sans font-medium ${risk.colorClass}`}>
                     {risk.label}
                   </span>

@@ -144,14 +144,6 @@ function PositionCard({ position, showProtocol, fields, onClick }: { position: U
 }
 
 export function getColumnsForType(type: string): ColumnDef[] {
-  const detailsAction: ColumnDef = {
-    header: "",
-    align: "right",
-    render: (p) => p.opportunity_id ? (
-      <button onClick={(e) => { e.stopPropagation(); }} className="border border-secondary text-secondary-text text-[0.7rem] rounded-sm px-4 py-1.5 hover:bg-secondary hover:text-foreground transition-colors" data-navigate={`/yields/${p.opportunity_id}`}>Details</button>
-    ) : null,
-  };
-
   const apyCurrent: ColumnDef = { header: "APY Current", title: "Current market APY from the protocol. For multiply, net of borrow costs.", align: "right", render: (p) => <span className={pnlColor(p.apy)}>{fmtApy(p.apy)}</span> };
   const apyRealized: ColumnDef = { header: "APY Realized", title: "Your actual annualized return based on PnL and time held.", align: "right", render: (p) => <span className={pnlColor(p.apy_realized)}>{fmtApy(p.apy_realized)}</span> };
   const projYield: ColumnDef = { header: "Proj. Yield/yr", title: "Estimated annual yield based on current APY", align: "right", render: (p) => { const v = (p.deposit_amount_usd ?? 0) * ((p.apy ?? 0) / 100); return <span className="text-foreground">{fmtUsd(v || null)}</span>; } };
@@ -167,7 +159,6 @@ export function getColumnsForType(type: string): ColumnDef[] {
         projYield,
         { header: "Interest Earned", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtPnlUsd(p.pnl_usd)}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
-        detailsAction,
       ];
     case "multiply":
       return [
@@ -180,7 +171,6 @@ export function getColumnsForType(type: string): ColumnDef[] {
         { header: "PnL ($)", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtPnlUsd(p.pnl_usd)}</span> },
         { header: "PnL (%)", align: "right", render: (p) => <span className={pnlColor(p.pnl_pct)}>{fmtPct(p.pnl_pct)}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
-        detailsAction,
       ];
     case "earn_vault":
       return [
@@ -192,7 +182,6 @@ export function getColumnsForType(type: string): ColumnDef[] {
         projYield,
         { header: "Interest Earned", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtPnlUsd(p.pnl_usd)}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
-        detailsAction,
       ];
     case "insurance_fund":
       return [
@@ -205,7 +194,6 @@ export function getColumnsForType(type: string): ColumnDef[] {
         { header: "PnL", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtPnlUsd(p.pnl_usd)}</span> },
         { header: "Lock", align: "right", render: (p) => <span className="text-foreground-muted">{p.lock_period_days > 0 ? `${p.lock_period_days}d` : "\u2014"}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
-        detailsAction,
       ];
     case "earn":
       return [
@@ -217,12 +205,11 @@ export function getColumnsForType(type: string): ColumnDef[] {
         projYield,
         { header: "Interest Earned", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtPnlUsd(p.pnl_usd)}</span> },
         { header: "Days Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}</span> },
-        detailsAction,
       ];
     default: // "all"
       return [
         { header: "Protocol", align: "left", render: (p) => <ProtocolChip slug={p.protocol_slug} /> },
-        { header: "Type", align: "left", render: (p) => <span className="text-foreground-muted">{fmtProductType(p.product_type)}</span> },
+        { header: "Strategy", align: "left", render: (p) => <span className="text-foreground-muted">{fmtProductType(p.product_type)}</span> },
         { header: "Token", align: "left", render: (p) => <TokenWithType p={p} color="text-foreground" /> },
         { header: "Net Value", align: "right", render: (p) => <NetValue position={p} /> },
         { header: "PnL", align: "right", render: (p) => <span className={pnlColor(p.pnl_usd)}>{fmtPnlUsd(p.pnl_usd)}</span> },
@@ -230,7 +217,6 @@ export function getColumnsForType(type: string): ColumnDef[] {
         apyRealized,
         projYield,
         { header: "Held", align: "right", render: (p) => <span className="text-foreground-muted">{fmtDays(p.held_days)}{p.lock_period_days > 0 ? ` (${p.lock_period_days}d lock)` : ""}</span> },
-        detailsAction,
       ];
   }
 }

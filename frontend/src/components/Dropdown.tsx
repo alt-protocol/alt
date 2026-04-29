@@ -80,7 +80,7 @@ export default function Dropdown({ value, options, onChange, placeholder = "Sele
               className="w-full bg-surface text-foreground text-[0.8rem] font-sans outline-none border-b-2 border-transparent focus:border-neon pb-1 placeholder:text-foreground-muted"
             />
           </div>
-          <div className="max-h-[200px] overflow-y-auto">
+          <div className="max-h-[200px] overflow-y-auto scrollbar-dark">
             {filtered.map((opt) => (
               <button
                 key={opt.value}

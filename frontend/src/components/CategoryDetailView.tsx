@@ -114,8 +114,8 @@ export default function CategoryDetailView({ yield_: y, id }: Props) {
         <RefreshButton queryKeys={[queryKeys.yields.detail(id)]} className="ml-auto" />
       </div>
 
-      {/* Page tabs */}
-      {walletAddress && (
+      {/* Page tabs — only show if user has an active position */}
+      {walletAddress && hasPosition && (
         <div className="flex gap-6 mb-6 border-b border-outline-ghost">
           {(["overview", "position"] as const).map((t) => (
             <button

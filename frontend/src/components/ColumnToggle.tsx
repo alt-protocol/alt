@@ -1,18 +1,17 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import type { ColumnKey } from "@/lib/hooks/useColumnToggle";
-import { COLUMN_LABELS } from "@/lib/hooks/useColumnToggle";
 
-interface ColumnToggleProps {
-  visibleColumns: readonly ColumnKey[];
-  allColumns: readonly ColumnKey[];
-  requiredColumns: readonly ColumnKey[];
-  toggleColumn: (key: ColumnKey) => void;
+interface ColumnToggleProps<K extends string> {
+  visibleColumns: readonly K[];
+  allColumns: readonly K[];
+  requiredColumns: readonly K[];
+  labels: Record<K, string>;
+  toggleColumn: (key: K) => void;
   resetColumns: () => void;
 }
 
-export default function ColumnToggle({ visibleColumns, allColumns, requiredColumns, toggleColumn, resetColumns }: ColumnToggleProps) {
+export default function ColumnToggle<K extends string>({ visibleColumns, allColumns, requiredColumns, labels, toggleColumn, resetColumns }: ColumnToggleProps<K>) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -61,7 +60,7 @@ export default function ColumnToggle({ visibleColumns, allColumns, requiredColum
                   onChange={() => toggleColumn(key)}
                   className="accent-neon w-3 h-3"
                 />
-                <span className="text-foreground-muted">{COLUMN_LABELS[key]}</span>
+                <span className="text-foreground-muted">{labels[key]}</span>
               </label>
             );
           })}

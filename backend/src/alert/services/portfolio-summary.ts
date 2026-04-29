@@ -1,6 +1,6 @@
-import { eq, and, sql, inArray } from "drizzle-orm";
+import { eq, and, sql, inArray, gte, lt, desc } from "drizzle-orm";
 import { db } from "../db/connection.js";
-import { yieldOpportunities } from "../../discover/db/schema.js";
+import { yieldOpportunities, yieldSnapshots, stablecoinPegStats } from "../../discover/db/schema.js";
 import { userPositions } from "../../monitor/db/schema.js";
 import { pgSchema, serial, integer, bigint, varchar, boolean } from "drizzle-orm/pg-core";
 
@@ -176,6 +176,293 @@ export async function buildPortfolioSummary(walletAddress: string): Promise<Port
 }
 
 // ---------------------------------------------------------------------------
+// Daily summary (change-focused)
+// ---------------------------------------------------------------------------
+
+const DAILY_THRESHOLDS = {
+  aprChangePp: 0.5,
+  healthFactor: 1.5,
+  volatility1d: 0.5,
+  tvlDropPct: 20,
+  minPositionUsd: 10,
+};
+
+export interface DailyAprChange {
+  name: string;
+  currentApy: number;
+  yesterdayApy: number;
+  changePp: number;
+  depositUsd: number;
+}
+
+export interface DailyRisk {
+  name: string;
+  type: "health_factor" | "volatility" | "tvl_drop";
+  value: number;
+  yesterdayValue: number | null;
+  message: string;
+}
+
+export interface DailySummary {
+  totalValueUsd: number;
+  weightedApy: number;
+  projectedAnnualYield: number;
+  aprChanges: DailyAprChange[];
+  risks: DailyRisk[];
+}
+
+/** Build daily summary: what changed today vs yesterday. */
+export async function buildDailySummary(walletAddress: string): Promise<DailySummary> {
+  const now = new Date();
+  const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const twoDaysAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+
+  // 1. Latest positions grouped by opportunity_id
+  const latestSub = db
+    .select({
+      opportunity_id: userPositions.opportunity_id,
+      latest_at: sql<Date>`MAX(${userPositions.snapshot_at})`.as("latest_at"),
+    })
+    .from(userPositions)
+    .where(
+      and(
+        eq(userPositions.wallet_address, walletAddress),
+        eq(userPositions.is_closed, false),
+      ),
+    )
+    .groupBy(userPositions.opportunity_id)
+    .as("latest_sub");
+
+  const rows = await db
+    .select({
+      opportunity_id: userPositions.opportunity_id,
+      deposit_usd: sql<number>`SUM(${userPositions.deposit_amount_usd}::numeric)`.as("deposit_usd"),
+      apy: sql<number>`AVG(${userPositions.apy}::numeric)`.as("apy"),
+      min_health: sql<number>`MIN((${userPositions.extra_data}->>'health_factor')::numeric)`.as("min_health"),
+      opp_name: yieldOpportunities.name,
+      token_symbol: sql<string>`MIN(${userPositions.token_symbol})`.as("token_symbol"),
+      protocol_slug: sql<string>`MIN(${userPositions.protocol_slug})`.as("protocol_slug"),
+    })
+    .from(userPositions)
+    .innerJoin(
+      latestSub,
+      and(
+        sql`${userPositions.opportunity_id} = ${latestSub.opportunity_id}`,
+        eq(userPositions.snapshot_at, latestSub.latest_at),
+        eq(userPositions.wallet_address, walletAddress),
+      ),
+    )
+    .leftJoin(
+      yieldOpportunities,
+      eq(userPositions.opportunity_id, yieldOpportunities.id),
+    )
+    .groupBy(userPositions.opportunity_id, yieldOpportunities.name);
+
+  // Filter tiny positions
+  const positions = rows.filter((r) => Number(r.deposit_usd) >= DAILY_THRESHOLDS.minPositionUsd);
+
+  // Totals
+  const totalValueUsd = positions.reduce((s, r) => s + Number(r.deposit_usd), 0);
+  const weightedApy = totalValueUsd > 0
+    ? positions.reduce((s, r) => s + Number(r.apy) * Number(r.deposit_usd), 0) / totalValueUsd
+    : 0;
+  const projectedAnnualYield = totalValueUsd * (weightedApy / 100);
+
+  // 2. Yesterday's APY per opportunity from yield_snapshots
+  const oppIds = positions
+    .map((r) => r.opportunity_id)
+    .filter((id): id is number => id !== null);
+
+  const yesterdayApys = oppIds.length > 0
+    ? await db
+        .select({
+          opportunity_id: yieldSnapshots.opportunity_id,
+          apy: yieldSnapshots.apy,
+        })
+        .from(yieldSnapshots)
+        .where(
+          and(
+            inArray(yieldSnapshots.opportunity_id, oppIds),
+            gte(yieldSnapshots.snapshot_at, twoDaysAgo),
+            lt(yieldSnapshots.snapshot_at, yesterday),
+          ),
+        )
+        .orderBy(desc(yieldSnapshots.snapshot_at))
+    : [];
+
+  // Deduplicate: first row per opportunity_id (most recent within window)
+  const yesterdayApyMap = new Map<number, number>();
+  for (const s of yesterdayApys) {
+    if (!yesterdayApyMap.has(s.opportunity_id)) {
+      yesterdayApyMap.set(s.opportunity_id, Number(s.apy) || 0);
+    }
+  }
+
+  // 3. Yesterday's health factor from older position snapshots
+  const yesterdayHealthMap = new Map<number, number>();
+  if (oppIds.length > 0) {
+    const oldSnapshots = await db
+      .select({
+        opportunity_id: userPositions.opportunity_id,
+        health_factor: sql<number>`MIN((${userPositions.extra_data}->>'health_factor')::numeric)`.as("health_factor"),
+      })
+      .from(userPositions)
+      .where(
+        and(
+          eq(userPositions.wallet_address, walletAddress),
+          eq(userPositions.is_closed, false),
+          inArray(userPositions.opportunity_id, oppIds),
+          gte(userPositions.snapshot_at, twoDaysAgo),
+          lt(userPositions.snapshot_at, yesterday),
+        ),
+      )
+      .groupBy(userPositions.opportunity_id);
+
+    for (const s of oldSnapshots) {
+      if (s.opportunity_id && s.health_factor) {
+        yesterdayHealthMap.set(s.opportunity_id, Number(s.health_factor));
+      }
+    }
+  }
+
+  // 4. Build APR changes (only significant ones)
+  const aprChanges: DailyAprChange[] = [];
+  for (const pos of positions) {
+    if (!pos.opportunity_id) continue;
+    const currentApy = Number(pos.apy);
+    const yesterdayApy = yesterdayApyMap.get(pos.opportunity_id);
+    if (yesterdayApy === undefined) continue;
+
+    const changePp = currentApy - yesterdayApy;
+    if (Math.abs(changePp) < DAILY_THRESHOLDS.aprChangePp) continue;
+
+    aprChanges.push({
+      name: pos.opp_name ?? `${pos.protocol_slug} ${pos.token_symbol ?? ""}`.trim(),
+      currentApy,
+      yesterdayApy,
+      changePp,
+      depositUsd: Number(pos.deposit_usd),
+    });
+  }
+  aprChanges.sort((a, b) => Math.abs(b.changePp) - Math.abs(a.changePp));
+
+  // 5. Build risks
+  const risks: DailyRisk[] = [];
+
+  // Health factor risks
+  for (const pos of positions) {
+    const hf = Number(pos.min_health);
+    if (!hf || hf <= 0 || hf >= DAILY_THRESHOLDS.healthFactor) continue;
+
+    const name = pos.opp_name ?? `${pos.protocol_slug} ${pos.token_symbol ?? ""}`.trim();
+    const yesterdayHf = pos.opportunity_id ? yesterdayHealthMap.get(pos.opportunity_id) ?? null : null;
+    const yesterdayStr = yesterdayHf ? ` (was ${yesterdayHf.toFixed(2)} yesterday)` : "";
+
+    risks.push({
+      name,
+      type: "health_factor",
+      value: hf,
+      yesterdayValue: yesterdayHf,
+      message: `${name}: health ${hf.toFixed(2)}${yesterdayStr}`,
+    });
+  }
+
+  // Stablecoin volatility risks
+  const tokenSymbols = [...new Set(positions.map((r) => r.token_symbol).filter(Boolean))] as string[];
+  if (tokenSymbols.length > 0) {
+    const volatileCoins = await db
+      .select({
+        symbol: stablecoinPegStats.symbol,
+        volatility_1d: stablecoinPegStats.volatility_1d,
+      })
+      .from(stablecoinPegStats)
+      .where(inArray(stablecoinPegStats.symbol, tokenSymbols));
+
+    for (const coin of volatileCoins) {
+      const vol = Number(coin.volatility_1d) || 0;
+      if (vol < DAILY_THRESHOLDS.volatility1d) continue;
+
+      risks.push({
+        name: coin.symbol,
+        type: "volatility",
+        value: vol,
+        yesterdayValue: null,
+        message: `${coin.symbol}: 24h volatility ${vol.toFixed(2)}%`,
+      });
+    }
+  }
+
+  // TVL drop risks
+  if (oppIds.length > 0) {
+    // Current TVL
+    const currentTvl = await db
+      .select({
+        opportunity_id: yieldSnapshots.opportunity_id,
+        tvl_usd: yieldSnapshots.tvl_usd,
+      })
+      .from(yieldSnapshots)
+      .where(
+        and(
+          inArray(yieldSnapshots.opportunity_id, oppIds),
+          gte(yieldSnapshots.snapshot_at, yesterday),
+        ),
+      )
+      .orderBy(desc(yieldSnapshots.snapshot_at));
+
+    const currentTvlMap = new Map<number, number>();
+    for (const s of currentTvl) {
+      if (!currentTvlMap.has(s.opportunity_id)) {
+        currentTvlMap.set(s.opportunity_id, Number(s.tvl_usd) || 0);
+      }
+    }
+
+    // Yesterday's TVL
+    const yesterdayTvl = await db
+      .select({
+        opportunity_id: yieldSnapshots.opportunity_id,
+        tvl_usd: yieldSnapshots.tvl_usd,
+      })
+      .from(yieldSnapshots)
+      .where(
+        and(
+          inArray(yieldSnapshots.opportunity_id, oppIds),
+          gte(yieldSnapshots.snapshot_at, twoDaysAgo),
+          lt(yieldSnapshots.snapshot_at, yesterday),
+        ),
+      )
+      .orderBy(desc(yieldSnapshots.snapshot_at));
+
+    const yesterdayTvlMap = new Map<number, number>();
+    for (const s of yesterdayTvl) {
+      if (!yesterdayTvlMap.has(s.opportunity_id)) {
+        yesterdayTvlMap.set(s.opportunity_id, Number(s.tvl_usd) || 0);
+      }
+    }
+
+    for (const pos of positions) {
+      if (!pos.opportunity_id) continue;
+      const curr = currentTvlMap.get(pos.opportunity_id);
+      const prev = yesterdayTvlMap.get(pos.opportunity_id);
+      if (!curr || !prev || prev === 0) continue;
+
+      const dropPct = ((prev - curr) / prev) * 100;
+      if (dropPct < DAILY_THRESHOLDS.tvlDropPct) continue;
+
+      const name = pos.opp_name ?? `${pos.protocol_slug} ${pos.token_symbol ?? ""}`.trim();
+      risks.push({
+        name,
+        type: "tvl_drop",
+        value: dropPct,
+        yesterdayValue: prev,
+        message: `${name}: TVL dropped ${dropPct.toFixed(0)}% (${formatUsd(prev)} → ${formatUsd(curr)})`,
+      });
+    }
+  }
+
+  return { totalValueUsd, weightedApy, projectedAnnualYield, aprChanges, risks };
+}
+
+// ---------------------------------------------------------------------------
 // Formatters
 // ---------------------------------------------------------------------------
 
@@ -185,36 +472,31 @@ function formatUsd(v: number): string {
   return `$${v.toFixed(0)}`;
 }
 
-/** Format daily portfolio snapshot (positions + APY changes + risks). */
-export function formatDailyTemplate(data: PortfolioSummary): string {
+/** Format daily summary: change-focused, not a position dump. */
+export function formatDailyTemplate(data: DailySummary): string {
   const lines: string[] = [
     "Daily Portfolio Update",
     "",
-    `${formatUsd(data.totalValueUsd)} | APY ${data.weightedApy.toFixed(1)}% | ~${formatUsd(data.projectedAnnualYield)}/yr`,
+    `Portfolio: ${formatUsd(data.totalValueUsd)}`,
+    `APY: ${data.weightedApy.toFixed(1)}%`,
+    `Projected yield: ~${formatUsd(data.projectedAnnualYield)}/yr`,
   ];
 
-  if (data.positions.length > 0) {
-    lines.push("", "Positions:");
-    for (let i = 0; i < data.positions.length; i++) {
-      const p = data.positions[i];
-      let line = `${i + 1}. ${p.name}: ${formatUsd(p.depositUsd)} at ${p.apy.toFixed(1)}%`;
-      if (p.apy30dAvg !== null && p.apy30dAvg > 0) {
-        const arrow = p.apy > p.apy30dAvg * 1.05 ? " ↑" : p.apy < p.apy30dAvg * 0.95 ? " ↓" : "";
-        line += ` (30d avg ${p.apy30dAvg.toFixed(1)}%)${arrow}`;
-      }
-      lines.push(line);
+  if (data.aprChanges.length > 0) {
+    lines.push("", "APR Changes:");
+    for (const c of data.aprChanges) {
+      const sign = c.changePp >= 0 ? "+" : "";
+      lines.push(`${c.name}: ${c.currentApy.toFixed(1)}% (was ${c.yesterdayApy.toFixed(1)}% yesterday, ${sign}${c.changePp.toFixed(1)}%)`);
     }
   } else {
-    lines.push("", "No active positions.");
+    lines.push("", "No significant APR changes.");
   }
 
-  if (data.riskFlags.length > 0) {
+  if (data.risks.length > 0) {
     lines.push("", "Risks:");
-    for (const flag of data.riskFlags) {
-      lines.push(`- ${flag}`);
+    for (const r of data.risks) {
+      lines.push(`${r.message}`);
     }
-  } else {
-    lines.push("", "No liquidation risks.");
   }
 
   return lines.join("\n");

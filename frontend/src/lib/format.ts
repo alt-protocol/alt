@@ -175,7 +175,7 @@ export function computeRiskLevel(opts: {
   pegLiquidityUsd?: number | null;
 }): RiskLevel {
   const reasons: string[] = [];
-  let level: "Low" | "Medium" | "High" = "Low";
+  let level: "Clear" | "Note" | "Review" = "Clear";
 
   // Token warnings
   if (opts.tokenWarnings && opts.tokenWarnings.length > 0) {
@@ -183,24 +183,24 @@ export function computeRiskLevel(opts: {
     for (const w of opts.tokenWarnings) {
       reasons.push(SHIELD_LABELS[w.type] ?? w.type);
     }
-    if (hasWarning) level = "High";
-    else level = "Medium";
+    if (hasWarning) level = "Review";
+    else level = "Note";
   }
 
   // Spread
   if (opts.spreadPct != null) {
     if (opts.spreadPct > 0.5) {
-      level = "High";
+      level = "Review";
       reasons.push(`${opts.spreadPct.toFixed(2)}% price spread`);
     } else if (opts.spreadPct > 0.2) {
-      if (level !== "High") level = "Medium";
+      if (level !== "Review") level = "Note";
       reasons.push(`${opts.spreadPct.toFixed(2)}% price spread`);
     }
   }
 
   // Lock period
   if (opts.lockPeriodDays > 7) {
-    if (level !== "High") level = "Medium";
+    if (level !== "Review") level = "Note";
     reasons.push(`${opts.lockPeriodDays}d lock`);
   } else if (opts.lockPeriodDays > 0) {
     reasons.push(`${opts.lockPeriodDays}d lock`);
@@ -211,6 +211,6 @@ export function computeRiskLevel(opts: {
     reasons.push(`${fmtTvl(opts.pegLiquidityUsd)} DEX liquidity`);
   }
 
-  const colorClass = level === "High" ? "text-red-400" : level === "Medium" ? "text-yellow-400" : "text-neon";
+  const colorClass = level === "Review" ? "text-red-400" : level === "Note" ? "text-yellow-400" : "text-neon";
   return { label: level, colorClass, reasons };
 }

@@ -7,6 +7,7 @@
 import { getOrNull } from "../../shared/http.js";
 import { getSymbolForMint } from "../../shared/constants.js";
 import { logger } from "../../shared/logger.js";
+import { getTokenPricesUsd } from "../../shared/token-prices.js";
 import { db } from "../db/connection.js";
 import {
   safeFloat,
@@ -91,6 +92,12 @@ export async function fetchExponentYields(): Promise<number> {
 
   const avgs = await batchSnapshotAvg(db, protocol.id, "earn");
 
+  // Batch-fetch USD prices for all active underlying mints (single Jupiter API call)
+  const activeMints = data
+    .filter((m) => m.marketStatus === "active" && m.maturityDateUnixTs > nowSec)
+    .map((m) => m.underlyingAsset.mint);
+  const priceMap = await getTokenPricesUsd(activeMints);
+
   for (const m of data) {
     if (m.marketStatus !== "active") continue;
     if (m.maturityDateUnixTs <= nowSec) continue;
@@ -119,6 +126,19 @@ export async function fetchExponentYields(): Promise<number> {
       protocol_url: "https://app.exponent.finance/income",
     };
 
+    // Convert raw liquidity (lamports) → USD via Jupiter price, capped at TVL
+    const decimals = m.underlyingAsset.decimals ?? 6;
+    const totalLiqRaw = (m.liquidity ?? 0) + (m.legacyLiquidity ?? 0);
+    const liqTokens = totalLiqRaw / Math.pow(10, decimals);
+    const tokenPrice = priceMap.get(m.underlyingAsset.mint);
+    const tvlUsd = safeFloat(m.totalMarketSize);
+    const rawLiqUsd = tokenPrice != null
+      ? Math.round(liqTokens * tokenPrice * 100) / 100
+      : null;
+    const liqUsd = rawLiqUsd != null && tvlUsd != null
+      ? Math.min(rawLiqUsd, tvlUsd)
+      : rawLiqUsd;
+
     // --- PT opportunity ---
     const ptApy = safeFloat(m.impliedApy);
     const ptExtId = `exponent-pt-${m.vaultAddress}`;
@@ -142,6 +162,7 @@ export async function fetchExponentYields(): Promise<number> {
       source: "exponent_api",
       lockPeriodDays: daysToMaturity,
       assetClass,
+      liquidityAvailableUsd: liqUsd,
       underlyingTokens: [{
         symbol,
         mint: m.underlyingAsset.mint,
@@ -176,6 +197,7 @@ export async function fetchExponentYields(): Promise<number> {
         source: "exponent_api",
         lockPeriodDays: daysToMaturity,
         assetClass,
+        liquidityAvailableUsd: liqUsd,
         underlyingTokens: [{
           symbol,
           mint: m.underlyingAsset.mint,

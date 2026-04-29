@@ -21,7 +21,7 @@ Each protocol needs 3 files:
 - `src/manage/protocols/<protocol>.ts` — tx adapter
 - `src/monitor/services/<protocol>-position-fetcher.ts` — position fetcher (15min cron)
 
-Use `/add-protocol` skill for scaffolding.
+Use `/integrate-protocol` skill for scaffolding.
 
 Current protocols (full integration): Kamino, Drift, Jupiter.
 Seeded on startup: Kamino, Drift, Jupiter, Exponent, Solstice.

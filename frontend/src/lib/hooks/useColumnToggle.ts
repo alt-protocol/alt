@@ -44,7 +44,7 @@ export const COLUMN_LABELS: Record<ColumnKey, string> = {
   apr30d: "30D APR",
   volatility: "Peg Spread",
   dexLiquidity: "DEX Liquidity",
-  risk: "Risk",
+  risk: "Token Info",
 };
 
 function loadFromStorage(): ColumnKey[] | null {

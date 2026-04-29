@@ -23,6 +23,7 @@ import DriftMaintenanceBanner from "./DriftMaintenanceBanner";
 import type { LeverageEntry } from "@/lib/multiply-utils";
 import { parseLeverageTable, interpolateApy, getMultiplyStatusLabel } from "@/lib/multiply-utils";
 import WalletButton from "./WalletButton";
+import ActionDropdown from "./ActionDropdown";
 
 type Tab = "open" | "deposit" | "adjust" | "collateral" | "debt" | "withdraw" | "close";
 type SubAction = "add" | "withdraw" | "borrow" | "repay";
@@ -327,14 +328,14 @@ function ConnectedMultiplyPanel({
       {(tab === "open" || tab === "adjust") && (
         <>
           {/* Leverage slider */}
-          <div className="mb-4">
+          <div className="mb-3">
             {tab === "adjust" && currentLeverage != null && (
-              <div className="flex justify-between items-center mb-2">
+              <div className="flex justify-between items-center mb-1.5">
                 <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Current Leverage</span>
                 <span className="font-sans text-[0.8rem] tabular-nums">{currentLeverage.toFixed(1)}x</span>
               </div>
             )}
-            <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans block mb-3">{tab === "adjust" ? "Target Leverage" : "Leverage"}</span>
+            <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans block mb-2">{tab === "adjust" ? "Target Leverage" : "Leverage"}</span>
             <div className="relative">
               <input
                 type="range"
@@ -372,13 +373,13 @@ function ConnectedMultiplyPanel({
             </div>
           )}
           {borrowApy != null && (
-            <div className="flex justify-between items-center mb-4">
+            <div className="flex justify-between items-center mb-2">
               <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Borrow APY</span>
               <span className="font-sans text-[0.8rem] text-foreground-muted tabular-nums">{fmtApy(borrowApy)}</span>
             </div>
           )}
           {tab === "open" && balance != null && (
-            <div className="flex justify-between items-center mb-4">
+            <div className="flex justify-between items-center mb-2">
               <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Available</span>
               <span className="font-sans text-[0.8rem] tabular-nums">
                 {balance.toLocaleString(undefined, { maximumFractionDigits: 6 })} {collSymbol}
@@ -386,7 +387,7 @@ function ConnectedMultiplyPanel({
             </div>
           )}
           {tab === "adjust" && hasActivePosition && (
-            <div className="flex justify-between items-center mb-4">
+            <div className="flex justify-between items-center mb-2">
               <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Net Value</span>
               <span className="font-sans text-[0.8rem] tabular-nums">{fmtUsd(vaultBalance)}</span>
             </div>
@@ -438,7 +439,7 @@ function ConnectedMultiplyPanel({
             <span className="font-sans text-[0.8rem] tabular-nums">{currentLeverage?.toFixed(1)}x</span>
           </div>
           {balance != null && (
-            <div className="flex justify-between items-center mb-4">
+            <div className="flex justify-between items-center mb-2">
               <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Available</span>
               <span className="font-sans text-[0.8rem] tabular-nums">{balance.toLocaleString(undefined, { maximumFractionDigits: 6 })} {collSymbol}</span>
             </div>
@@ -449,15 +450,15 @@ function ConnectedMultiplyPanel({
       {/* Collateral/Debt tabs — LTV stats + sub-action toggle */}
       {(tab === "collateral" || tab === "debt") && hasActivePosition && (
         <>
-          <div className="flex justify-between items-center mb-2">
+          <div className="flex justify-between items-center mb-1.5">
             <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Current LTV</span>
             <span className="font-sans text-[0.8rem] tabular-nums">{fmtPct(curLtv * 100)}</span>
           </div>
-          <div className="flex justify-between items-center mb-2">
+          <div className="flex justify-between items-center mb-1.5">
             <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">Liquidation LTV</span>
             <span className="font-sans text-[0.8rem] tabular-nums text-foreground-muted">{fmtPct(liqLtv * 100)}</span>
           </div>
-          <div className="flex justify-between items-center mb-4">
+          <div className="flex justify-between items-center mb-2">
             <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans">
               {tab === "collateral" ? `${collSymbol} Collateral` : `${debtSymbol} Debt`}
             </span>
@@ -467,7 +468,7 @@ function ConnectedMultiplyPanel({
           </div>
 
           {/* Sub-action toggle */}
-          <div className="flex gap-[1px] mb-4">
+          <div className="flex gap-[1px] mb-3">
             {tab === "collateral"
               ? (["add", "withdraw"] as const).map((a) => (
                   <button key={a} onClick={() => { setSubAction(a); setAmount(""); }}
@@ -488,7 +489,7 @@ function ConnectedMultiplyPanel({
 
       {/* Amount input for tabs that need it */}
       {needsAmount && (
-        <div className="bg-surface-high rounded-sm px-4 py-3 mb-2 focus-within:shadow-[0_2px_0_0_var(--color-neon)] transition-shadow">
+        <div className="bg-surface-high rounded-sm px-3 py-2.5 mb-2 focus-within:shadow-[0_2px_0_0_var(--color-neon)] transition-shadow">
           <div className="flex items-center justify-between mb-1">
             <span className="text-foreground-muted text-[0.65rem] font-sans uppercase tracking-[0.05em]">
               {tab === "debt" ? debtSymbol : collSymbol}
@@ -663,58 +664,68 @@ function ConnectedMultiplyPanel({
         <p className="mt-3 text-red-400 text-[0.7rem] font-sans text-center">{error}</p>
       )}
 
-      {/* Slippage Tolerance */}
+      {/* Transaction Settings — collapsible */}
       <div className="mt-4 pt-3 border-t border-outline-ghost">
-        <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans block mb-2">Slippage Tolerance</span>
-        <div className="flex gap-1">
-          {[{ label: "0.5%", bps: 50 }, { label: "1%", bps: 100 }, { label: "2%", bps: 200 }].map((p) => (
-            <button
-              key={p.bps}
-              onClick={() => { setSlippage(p.bps); setEditingSlippage(false); }}
-              className={`rounded-sm px-3 py-1 text-[0.65rem] font-sans transition-colors ${
-                slippageBps === p.bps && !editingSlippage
-                  ? "bg-neon text-on-neon"
-                  : "bg-surface-high text-foreground-muted hover:text-foreground"
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
-          <button
-            onClick={() => setEditingSlippage(!editingSlippage)}
-            className={`rounded-sm px-3 py-1 text-[0.65rem] font-sans transition-colors flex items-center gap-1 ${
-              editingSlippage || ![50, 100, 200].includes(slippageBps)
-                ? "bg-neon text-on-neon"
-                : "bg-surface-high text-foreground-muted hover:text-foreground"
-            }`}
-          >
-            {editingSlippage ? "Custom" : ![50, 100, 200].includes(slippageBps) ? `${(slippageBps / 100).toFixed(1)}%` : "Custom"}
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => setEditingSlippage(!editingSlippage)}
+          className="w-full flex items-center justify-between text-foreground-muted hover:text-foreground transition-colors"
+        >
+          <span className="text-[0.75rem] font-sans">Transaction Settings</span>
+          <span className="flex items-center gap-1.5 text-[0.75rem] font-sans tabular-nums">
+            {(slippageBps / 100).toFixed(slippageBps % 100 === 0 ? 0 : 1)}%
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+            </svg>
+          </span>
+        </button>
+
         {editingSlippage && (
-          <input
-            type="text"
-            inputMode="decimal"
-            autoFocus
-            placeholder={(slippageBps / 100).toFixed(2)}
-            defaultValue={(slippageBps / 100).toFixed(2)}
-            onBlur={(e) => {
-              const val = parseFloat(e.target.value);
-              if (!isNaN(val) && val > 0) setSlippage(Math.round(val * 100));
-              setEditingSlippage(false);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-              if (e.key === "Escape") setEditingSlippage(false);
-            }}
-            className="mt-2 w-full bg-surface-high rounded-sm px-3 py-1.5 text-[0.65rem] font-sans text-foreground outline-none focus:shadow-[0_1px_0_0_var(--color-neon)]"
-          />
-        )}
-        {slippageBps < 10 && (
-          <p className="text-yellow-400 text-[0.6rem] font-sans mt-1.5">Low — transaction may fail</p>
-        )}
-        {slippageBps > 300 && (
-          <p className="text-yellow-400 text-[0.6rem] font-sans mt-1.5">High — may result in unfavorable execution</p>
+          <div className="mt-3 space-y-2">
+            <span className="uppercase text-[0.6rem] tracking-[0.05em] text-foreground-muted font-sans block">Slippage Tolerance</span>
+            <div className="flex gap-1">
+              {[{ label: "0.5%", bps: 50 }, { label: "1%", bps: 100 }, { label: "2%", bps: 200 }].map((p) => (
+                <button
+                  key={p.bps}
+                  onClick={() => setSlippage(p.bps)}
+                  className={`rounded-sm px-3 py-1 text-[0.65rem] font-sans transition-colors ${
+                    slippageBps === p.bps
+                      ? "bg-neon text-on-neon"
+                      : "bg-surface-high text-foreground-muted hover:text-foreground"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="Custom"
+                  defaultValue={![50, 100, 200].includes(slippageBps) ? (slippageBps / 100).toFixed(2) : ""}
+                  onBlur={(e) => {
+                    const val = parseFloat(e.target.value);
+                    if (!isNaN(val) && val > 0) setSlippage(Math.round(val * 100));
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                  }}
+                  className={`w-full rounded-sm px-3 py-1 text-[0.65rem] font-sans outline-none transition-colors ${
+                    ![50, 100, 200].includes(slippageBps)
+                      ? "bg-neon text-on-neon"
+                      : "bg-surface-high text-foreground-muted"
+                  }`}
+                />
+              </div>
+            </div>
+            {slippageBps < 10 && (
+              <p className="text-yellow-400 text-[0.6rem] font-sans">Low — transaction may fail</p>
+            )}
+            {slippageBps > 300 && (
+              <p className="text-yellow-400 text-[0.6rem] font-sans">High — may result in unfavorable execution</p>
+            )}
+          </div>
         )}
       </div>
     </>
@@ -730,30 +741,44 @@ export default function MultiplyPanel({ yield_, protocolSlug }: Props) {
     ? leverageEntries[Math.floor(leverageEntries.length / 2)].value
     : 3;
 
-  const [tab, setTab] = useState<Tab>("open");
+  const [selectedAccount] = useSelectedWalletAccount();
+
+  // Position detection for action filtering
+  const { data: posBalance } = usePositionBalance(selectedAccount?.address, yield_.id);
+  const hasPosition = (posBalance ?? 0) > 0;
+
+  const [rawTab, setRawTab] = useState<Tab>("open");
   const [amount, setAmount] = useState("");
   const [leverage, setLeverage] = useState(defaultLev);
   const [editingSlippage, setEditingSlippage] = useState(false);
   const [subAction, setSubAction] = useState<SubAction>("add");
-  const [selectedAccount] = useSelectedWalletAccount();
 
-  const tabs: Tab[] = ["open", "deposit", "adjust", "collateral", "debt", "withdraw", "close"];
+  // Derive effective tab: if position state conflicts with selected tab, override
+  const tab: Tab = hasPosition && rawTab === "open" ? "deposit"
+    : !hasPosition && rawTab !== "open" ? "open"
+    : rawTab;
+  const setTab = (t: Tab) => setRawTab(t);
+
+  const actions = hasPosition
+    ? [
+        { value: "deposit", label: "Deposit" },
+        { value: "adjust", label: "Adjust" },
+        { value: "collateral", label: "Manage Collateral" },
+        { value: "debt", label: "Manage Debt" },
+        { value: "withdraw", label: "Withdraw" },
+        { value: "close", label: "Close" },
+      ]
+    : [{ value: "open", label: "Open" }];
 
   return (
     <div className="flex-[1] bg-surface-low px-6 py-5 flex flex-col">
-      {/* Tab switcher */}
-      <div className="flex gap-[1px] mb-5">
-        {tabs.map((t) => (
-          <button
-            key={t}
-            onClick={() => { setTab(t); setAmount(""); }}
-            className={`flex-1 py-2 text-[0.7rem] font-sans uppercase tracking-[0.05em] rounded-sm transition-colors ${
-              tab === t ? "bg-neon text-on-neon" : "bg-surface-high text-foreground-muted hover:text-foreground"
-            }`}
-          >
-            {t}
-          </button>
-        ))}
+      {/* Action dropdown */}
+      <div className="mb-4">
+        <ActionDropdown
+          actions={actions}
+          selected={tab}
+          onChange={(v) => { setTab(v as Tab); setAmount(""); }}
+        />
       </div>
 
       {protocolSlug === "drift" && <DriftMaintenanceBanner />}

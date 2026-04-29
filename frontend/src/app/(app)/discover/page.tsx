@@ -10,7 +10,7 @@ import FilterPanel from "@/components/FilterPanel";
 import StatsGrid from "@/components/StatsGrid";
 import YieldTable from "@/components/YieldTable";
 import ColumnToggle from "@/components/ColumnToggle";
-import { useColumnToggle } from "@/lib/hooks/useColumnToggle";
+import { useColumnToggle, COLUMN_LABELS } from "@/lib/hooks/useColumnToggle";
 
 function DashboardSkeleton() {
   return (
@@ -51,11 +51,11 @@ export default function Dashboard() {
     <main className="max-w-[1200px] mx-auto px-4 sm:px-8 lg:px-[3.5rem] py-[2.25rem]">
       <div className="mb-[2.25rem]">
         <p className="inline-block bg-neon text-on-neon text-[0.65rem] uppercase tracking-[0.08em] font-semibold rounded-sm px-2.5 py-1 mb-4">
-          Solana Stablecoin Platform
+          Beta
         </p>
         <h1 className="font-brand text-[2rem] sm:text-[2.75rem] lg:text-[3.5rem] leading-[1.05] tracking-[-0.02em]">
-          DISCOVER<br />
-          <span className="text-neon">STABLECOINS</span>
+          SOLANA STABLECOIN<br />
+          <span className="text-neon">PLATFORM</span>
         </h1>
         <p className="text-foreground-muted font-sans text-[0.875rem] mt-4 max-w-lg leading-relaxed">
           Discover, manage, and monitor stablecoins on Solana.
@@ -146,6 +146,7 @@ function DashboardContent() {
               visibleColumns={colToggle.visibleColumns}
               allColumns={colToggle.allColumns}
               requiredColumns={colToggle.requiredColumns}
+              labels={COLUMN_LABELS}
               toggleColumn={colToggle.toggleColumn}
               resetColumns={colToggle.resetColumns}
             />

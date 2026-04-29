@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { eq, and, isNull, sql } from "drizzle-orm";
 import { db } from "../db/connection.js";
 import { deliveries, events, rules, userSubscriptions } from "../db/schema.js";
-import { getSummaryUsers, buildPortfolioSummary, formatDailyTemplate, formatWeeklyTemplate } from "../services/portfolio-summary.js";
+import { getSummaryUsers, buildPortfolioSummary, buildDailySummary, formatDailyTemplate, formatWeeklyTemplate } from "../services/portfolio-summary.js";
 
 export async function alertRoutes(app: FastifyInstance) {
   // GET /pending — Bot polls for undelivered critical alerts
@@ -80,7 +80,7 @@ export async function alertRoutes(app: FastifyInstance) {
     const { walletAddress } = request.params;
     if (!walletAddress) return reply.status(400).send({ error: "Wallet address required" });
 
-    const data = await buildPortfolioSummary(walletAddress);
+    const data = await buildDailySummary(walletAddress);
     const template = formatDailyTemplate(data);
 
     return { ...data, template };

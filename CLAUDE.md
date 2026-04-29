@@ -63,7 +63,7 @@ Read `DESIGN.md` only for UI/styling work. Read `TODO_ARCHITECTURE.md` only when
 - When adding a new protocol/fetcher/adapter, read ONE existing implementation as reference, not all three.
 - When modifying a component, don't read sibling components unless they share logic.
 - Prefer editing existing files over creating new ones.
-- Use skills for scaffolding: `add-protocol`, `add-category`, `add-page`, `add-backend-route`, `start-dev`.
+- Use skills for scaffolding: `integrate-protocol`, `add-category`, `add-page`, `add-backend-route`, `start-dev`.
 
 ## Dev Setup
 ```
